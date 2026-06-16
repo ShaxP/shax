@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:rgba(128,128,128,.28);border-radius:6px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes shax-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @keyframes shax-spin{to{transform:rotate(360deg)}}
+  @keyframes shax-edge{0%,100%{opacity:.3}50%{opacity:1}}
+</style>
+</helmet>
+
+<div style="min-height:100vh; background:#161718; color:#c6c8ce; font-family:'Hanken Grotesk',system-ui,sans-serif; padding:34px 36px 72px;">
+  <div style="max-width:1500px; margin:0 auto; display:flex; flex-direction:column; gap:34px;">
+
+    <!-- ===== HEADER / RATIONALE ===== -->
+    <div data-label="Header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:32px; flex-wrap:wrap;">
+      <div style="max-width:780px;">
+        <div style="display:flex; align-items:center; gap:13px; margin-bottom:14px;">
+          <span style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:8px; background:oklch(0.72 0.13 250); color:#fff; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:17px; line-height:1;">x</span>
+          <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.01em; color:#f2f3f5;">Shax — the main shell</h1>
+          <span style="font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#7d8088; border:1px solid #2c2e31; padding:3px 8px; border-radius:20px;">Surface 01 · hero</span>
+        </div>
+        <p style="margin:0 0 6px; font-size:14px; line-height:1.65; color:#9a9da4; max-width:720px; margin-bottom:9px;">The resting state of a mid-session window: window chrome, tabs, a split with a live <span style="font-family:'JetBrains Mono',monospace; color:#c6c8ce;">btop</span> pane, and a vertical stack of command blocks above the active prompt. This screen fixes the density and rhythm everything else inherits.</p>
+        <p style="margin:0; font-size:12.5px; line-height:1.6; color:#71747b;">Toggle theme and aesthetic live →&nbsp;&nbsp;·&nbsp;&nbsp;Hover a block for its actions · click the markdown block to expand · switch <span style="font-family:'JetBrains Mono',monospace;">fmt / raw</span> · click a pane to move focus.</p>
+      </div>
+
+      <!-- preview controls (studio chrome, not part of product) -->
+      <div style="display:flex; flex-direction:column; gap:10px; flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap:10px; justify-content:flex-end;">
+          <span style="font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#71747b; width:46px;">Theme</span>
+          <div style="display:flex; padding:3px; gap:3px; background:#202123; border:1px solid #2c2e31; border-radius:9px;">
+            <button onClick="{{ setDark }}" style="{{ segDark }}">Dark</button>
+            <button onClick="{{ setLight }}" style="{{ segLight }}">Light</button>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; justify-content:flex-end;">
+          <span style="font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#71747b; width:46px;">Style</span>
+          <div style="display:flex; padding:3px; gap:3px; background:#202123; border:1px solid #2c2e31; border-radius:9px;">
+            <button onClick="{{ setPrecise }}" style="{{ segPrecise }}">Precise</button>
+            <button onClick="{{ setWorkshop }}" style="{{ segWorkshop }}">Workshop</button>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; justify-content:flex-end;">
+          <span style="font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:#71747b; width:46px;">Accent</span>
+          <div style="display:flex; align-items:center; gap:11px; padding:6px 11px; background:#202123; border:1px solid #2c2e31; border-radius:9px;">
+            <sc-for list="{{ accentSwatches }}" as="sw" hint-placeholder-count="5">
+              <button onClick="{{ sw.onClick }}" style="{{ sw.style }}"></button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== MARKS ===== -->
+    <div data-label="Marks">
+      <div style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b; margin-bottom:13px;">Mark — typographic explorations</div>
+      <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:14px;">
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:30px; letter-spacing:-0.02em; color:#e4e6ea;">sha<span style="color:oklch(0.72 0.13 250);">x</span></div>
+          <div style="font-size:11px; color:#6a6d74; text-align:center;">Mono wordmark · accent x</div>
+        </div>
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:30px; letter-spacing:-0.02em;"><span style="color:#5a5e66;">sh</span><span style="color:#e4e6ea;">ax</span></div>
+          <div style="font-size:11px; color:#6a6d74; text-align:center;">Shell nod · sh dimmed</div>
+        </div>
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:22px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:16px;">
+          <div style="width:46px; height:46px; border-radius:11px; background:oklch(0.72 0.13 250); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; color:#fff;">x</div>
+          <div style="font-size:11px; color:#6a6d74; text-align:center;">Monogram tile · app icon</div>
+        </div>
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:28px; letter-spacing:-0.01em; display:flex; align-items:center; gap:7px;"><span style="color:oklch(0.72 0.13 250);">&#10095;</span><span style="color:#e4e6ea;">shax</span></div>
+          <div style="font-size:11px; color:#6a6d74; text-align:center;">Prompt mark</div>
+        </div>
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:28px; letter-spacing:-0.01em; color:#e4e6ea; display:flex; align-items:center;">shax<span style="display:inline-block; width:13px; height:24px; margin-left:3px; background:oklch(0.72 0.13 250); animation:shax-blink 1.1s step-start infinite;"></span></div>
+          <div style="font-size:11px; color:#6a6d74; text-align:center;">Block-cursor lockup</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== THE SHELL WINDOW ===== -->
+    <div data-label="Shell window">
+      <div style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b; margin-bottom:13px;">The window</div>
+
+      <div data-screen-label="Shax main shell" style="{{ rootStyle }}">
+
+        <!-- ----- TITLE / TAB BAR ----- -->
+        <div style="display:flex; align-items:center; gap:14px; height:46px; padding:0 14px; background:var(--titlebar); border-bottom:1px solid var(--border);">
+          <div style="display:flex; gap:8px; flex-shrink:0;">
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0635a;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0ab4f;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#56b770;"></span>
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:2px; height:100%; flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:9px; height:34px; padding:0 14px; background:var(--pane); border:1px solid var(--border); border-bottom:1px solid var(--pane); border-radius:8px 8px 0 0; margin-bottom:-1px; max-width:240px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:var(--accent); flex-shrink:0;"></span>
+              <span style="font-size:12.5px; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">shax</span>
+              <span style="font-size:11.5px; color:var(--fg-faint); white-space:nowrap;">~/dev/shax</span>
+              <span style="margin-left:4px; color:var(--fg-faint); font-size:13px; cursor:pointer;">&times;</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:9px; height:30px; padding:0 14px; background:transparent; border-radius:8px 8px 0 0; opacity:.62;">
+              <span style="font-size:12.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif; font-weight:500;">api</span>
+              <span style="font-size:11.5px; color:var(--fg-faint);">~/dev/api</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:9px; height:30px; padding:0 12px; opacity:.62;">
+              <span style="font-size:13px; color:var(--fg-faint);">+</span>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:3px; flex-shrink:0; color:var(--fg-faint);">
+            <span title="split vertical" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="split horizontal" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="search" style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 9px; border-radius:var(--radius-sm); cursor:pointer; font-size:12px; background:var(--surface); color:var(--fg-dim);">&#9906; <span style="font-family:'Hanken Grotesk',sans-serif; font-size:11px;">&#8984;K</span></span>
+            <span title="assistant" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:13px; color:var(--accent);">&#10022;</span>
+            <span title="settings" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:15px;">&#9881;</span>
+          </div>
+        </div>
+
+        <!-- ----- PANES ----- -->
+        <div style="display:flex; height:582px; background:var(--bg);">
+
+          <!-- LEFT: block stack + prompt -->
+          <div onClick="{{ focusMain }}" style="{{ mainPaneStyle }}">
+            <div style="flex:1; overflow:auto; padding:16px 18px; display:flex; flex-direction:column; gap:15px;">
+
+              <!-- BLOCK A — git status (success) -->
+              <div style="position:relative; display:flex; gap:13px; --act:0;" style-hover="--act:1">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--green); margin:3px 0;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span style="color:var(--green); font-size:12px;">&#10095;</span>
+                    <span style="font-size:13px; color:var(--fg); font-weight:500; white-space:nowrap;">git status -sb</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">12ms</span>
+                    <span style="font-size:11px; color:var(--green); display:inline-flex; align-items:center; gap:3px;">&#10003; 0</span>
+                    <div style="display:flex; padding:2px; gap:2px; background:var(--surface); border-radius:6px; margin-left:2px;">
+                      <button onClick="{{ setStatusFmt }}" style="{{ statFmtSeg }}">FMT</button>
+                      <button onClick="{{ setStatusRaw }}" style="{{ statRawSeg }}">RAW</button>
+                    </div>
+                    <div style="display:flex; gap:1px; opacity:var(--act); transition:opacity .13s ease;">
+                      <span title="copy" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#9106;</span>
+                      <span title="rerun" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#8635;</span>
+                      <span title="share" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#8599;</span>
+                      <span title="ask shax" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--accent); font-size:12px; cursor:pointer;">&#10022;</span>
+                    </div>
+                  </div>
+                  <div style="margin-top:7px;">
+                    <sc-if value="{{ showStatusFmt }}" hint-placeholder-val="{{ true }}">
+                      <div style="font-size:12.5px; line-height:1.72;">
+                        <div><span style="color:var(--fg-faint);">##</span> <span style="color:var(--fg-dim);">main...origin/main</span> <span style="color:var(--amber);">[ahead 1]</span></div>
+                        <div><span style="color:var(--amber);">&nbsp;M</span> <span style="color:var(--fg);">src/block.rs</span></div>
+                        <div><span style="color:var(--amber);">&nbsp;M</span> <span style="color:var(--fg);">src/render/markdown.rs</span></div>
+                        <div><span style="color:var(--green);">A&nbsp;</span> <span style="color:var(--fg);">notes/ideas.md</span></div>
+                        <div><span style="color:var(--fg-faint);">??</span> <span style="color:var(--fg-faint);">target/</span></div>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ showStatusRaw }}" hint-placeholder-val="{{ false }}">
+                      <pre style="margin:0; font-size:12.5px; line-height:1.72; color:var(--fg-dim); white-space:pre-wrap;">## main...origin/main [ahead 1]
+ M src/block.rs
+ M src/render/markdown.rs
+A  notes/ideas.md
+?? target/</pre>
+                    </sc-if>
+                  </div>
+                </div>
+              </div>
+
+              <!-- BLOCK B — cargo build (FAILED, selected) -->
+              <div style="position:relative; display:flex; gap:13px; --act:1; border-radius:var(--radius); background:var(--accent-soft); box-shadow:0 0 0 1px var(--accent-soft), inset 0 0 0 1px var(--accent-soft); padding:6px 8px; margin:-6px -8px;">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--red); margin:3px 0;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span style="color:var(--red); font-size:12px;">&#10095;</span>
+                    <span style="font-size:13px; color:var(--fg); font-weight:500; white-space:nowrap;">cargo build --release</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">1.84s</span>
+                    <span style="font-size:11px; color:var(--red); display:inline-flex; align-items:center; gap:3px; font-weight:600;">&#10005; exit 101</span>
+                    <div style="display:flex; gap:1px; opacity:var(--act); transition:opacity .13s ease;">
+                      <span title="copy" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#9106;</span>
+                      <span title="rerun" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#8635;</span>
+                      <span title="share" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#8599;</span>
+                    </div>
+                  </div>
+                  <div style="margin-top:7px; font-size:12.5px; line-height:1.62; color:var(--fg-dim);">
+                    <div style="white-space:pre; color:var(--fg-faint);">   Compiling shax v0.4.0 (/Users/ada/dev/shax)</div>
+                    <div style="white-space:pre-wrap;"><span style="color:var(--red); font-weight:600;">error[E0432]</span>: unresolved import `crate::render::Diff`</div>
+                    <div style="white-space:pre;"><span style="color:var(--fg-faint);">  --&gt;</span> src/block.rs:14:5</div>
+                    <div style="white-space:pre; color:var(--fg-faint);">   |</div>
+                    <div style="white-space:pre;">14 <span style="color:var(--fg-faint);">|</span>     use crate::render::Diff;</div>
+                    <div style="white-space:pre;">   <span style="color:var(--fg-faint);">|</span>         <span style="color:var(--red);">^^^^^^^^^^^^^^^^^^</span> no `Diff` in `render`</div>
+                    <div style="white-space:pre-wrap;"><span style="color:var(--red); font-weight:600;">error</span>: could not compile `shax` (bin "shax") due to 1 previous error</div>
+                  </div>
+                  <!-- explain-on-error affordance -->
+                  <div style="margin-top:10px; display:inline-flex; align-items:center; gap:8px; padding:6px 11px; border-radius:var(--radius); background:var(--pane); border:1px solid var(--accent); cursor:pointer;">
+                    <span style="color:var(--accent); font-size:12px;">&#10022;</span>
+                    <span style="font-size:12px; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; font-weight:500;">Ask Shax why this failed</span>
+                    <span style="font-size:10.5px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif;">&#8984;&#8629;</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- BLOCK C — cat markdown (collapsible, raw/fmt) -->
+              <div style="position:relative; display:flex; gap:13px; --act:0;" style-hover="--act:1">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--green); margin:3px 0;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span onClick="{{ toggleMdCollapse }}" style="color:var(--fg-faint); font-size:10px; cursor:pointer; width:12px;">{{ mdChevron }}</span>
+                    <span style="color:var(--green); font-size:12px;">&#10095;</span>
+                    <span onClick="{{ toggleMdCollapse }}" style="font-size:13px; color:var(--fg); font-weight:500; cursor:pointer; white-space:nowrap;">cat notes/ideas.md</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">3ms</span>
+                    <span style="font-size:11px; color:var(--green); display:inline-flex; align-items:center; gap:3px;">&#10003; 0</span>
+                    <div style="display:flex; padding:2px; gap:2px; background:var(--surface); border-radius:6px; margin-left:2px;">
+                      <button onClick="{{ setMdRendered }}" style="{{ mdFmtSeg }}">FMT</button>
+                      <button onClick="{{ setMdRaw }}" style="{{ mdRawSeg }}">RAW</button>
+                    </div>
+                    <div style="display:flex; gap:1px; opacity:var(--act); transition:opacity .13s ease;">
+                      <span title="copy" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:12px; cursor:pointer;">&#9106;</span>
+                      <span title="ask shax" style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:var(--radius-sm); color:var(--accent); font-size:12px; cursor:pointer;">&#10022;</span>
+                    </div>
+                  </div>
+                  <sc-if value="{{ mdCollapsed }}" hint-placeholder-val="{{ true }}">
+                    <div onClick="{{ toggleMdCollapse }}" style="margin-top:6px; font-size:11.5px; color:var(--fg-faint); cursor:pointer; display:flex; align-items:center; gap:8px;">
+                      <span style="height:1px; flex:1; background:var(--border);"></span>
+                      <span>18 lines collapsed · click to expand</span>
+                      <span style="height:1px; flex:1; background:var(--border);"></span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ showMdRendered }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:9px; padding:13px 15px; background:var(--surface); border-radius:var(--radius); border:1px solid var(--border); font-family:'Hanken Grotesk',sans-serif;">
+                      <div style="font-size:17px; font-weight:700; color:var(--fg); margin:0 0 9px; letter-spacing:-0.01em;">Shax ideas</div>
+                      <p style="margin:0 0 10px; font-size:13.5px; line-height:1.6; color:var(--fg-dim);">Fidelity is the contract — every rich view is a <strong style="color:var(--fg); font-weight:600;">lens</strong> over the real bytes.</p>
+                      <ul style="margin:0 0 10px; padding-left:18px; font-size:13.5px; line-height:1.72; color:var(--fg-dim);">
+                        <li>raw output is one keystroke away</li>
+                        <li>the scrollback stays an honest log</li>
+                      </ul>
+                      <blockquote style="margin:0 0 11px; padding:3px 0 3px 13px; border-left:2px solid var(--accent); color:var(--fg-dim); font-size:13.5px; line-height:1.55;">widgets emit visible commands, never hidden changes</blockquote>
+                      <code style="font-family:'JetBrains Mono',monospace; font-size:12.5px; background:var(--pane); color:var(--accent); padding:3px 7px; border-radius:5px;">git add -p</code>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ showMdRaw }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:9px; padding:13px 15px; background:var(--surface); border-radius:var(--radius); border:1px solid var(--border);">
+                      <pre style="margin:0; font-family:'JetBrains Mono',monospace; font-size:12.5px; line-height:1.62; color:var(--fg-dim); white-space:pre-wrap;"># Shax ideas
+
+Fidelity is the contract — every rich view is a **lens**
+over the real bytes.
+
+- raw output is one keystroke away
+- the scrollback stays an honest log
+
+&gt; widgets emit visible commands, never hidden changes
+
+`git add -p`</pre>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+
+              <!-- BLOCK D — cargo test (STREAMING) -->
+              <div style="position:relative; display:flex; gap:13px; --act:0;" style-hover="--act:1">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--accent); margin:3px 0; animation:shax-edge 1.1s ease-in-out infinite;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span style="color:var(--accent); font-size:12px;">&#10095;</span>
+                    <span style="font-size:13px; color:var(--fg); font-weight:500; white-space:nowrap;">cargo test</span>
+                    <span style="display:inline-block; width:12px; height:12px; border:1.5px solid var(--border-strong); border-top-color:var(--accent); border-radius:50%; animation:shax-spin .7s linear infinite;"></span>
+                    <span style="font-size:11px; color:var(--accent); font-family:'Hanken Grotesk',sans-serif; font-weight:500; letter-spacing:.02em;">running</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">2.1s</span>
+                  </div>
+                  <div style="margin-top:7px; font-size:12.5px; line-height:1.62; color:var(--fg-dim);">
+                    <div style="white-space:pre; color:var(--fg-faint);">   Compiling shax v0.4.0</div>
+                    <div style="white-space:pre;"><span style="color:var(--fg-faint);">    Running</span> unittests src/lib.rs</div>
+                    <div style="white-space:pre;">running 24 tests</div>
+                    <div style="white-space:pre;">test render::markdown::renders_headings ... <span style="color:var(--green);">ok</span></div>
+                    <div style="white-space:pre;">test block::collapse_roundtrip ... <span style="color:var(--green);">ok</span></div>
+                    <div style="white-space:pre;">test render::diff::side_by_side ... <span style="display:inline-block; width:7px; height:13px; background:var(--accent); vertical-align:-2px; animation:shax-blink 1s step-start infinite;"></span></div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- ACTIVE PROMPT -->
+            <div style="display:flex; align-items:center; gap:11px; padding:12px 18px; border-top:1px solid var(--border); background:var(--pane);">
+              <span style="display:inline-flex; align-items:center; gap:7px; font-size:11.5px;">
+                <span style="color:var(--fg-dim);">~/dev/shax</span>
+                <span style="display:inline-flex; align-items:center; gap:4px; color:var(--accent);"><span style="font-size:11px;">&#9095;</span>main</span>
+              </span>
+              <span style="color:var(--accent); font-size:14px; font-weight:700;">&#10095;</span>
+              <span style="font-size:13px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif; flex:1;">type a command, or <span style="font-family:'JetBrains Mono',monospace; color:var(--fg-dim);">?</span> to ask Shax</span>
+              <span style="display:inline-block; width:8px; height:16px; background:var(--accent); opacity:.85;"></span>
+            </div>
+          </div>
+
+          <!-- RIGHT: btop pane (unfocused) -->
+          <div onClick="{{ focusMon }}" style="{{ monPaneStyle }}">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 13px; border-bottom:1px solid var(--border); font-size:11px;">
+              <span style="display:inline-flex; align-items:center; gap:7px; color:var(--fg-dim);"><span style="width:5px; height:5px; border-radius:50%; background:var(--fg-faint);"></span>btop</span>
+              <span style="color:var(--fg-faint);">raw stream · pane 2</span>
+            </div>
+            <div style="flex:1; overflow:hidden; padding:11px 13px; font-size:11px; line-height:1.62; color:var(--fg-dim);">
+              <div style="display:flex; justify-content:space-between; align-items:center; color:var(--fg-faint); margin-bottom:8px;"><span style="color:var(--accent);">cpu</span><span>4c · 5.1/16G</span></div>
+              <div style="display:flex; gap:7px; align-items:center;"><span style="color:var(--fg-faint); width:30px;">cpu0</span><span style="letter-spacing:1px;"><span style="color:var(--amber);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:var(--fg-faint);">&#9608;&#9608;&#9608;</span></span><span style="color:var(--amber); width:34px; text-align:right;">78%</span></div>
+              <div style="display:flex; gap:7px; align-items:center;"><span style="color:var(--fg-faint); width:30px;">cpu1</span><span style="letter-spacing:1px;"><span style="color:var(--green);">&#9608;&#9608;&#9608;&#9608;</span><span style="color:var(--fg-faint);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span></span><span style="color:var(--green); width:34px; text-align:right;">41%</span></div>
+              <div style="display:flex; gap:7px; align-items:center;"><span style="color:var(--fg-faint); width:30px;">cpu2</span><span style="letter-spacing:1px;"><span style="color:var(--green);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:var(--fg-faint);">&#9608;&#9608;&#9608;&#9608;</span></span><span style="color:var(--green); width:34px; text-align:right;">62%</span></div>
+              <div style="display:flex; gap:7px; align-items:center;"><span style="color:var(--fg-faint); width:30px;">cpu3</span><span style="letter-spacing:1px;"><span style="color:var(--red);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:var(--fg-faint);">&#9608;</span></span><span style="color:var(--red); width:34px; text-align:right;">91%</span></div>
+              <div style="display:flex; gap:7px; align-items:center; margin-top:6px;"><span style="color:var(--fg-faint); width:30px;">mem</span><span style="letter-spacing:1px;"><span style="color:var(--cyan);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:var(--fg-faint);">&#9608;&#9608;&#9608;&#9608;</span></span><span style="color:var(--cyan); width:34px; text-align:right;">5.1G</span></div>
+              <div style="display:flex; gap:7px; align-items:center;"><span style="color:var(--fg-faint); width:30px;">swp</span><span style="letter-spacing:1px;"><span style="color:var(--fg-dim);">&#9608;</span><span style="color:var(--fg-faint);">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span></span><span style="color:var(--fg-faint); width:34px; text-align:right;">0.2G</span></div>
+              <div style="height:1px; background:var(--border); margin:11px 0 8px;"></div>
+              <div style="display:flex; color:var(--fg-faint); font-size:10.5px; padding-bottom:3px;"><span style="width:48px;">pid</span><span style="width:42px;">cpu</span><span style="width:48px;">mem</span><span>cmd</span></div>
+              <div style="display:flex; color:var(--fg);"><span style="width:48px; color:var(--fg-faint);">2841</span><span style="width:42px; color:var(--amber);">23%</span><span style="width:48px; color:var(--fg-dim);">412M</span><span>shax</span></div>
+              <div style="display:flex; color:var(--fg);"><span style="width:48px; color:var(--fg-faint);">1192</span><span style="width:42px; color:var(--green);">11%</span><span style="width:48px; color:var(--fg-dim);">88M</span><span>cargo</span></div>
+              <div style="display:flex; color:var(--fg);"><span style="width:48px; color:var(--fg-faint);">&nbsp;884</span><span style="width:42px; color:var(--green);">6%</span><span style="width:48px; color:var(--fg-dim);">51M</span><span>node</span></div>
+              <div style="display:flex; color:var(--fg);"><span style="width:48px; color:var(--fg-faint);">&nbsp;512</span><span style="width:42px; color:var(--green);">2%</span><span style="width:48px; color:var(--fg-dim);">19M</span><span>zsh</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ----- STATUSLINE ----- -->
+        <div style="display:flex; align-items:center; height:30px; background:var(--titlebar); border-top:1px solid var(--border); font-size:11px;">
+          <span style="display:inline-flex; align-items:center; height:100%; padding:0 13px; background:var(--accent); color:#fff; font-weight:700; letter-spacing:0.08em;">NORMAL</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim);"><span style="color:var(--accent);">&#9095;</span> main <span style="color:var(--green);">+1</span> <span style="color:var(--amber);">~2</span></span>
+          <span style="color:var(--fg-faint); padding:0 6px;">~/dev/shax</span>
+          <span style="flex:1;"></span>
+          <span style="color:var(--fg-faint); padding:0 13px;">utf-8 · ln 1, col 1</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);"><span style="color:var(--accent);">&#10022;</span> &#8984;K Ask Shax</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);">shax <span style="width:6px; height:6px; border-radius:50%; background:var(--accent);"></span></span>
+        </div>
+
+      </div>
+
+      <p style="margin:14px 2px 0; font-size:12px; line-height:1.6; color:#6e7178; max-width:900px;"><span style="color:#9a9da4; font-weight:600;">Next:</span> from this system I'll build the block-anatomy detail sheet (3 states up close), then promote git status / git diff / ls into live widget blocks, then the search overlay and the approval gate. Tell me which direction wins — or ask for a side-by-side of all four theme combos.</p>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    theme: 'dark',
+    style: 'precise',
+    focusedPane: 'main',
+    mdCollapsed: true,
+    mdView: 'rendered',
+    statusView: 'formatted',
+    accentHue: 250,
+  };
+
+  pal(theme, precise) {
+    if (theme === 'dark') {
+      return precise ? {
+        '--bg':'#0c0d10','--pane':'#0e0f13','--pane2':'#0a0b0e',
+        '--surface':'#15161c','--surface-hover':'#1a1c24',
+        '--border':'#1c1e25','--border-strong':'#2b2e37','--titlebar':'#090a0d',
+        '--fg':'#d8dbe2','--fg-dim':'#8b909c','--fg-faint':'#565b66',
+        '--accent':'oklch(0.72 0.13 250)','--accent-soft':'oklch(0.72 0.13 250 / 0.14)',
+        '--green':'oklch(0.74 0.11 155)','--red':'oklch(0.69 0.16 25)','--amber':'oklch(0.8 0.11 80)','--cyan':'oklch(0.78 0.09 205)',
+        '--radius':'6px','--radius-sm':'4px',
+      } : {
+        '--bg':'#100e0a','--pane':'#14110c','--pane2':'#0e0c09',
+        '--surface':'#1e1a13','--surface-hover':'#241f16',
+        '--border':'#272117','--border-strong':'#3a3325','--titlebar':'#0c0a07',
+        '--fg':'#e8dfcd','--fg-dim':'#9d9484','--fg-faint':'#665e51',
+        '--accent':'oklch(0.74 0.12 248)','--accent-soft':'oklch(0.74 0.12 248 / 0.15)',
+        '--green':'oklch(0.75 0.1 150)','--red':'oklch(0.69 0.14 35)','--amber':'oklch(0.8 0.1 75)','--cyan':'oklch(0.78 0.08 200)',
+        '--radius':'10px','--radius-sm':'7px',
+      };
+    }
+    return precise ? {
+      '--bg':'#f2f3f5','--pane':'#fbfbfc','--pane2':'#f5f6f8',
+      '--surface':'#eceef1','--surface-hover':'#e5e7ec',
+      '--border':'#e3e5ea','--border-strong':'#ccd0d8','--titlebar':'#eaecef',
+      '--fg':'#191b20','--fg-dim':'#5a5f6a','--fg-faint':'#969ba6',
+      '--accent':'oklch(0.55 0.16 250)','--accent-soft':'oklch(0.55 0.16 250 / 0.1)',
+      '--green':'oklch(0.5 0.12 150)','--red':'oklch(0.53 0.19 27)','--amber':'oklch(0.6 0.12 70)','--cyan':'oklch(0.54 0.1 215)',
+      '--radius':'6px','--radius-sm':'4px',
+    } : {
+      '--bg':'#ebe4d6','--pane':'#f7f1e6','--pane2':'#efe8da',
+      '--surface':'#efe7d7','--surface-hover':'#e7decc',
+      '--border':'#e0d6c4','--border-strong':'#cabfa8','--titlebar':'#e5ddcd',
+      '--fg':'#2a251c','--fg-dim':'#6b6453','--fg-faint':'#9b937f',
+      '--accent':'oklch(0.5 0.16 250)','--accent-soft':'oklch(0.5 0.16 250 / 0.1)',
+      '--green':'oklch(0.5 0.11 145)','--red':'oklch(0.52 0.18 32)','--amber':'oklch(0.57 0.12 68)','--cyan':'oklch(0.52 0.09 210)',
+      '--radius':'10px','--radius-sm':'7px',
+    };
+  }
+
+  renderVals() {
+    const { theme, style, focusedPane, mdCollapsed, mdView, statusView, accentHue } = this.state;
+    const isDark = theme === 'dark';
+    const precise = style === 'precise';
+
+    const aL = isDark ? 0.72 : 0.55;
+    const aC = isDark ? 0.13 : 0.16;
+    const aA = isDark ? 0.15 : 0.10;
+    const accent = `oklch(${aL} ${aC} ${accentHue})`;
+    const accentSoft = `oklch(${aL} ${aC} ${accentHue} / ${aA})`;
+    const swatchBase = { width:'22px', height:'22px', borderRadius:'7px', border:'none', cursor:'pointer', padding:0 };
+    const accentSwatches = [250, 160, 70, 300, 22].map(h => ({
+      onClick: () => this.setState({ accentHue: h }),
+      style: {
+        ...swatchBase,
+        background: `oklch(${aL} ${aC} ${h})`,
+        boxShadow: h === accentHue ? '0 0 0 2px #161718, 0 0 0 3.5px #e9eaed' : 'none',
+      },
+    }));
+
+    const segBase = { border:'none', cursor:'pointer', fontFamily:'inherit', fontSize:'12.5px', fontWeight:600, padding:'5px 14px', borderRadius:'6px' };
+    const segOn = { ...segBase, background:'#e9eaed', color:'#16171a', boxShadow:'0 1px 2px rgba(0,0,0,.35)' };
+    const segOff = { ...segBase, background:'transparent', color:'#9498a1' };
+    const pillBase = { border:'none', cursor:'pointer', fontFamily:'inherit', fontSize:'10px', fontWeight:600, padding:'2px 7px', borderRadius:'4px', letterSpacing:'.03em' };
+    const fmtOn = { ...pillBase, background:'var(--accent-soft)', color:'var(--accent)' };
+    const fmtOff = { ...pillBase, background:'transparent', color:'var(--fg-faint)' };
+    const paneEdge = (on) => ({ borderTop: on ? '2px solid var(--accent)' : '2px solid transparent', opacity: on ? 1 : 0.46, display:'flex', flexDirection:'column', cursor:'default' });
+
+    return {
+      rootStyle: {
+        ...this.pal(theme, precise),
+        '--accent': accent, '--accent-soft': accentSoft,
+        borderRadius:'13px', overflow:'hidden', border:'1px solid var(--border-strong)',
+        boxShadow:'0 28px 70px -24px rgba(0,0,0,.65), 0 4px 14px -6px rgba(0,0,0,.5)',
+        fontFamily:"'JetBrains Mono',monospace",
+      },
+      accentSwatches,
+
+      segDark: isDark ? segOn : segOff,
+      segLight: !isDark ? segOn : segOff,
+      segPrecise: precise ? segOn : segOff,
+      segWorkshop: !precise ? segOn : segOff,
+      setDark: () => this.setState({ theme:'dark' }),
+      setLight: () => this.setState({ theme:'light' }),
+      setPrecise: () => this.setState({ style:'precise' }),
+      setWorkshop: () => this.setState({ style:'workshop' }),
+
+      mainPaneStyle: { ...paneEdge(focusedPane === 'main'), flex:'1', minWidth:0, background:'var(--pane)' },
+      monPaneStyle: { ...paneEdge(focusedPane === 'mon'), width:'336px', flex:'0 0 336px', background:'var(--pane2)', borderLeft:'1px solid var(--border)' },
+      focusMain: () => this.setState({ focusedPane:'main' }),
+      focusMon: () => this.setState({ focusedPane:'mon' }),
+
+      mdCollapsed,
+      showMdRendered: !mdCollapsed && mdView === 'rendered',
+      showMdRaw: !mdCollapsed && mdView === 'raw',
+      mdChevron: mdCollapsed ? '\u25B8' : '\u25BE',
+      toggleMdCollapse: () => this.setState(s => ({ mdCollapsed: !s.mdCollapsed })),
+      setMdRendered: () => this.setState({ mdCollapsed:false, mdView:'rendered' }),
+      setMdRaw: () => this.setState({ mdCollapsed:false, mdView:'raw' }),
+      mdFmtSeg: mdView === 'rendered' ? fmtOn : fmtOff,
+      mdRawSeg: mdView === 'raw' ? fmtOn : fmtOff,
+
+      showStatusFmt: statusView === 'formatted',
+      showStatusRaw: statusView === 'raw',
+      setStatusFmt: () => this.setState({ statusView:'formatted' }),
+      setStatusRaw: () => this.setState({ statusView:'raw' }),
+      statFmtSeg: statusView === 'formatted' ? fmtOn : fmtOff,
+      statRawSeg: statusView === 'raw' ? fmtOn : fmtOff,
+    };
+  }
+}
+</script>
+</body>
+</html>
