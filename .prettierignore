@@ -1,0 +1,12 @@
+dist
+src-tauri
+playwright-report
+test-results
+pnpm-lock.yaml
+design
+specs
+docs
+CLAUDE.md
+README.md
+LICENSE
+.claude
