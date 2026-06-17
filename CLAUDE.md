@@ -17,6 +17,16 @@ These are the soul of the product. Violating them is a defect even if the code w
 5. **Gate every side effect.** Anything destructive or state-changing, whether from a widget or the assistant, passes through the approval gate in `specs/10-safety-and-permissions.md`.
 6. **Local-first and private.** No account is required to use the terminal. History lives on the user's machine. No telemetry without explicit opt-in. Never handle or store Claude credentials directly (see `specs/09-ai-assistant-and-auth.md`).
 
+## Check-in discipline
+
+Permission mode controls whether the harness prompts before each tool call. It does not lower the bar for judgment, even with `--dangerously-skip-permissions`.
+
+- **Before any destructive or hard-to-reverse action** — force-push, `git reset --hard`, branch delete, closing a PR, schema or shared-infrastructure changes, mass file deletion, rewriting history — state what is about to happen and get explicit confirmation first.
+- **Before dispatching a multi-step plan** — forming an agent team, slicing a milestone, opening a PR series, large refactors — surface the plan and get a quick okay. Don't infer scope from a terse instruction like "do X" or "start Y"; confirm the slicing.
+- **When something slips** — an agent oversteps its scope, a tool result is surprising, CI fails for a reason the plan didn't anticipate — raise it before continuing. Silence past a slip lets the next step compound it.
+
+Auto-approval is a convenience for routine reads and lints, not a license to act without judgment.
+
 ## Tech stack
 
 See `specs/11-tech-stack-and-conventions.md` for versions and the full crate and package list. In short: Tauri 2; Rust with `portable-pty`, a VT parser, `rusqlite` with SQLite FTS5 and `sqlite-vec`, `tokio`, `thiserror`, `anyhow`, `serde`; React with strict TypeScript, Vite, `xterm.js`, CodeMirror 6, `react-markdown` with DOMPurify; the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) driven locally.
