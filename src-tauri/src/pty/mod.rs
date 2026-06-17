@@ -212,7 +212,7 @@ impl PtyManager {
     }
 
     /// Return the number of active PTYs. Useful in tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub async fn active_count(&self) -> usize {
         self.inner.lock().await.len()
     }
@@ -353,11 +353,15 @@ async fn remove_exited_global(id: PtyId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
     use std::sync::Arc;
+    #[cfg(unix)]
     use tokio::sync::mpsc;
 
     /// Build a `Channel<PtyEvent>` backed by an in-process mpsc queue so tests
     /// can receive events without a real Tauri runtime.
+    #[cfg(unix)]
     fn make_test_channel() -> (Channel<PtyEvent>, mpsc::UnboundedReceiver<PtyEvent>) {
         let (tx, rx) = mpsc::unbounded_channel::<PtyEvent>();
         let channel = Channel::new(move |event| {
