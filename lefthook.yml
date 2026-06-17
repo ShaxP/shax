@@ -1,0 +1,22 @@
+pre-commit:
+  parallel: true
+  commands:
+    prettier:
+      glob: "*.{ts,tsx,js,jsx,json,md,css,yml,yaml}"
+      run: pnpm prettier --check {staged_files}
+    eslint:
+      glob: "*.{ts,tsx,js,jsx}"
+      run: pnpm eslint {staged_files}
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+pre-push:
+  parallel: false
+  commands:
+    typecheck:
+      run: pnpm typecheck
+    clippy:
+      run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    test:
+      run: pnpm test
