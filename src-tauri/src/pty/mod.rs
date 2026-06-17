@@ -464,35 +464,43 @@ fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, Pt
     fs::write(dir.join("shax.zsh"), SHAX_ZSH)
         .map_err(|e| PtyError::Spawn(format!("write shax.zsh: {e}")))?;
 
-    // .zshenv: restore ZDOTDIR and chain the user's .zshenv.
-    fs::write(
-        dir.join(".zshenv"),
-        "ZDOTDIR=${SHAX_REAL_ZDOTDIR:-$HOME}\n\
-         [[ -f \"$ZDOTDIR/.zshenv\" ]] && source \"$ZDOTDIR/.zshenv\"\n",
-    )
-    .map_err(|e| PtyError::Spawn(format!("write .zshenv: {e}")))?;
+    // Each shim file temporarily switches ZDOTDIR to the user's real value
+    // while sourcing the corresponding user dotfile, then restores ZDOTDIR
+    // to the temp dir so zsh's *next* file lookup (.zprofile, .zshrc, .zlogin)
+    // still finds *our* shim. After the last hop (.zshrc) we leave ZDOTDIR
+    // pointing at the user's value so interactive use sees what they expect.
+    let chain = |user_file: &str, post: &str| -> String {
+        format!(
+            "_shax_user_zdotdir=\"${{SHAX_REAL_ZDOTDIR:-$HOME}}\"\n\
+             if [[ -f \"$_shax_user_zdotdir/{user_file}\" ]]; then\n\
+               _shax_shim_zdotdir=\"$ZDOTDIR\"\n\
+               ZDOTDIR=\"$_shax_user_zdotdir\"\n\
+               source \"$_shax_user_zdotdir/{user_file}\"\n\
+               ZDOTDIR=\"$_shax_shim_zdotdir\"\n\
+             fi\n\
+             {post}",
+        )
+    };
 
-    // .zprofile: chain user's .zprofile.
-    fs::write(
-        dir.join(".zprofile"),
-        "[[ -f \"$ZDOTDIR/.zprofile\" ]] && source \"$ZDOTDIR/.zprofile\"\n",
-    )
-    .map_err(|e| PtyError::Spawn(format!("write .zprofile: {e}")))?;
+    fs::write(dir.join(".zshenv"), chain(".zshenv", ""))
+        .map_err(|e| PtyError::Spawn(format!("write .zshenv: {e}")))?;
 
-    // .zshrc: chain user's .zshrc, then source our integration.
+    fs::write(dir.join(".zprofile"), chain(".zprofile", ""))
+        .map_err(|e| PtyError::Spawn(format!("write .zprofile: {e}")))?;
+
     fs::write(
         dir.join(".zshrc"),
-        "[[ -f \"$ZDOTDIR/.zshrc\" ]] && source \"$ZDOTDIR/.zshrc\"\n\
-         source \"$SHAX_INTEGRATION_DIR/shax.zsh\"\n",
+        chain(
+            ".zshrc",
+            "source \"$SHAX_INTEGRATION_DIR/shax.zsh\"\n\
+             ZDOTDIR=\"$_shax_user_zdotdir\"\n\
+             unset _shax_user_zdotdir _shax_shim_zdotdir\n",
+        ),
     )
     .map_err(|e| PtyError::Spawn(format!("write .zshrc: {e}")))?;
 
-    // .zlogin: chain user's .zlogin.
-    fs::write(
-        dir.join(".zlogin"),
-        "[[ -f \"$ZDOTDIR/.zlogin\" ]] && source \"$ZDOTDIR/.zlogin\"\n",
-    )
-    .map_err(|e| PtyError::Spawn(format!("write .zlogin: {e}")))?;
+    fs::write(dir.join(".zlogin"), chain(".zlogin", ""))
+        .map_err(|e| PtyError::Spawn(format!("write .zlogin: {e}")))?;
 
     // Set env vars on the child.
     let dir_str = dir
