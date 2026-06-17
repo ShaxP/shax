@@ -8,25 +8,25 @@ mod search;
 mod store;
 mod vt;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+use std::sync::Arc;
+
+use ipc::{pty_kill, pty_resize, pty_spawn, pty_write};
+use pty::PtyManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let manager = Arc::new(PtyManager::new());
+
+    // The reader thread runs outside Tauri State and reaches the manager via
+    // a process-global Arc.
+    pty::set_global_manager(Arc::clone(&manager));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(manager)
+        .invoke_handler(tauri::generate_handler![
+            pty_spawn, pty_write, pty_resize, pty_kill,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn smoke() {
-        assert_eq!(2 + 2, 4);
-    }
 }
