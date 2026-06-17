@@ -286,11 +286,24 @@ fn spawn_reader_task(
 // ── Shell builder ──────────────────────────────────────────────────────────────
 
 /// Build the shell `CommandBuilder` from spawn options, applying cwd and env.
+///
+/// `portable_pty::CommandBuilder` starts with an empty environment. A shell
+/// (zsh, bash) launched with no `HOME`/`PATH`/`TERM` initializes its terminal
+/// subsystem badly and reports "open terminal failed: not a terminal", which
+/// also disables line editing. So we inherit the parent process's env, layer
+/// a sane `TERM` default, and then apply any caller overrides on top.
 fn build_shell_command(opts: &SpawnOpts) -> CommandBuilder {
     let shell = resolve_shell();
     let mut cmd = CommandBuilder::new(&shell);
 
-    if let Some(ref cwd) = opts.cwd {
+    for (key, val) in std::env::vars_os() {
+        cmd.env(&key, &val);
+    }
+
+    cmd.env("TERM", "xterm-256color");
+
+    let cwd = opts.cwd.clone().or_else(|| std::env::var("HOME").ok());
+    if let Some(cwd) = cwd {
         cmd.cwd(cwd);
     }
 
