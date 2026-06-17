@@ -10,3 +10,8 @@ test("terminal pane is mounted in the DOM", async ({ page }) => {
   // The TerminalPane always renders this wrapper regardless of Tauri context.
   await expect(page.getByTestId("terminal-pane")).toBeVisible();
 });
+
+test("dev status bar is visible", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator('[data-testid="dev-status-bar"]')).toBeVisible();
+});

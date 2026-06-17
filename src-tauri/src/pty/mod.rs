@@ -1,15 +1,28 @@
 //! PTY manager: one PTY per pane, reader tasks, resize, and process-group reaping.
+//!
+//! Slice 2 additions:
+//! - New `PtyEvent` variants: `AltScreenChanged`, `BlockStarted`, `BlockCompleted`.
+//! - Reader thread runs the VT parser and block state machine inline.
+//! - zsh shell integration is injected invisibly via ZDOTDIR shim on spawn.
+//! - `PtyManager` exposes `list_blocks` for the `pty_list_blocks` IPC command.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::Write as _,
+    sync::{Arc, OnceLock},
+};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use std::io::Write as _;
 use tauri::ipc::Channel;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::pty::error::PtyError;
+use crate::{
+    blocks::{BlockId, BlockMachine, BlockSummary},
+    pty::error::PtyError,
+    vt::OscParser,
+};
 
 pub mod error;
 
@@ -49,6 +62,9 @@ pub struct SpawnOpts {
 }
 
 /// Events streamed from the backend to the frontend over a `Channel<PtyEvent>`.
+///
+/// The `Output` and `Exit` variants are unchanged from slice 1 (frozen IPC
+/// contract).  The three new variants are additive.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PtyEvent {
@@ -57,6 +73,20 @@ pub enum PtyEvent {
     /// The child process has exited. `code` is `None` when the exit status is
     /// unavailable (e.g. killed by a signal without a numeric code).
     Exit { code: Option<i32> },
+    /// The alternate screen buffer was entered (`?1049h`) or left (`?1049l`).
+    AltScreenChanged { active: bool },
+    /// A new command block has started (OSC 133 C received).
+    BlockStarted {
+        block_id: BlockId,
+        started_at_ms: u64,
+    },
+    /// A command block has completed (OSC 133 D received).
+    BlockCompleted {
+        block_id: BlockId,
+        exit_code: i32,
+        ended_at_ms: u64,
+        duration_ms: u64,
+    },
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────
@@ -69,6 +99,8 @@ struct PtyHandle {
     writer: Mutex<Box<dyn std::io::Write + Send>>,
     /// Stored so the child's exit code is available without an extra syscall.
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    /// Temp dir for the ZDOTDIR shim; kept alive until the PTY is dropped.
+    _zdotdir_tmpdir: Option<tempfile::TempDir>,
 }
 
 // ── PtyManager ─────────────────────────────────────────────────────────────────
@@ -76,6 +108,10 @@ struct PtyHandle {
 /// Owns all active PTYs. Lives as a `tauri::State` singleton.
 pub struct PtyManager {
     inner: Mutex<HashMap<PtyId, PtyHandle>>,
+    /// Per-pane block summary lists; written by reader threads, read by IPC.
+    ///
+    /// Keyed by `PtyId`; the `Vec<BlockSummary>` is in arrival order.
+    blocks: Mutex<HashMap<PtyId, Arc<Mutex<Vec<BlockSummary>>>>>,
 }
 
 impl PtyManager {
@@ -83,6 +119,7 @@ impl PtyManager {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            blocks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,7 +127,9 @@ impl PtyManager {
     /// `on_event`. Returns the new `PtyId`.
     ///
     /// The shell binary is chosen from `$SHELL`, falling back to platform
-    /// defaults when the variable is absent or the path is invalid.
+    /// defaults when the variable is absent or the path is invalid. For zsh
+    /// shells, an invisible ZDOTDIR shim injects the Shax OSC 133 integration
+    /// without touching the user's dotfiles.
     pub async fn spawn(
         &self,
         opts: SpawnOpts,
@@ -110,7 +149,8 @@ impl PtyManager {
             .openpty(size)
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
-        let cmd = build_shell_command(&opts);
+        // Build the shell command and, for zsh, inject the ZDOTDIR shim.
+        let (cmd, zdotdir_tmpdir) = build_shell_command(&opts)?;
 
         let child: Box<dyn Child + Send + Sync> = pair
             .slave
@@ -132,15 +172,20 @@ impl PtyManager {
 
         let child = Arc::new(Mutex::new(child));
 
+        // Create a per-pane block summary list shared with the reader thread.
+        let block_list: Arc<Mutex<Vec<BlockSummary>>> = Arc::new(Mutex::new(Vec::new()));
+        self.blocks.lock().await.insert(id, Arc::clone(&block_list));
+
         let handle = PtyHandle {
             master: pair.master,
             writer: Mutex::new(writer),
             child: child.clone(),
+            _zdotdir_tmpdir: zdotdir_tmpdir,
         };
 
         self.inner.lock().await.insert(id, handle);
 
-        spawn_reader_task(id, reader, child, on_event);
+        spawn_reader_task(id, reader, child, on_event, block_list);
 
         tracing::info!(%id, rows = opts.rows, cols = opts.cols, "PTY spawned");
         Ok(id)
@@ -211,6 +256,16 @@ impl PtyManager {
         tracing::debug!(%id, "PTY entry removed after natural exit");
     }
 
+    /// Return a snapshot of the block summary list for the given pane, oldest
+    /// first.  Returns an empty vec if the pane id is unknown.
+    pub async fn list_blocks(&self, id: PtyId) -> Vec<BlockSummary> {
+        let blocks_guard = self.blocks.lock().await;
+        match blocks_guard.get(&id) {
+            Some(list) => list.lock().await.clone(),
+            None => Vec::new(),
+        }
+    }
+
     /// Return the number of active PTYs. Useful in tests.
     #[cfg(all(test, unix))]
     pub async fn active_count(&self) -> usize {
@@ -226,15 +281,23 @@ impl Default for PtyManager {
 
 // ── Reader task ────────────────────────────────────────────────────────────────
 
-/// Spawn a blocking task that reads PTY output and forwards it as `PtyEvent`s.
+/// Spawn a blocking task that reads PTY output, runs it through the VT and
+/// block state machines, and forwards events to the frontend.
 ///
-/// We use `spawn_blocking` because `portable-pty` reader reads are synchronous.
-/// The task exits when it sees EOF (child exited) or when `cancel` is notified.
+/// Order per chunk:
+/// 1. Feed bytes to the VT parser (may emit state-change events synchronously).
+/// 2. Emit those state-change events on the channel.
+/// 3. Emit `PtyEvent::Output` with the raw bytes.
+///
+/// This order ensures state transitions (e.g. `BlockStarted`) arrive at the
+/// frontend just before the bytes that triggered them, which keeps the UI's
+/// mental model consistent.
 fn spawn_reader_task(
     id: PtyId,
     mut reader: Box<dyn std::io::Read + Send>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     on_event: Channel<PtyEvent>,
+    block_list: Arc<Mutex<Vec<BlockSummary>>>,
 ) {
     let rt = tokio::runtime::Handle::current();
 
@@ -243,15 +306,49 @@ fn spawn_reader_task(
 
         let mut buf = [0u8; 4096];
 
+        // The VT parser and block machine live entirely inside this thread;
+        // they are never moved or accessed from outside.
+        let block_list_clone = Arc::clone(&block_list);
+        let mut machine = BlockMachine::new();
+        let mut vt_parser = OscParser::new(move |vt_event| {
+            // This closure is called synchronously inside `vt_parser.advance()`.
+            // We push the VT event onto a thread-local queue so the reader loop
+            // can emit the channel events in the right order.
+            VT_EVENT_QUEUE.with(|q| q.borrow_mut().push(vt_event));
+            let _ = block_list_clone; // keep the Arc alive in the closure
+        });
+
         loop {
-            // PTY reads block until data arrives. EOF (0 bytes) signals the
-            // child has exited or the master was closed.
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    // 1. Run through VT parser; events land in the thread-local queue.
+                    vt_parser.advance(&buf[..n]);
+
+                    // 2. Drain queued VT events through the block machine and emit.
+                    let vt_events: Vec<_> =
+                        VT_EVENT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+
+                    machine.push_output(&buf[..n]);
+
+                    for vt_ev in vt_events {
+                        let pty_events = machine.handle_vt_event(vt_ev);
+                        for ev in pty_events {
+                            if on_event.send(ev).is_err() {
+                                return;
+                            }
+                        }
+                    }
+
+                    // Sync completed block summaries to the shared list.
+                    rt.block_on(async {
+                        let mut list = block_list.lock().await;
+                        *list = machine.block_summaries();
+                    });
+
+                    // 3. Forward raw bytes to xterm.js (fidelity contract).
                     let encoded = B64.encode(&buf[..n]);
                     if on_event.send(PtyEvent::Output { data: encoded }).is_err() {
-                        // The channel receiver (frontend) is gone.
                         break;
                     }
                 }
@@ -261,6 +358,13 @@ fn spawn_reader_task(
                 }
             }
         }
+
+        // PTY exited; finalize any running block as aborted.
+        machine.finalize_on_exit();
+        rt.block_on(async {
+            let mut list = block_list.lock().await;
+            *list = machine.block_summaries();
+        });
 
         let exit_code: Option<i32> = rt.block_on(async {
             let mut child_guard = child.lock().await;
@@ -276,34 +380,43 @@ fn spawn_reader_task(
         let _ = on_event.send(PtyEvent::Exit { code: exit_code });
         tracing::info!(%id, ?exit_code, "PTY reader task finished");
 
-        // Clean up the manager entry if a `kill` hasn't already removed it.
         rt.spawn(async move {
             remove_exited_global(id).await;
         });
     });
 }
 
+// Thread-local queue so the VT parser closure can hand events back to the
+// reader loop without needing `Send`.
+std::thread_local! {
+    static VT_EVENT_QUEUE: std::cell::RefCell<Vec<crate::vt::VtEvent>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 // ── Shell builder ──────────────────────────────────────────────────────────────
 
-/// Build the shell `CommandBuilder` from spawn options, applying cwd and env.
+/// Embedded zsh integration script (bundled at compile time).
+const SHAX_ZSH: &str = include_str!("../../shell-integration/shax.zsh");
+
+/// Build the shell `CommandBuilder` from spawn options.
 ///
-/// `portable_pty::CommandBuilder` starts with an empty environment. A shell
-/// (zsh, bash) launched with no `HOME`/`PATH`/`TERM` initializes its terminal
-/// subsystem badly and reports "open terminal failed: not a terminal", which
-/// also disables line editing. So we inherit the parent process's env, layer
-/// a sane `TERM` default, and then apply any caller overrides on top.
-fn build_shell_command(opts: &SpawnOpts) -> CommandBuilder {
+/// Returns the command and, for zsh shells, a `TempDir` holding the ZDOTDIR
+/// shim.  The `TempDir` must be kept alive for the PTY's lifetime.
+fn build_shell_command(
+    opts: &SpawnOpts,
+) -> Result<(CommandBuilder, Option<tempfile::TempDir>), PtyError> {
     let shell = resolve_shell();
     let mut cmd = CommandBuilder::new(&shell);
 
+    // Inherit the parent environment so the shell starts with a sane PATH,
+    // HOME, TERM, etc.
     for (key, val) in std::env::vars_os() {
         cmd.env(&key, &val);
     }
-
     cmd.env("TERM", "xterm-256color");
 
     let cwd = opts.cwd.clone().or_else(|| std::env::var("HOME").ok());
-    if let Some(cwd) = cwd {
+    if let Some(ref cwd) = cwd {
         cmd.cwd(cwd);
     }
 
@@ -313,7 +426,86 @@ fn build_shell_command(opts: &SpawnOpts) -> CommandBuilder {
         }
     }
 
-    cmd
+    // Inject the zsh integration via an invisible ZDOTDIR shim.
+    let zdotdir_tmpdir = if shell_is_zsh(&shell) {
+        match create_zdotdir_shim(&mut cmd) {
+            Ok(tmpdir) => Some(tmpdir),
+            Err(e) => {
+                // Non-fatal: log and continue without integration.
+                tracing::warn!("zsh ZDOTDIR shim failed, OSC 133 will not fire: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok((cmd, zdotdir_tmpdir))
+}
+
+/// Returns `true` when the resolved shell path ends in `zsh` or equals `zsh`.
+fn shell_is_zsh(shell: &str) -> bool {
+    shell == "zsh" || shell.ends_with("/zsh") || shell.ends_with("\\zsh") // Windows
+}
+
+/// Create a per-PTY temp directory containing the ZDOTDIR shim files and
+/// configure `cmd` to use it.  The caller holds the `TempDir` alive.
+fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
+    use std::fs;
+
+    let tmpdir = tempfile::TempDir::new()
+        .map_err(|e| PtyError::Spawn(format!("tempdir for ZDOTDIR shim: {e}")))?;
+    let dir = tmpdir.path();
+
+    // The user's real ZDOTDIR (if they set one); we'll source it from our shim.
+    let real_zdotdir = std::env::var("ZDOTDIR").ok();
+
+    // Write shax.zsh into the temp dir.
+    fs::write(dir.join("shax.zsh"), SHAX_ZSH)
+        .map_err(|e| PtyError::Spawn(format!("write shax.zsh: {e}")))?;
+
+    // .zshenv: restore ZDOTDIR and chain the user's .zshenv.
+    fs::write(
+        dir.join(".zshenv"),
+        "ZDOTDIR=${SHAX_REAL_ZDOTDIR:-$HOME}\n\
+         [[ -f \"$ZDOTDIR/.zshenv\" ]] && source \"$ZDOTDIR/.zshenv\"\n",
+    )
+    .map_err(|e| PtyError::Spawn(format!("write .zshenv: {e}")))?;
+
+    // .zprofile: chain user's .zprofile.
+    fs::write(
+        dir.join(".zprofile"),
+        "[[ -f \"$ZDOTDIR/.zprofile\" ]] && source \"$ZDOTDIR/.zprofile\"\n",
+    )
+    .map_err(|e| PtyError::Spawn(format!("write .zprofile: {e}")))?;
+
+    // .zshrc: chain user's .zshrc, then source our integration.
+    fs::write(
+        dir.join(".zshrc"),
+        "[[ -f \"$ZDOTDIR/.zshrc\" ]] && source \"$ZDOTDIR/.zshrc\"\n\
+         source \"$SHAX_INTEGRATION_DIR/shax.zsh\"\n",
+    )
+    .map_err(|e| PtyError::Spawn(format!("write .zshrc: {e}")))?;
+
+    // .zlogin: chain user's .zlogin.
+    fs::write(
+        dir.join(".zlogin"),
+        "[[ -f \"$ZDOTDIR/.zlogin\" ]] && source \"$ZDOTDIR/.zlogin\"\n",
+    )
+    .map_err(|e| PtyError::Spawn(format!("write .zlogin: {e}")))?;
+
+    // Set env vars on the child.
+    let dir_str = dir
+        .to_str()
+        .ok_or_else(|| PtyError::Spawn("ZDOTDIR temp path is not valid UTF-8".into()))?;
+
+    if let Some(ref real) = real_zdotdir {
+        cmd.env("SHAX_REAL_ZDOTDIR", real);
+    }
+    cmd.env("SHAX_INTEGRATION_DIR", dir_str);
+    cmd.env("ZDOTDIR", dir_str);
+
+    Ok(tmpdir)
 }
 
 /// Resolve the shell binary: `$SHELL` first, then OS-specific fallback.
@@ -344,14 +536,11 @@ fn resolve_shell() -> String {
 // use a module-level `OnceLock` to hold a weak reference to the shared manager.
 // `lib.rs` sets this during `run()`.
 
-use std::sync::OnceLock;
-
 static GLOBAL_MANAGER: OnceLock<Arc<PtyManager>> = OnceLock::new();
 
 /// Called by `lib.rs` after constructing the manager so reader tasks can reach
 /// it without going through Tauri State.
 pub fn set_global_manager(manager: Arc<PtyManager>) {
-    // Ignore the error if already set (should not happen in production).
     let _ = GLOBAL_MANAGER.set(manager);
 }
 
@@ -367,8 +556,6 @@ async fn remove_exited_global(id: PtyId) {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
-    use std::sync::Arc;
     #[cfg(unix)]
     use tokio::sync::mpsc;
 
@@ -432,6 +619,7 @@ mod tests {
                     }
                 }
                 Ok(Some(PtyEvent::Exit { .. })) => break,
+                Ok(Some(_)) => {} // AltScreenChanged, BlockStarted, BlockCompleted
                 Ok(None) => break,
                 Err(_) => {}
             }
@@ -467,7 +655,6 @@ mod tests {
 
         let id = manager.spawn(opts, channel).await.expect("spawn");
 
-        // A few rapid resizes must not panic or error.
         for (rows, cols) in [(30u16, 100u16), (20, 60), (48, 200)] {
             manager
                 .resize(id, rows, cols)
@@ -488,5 +675,35 @@ mod tests {
             matches!(result, Err(PtyError::UnknownId(_))),
             "expected UnknownId error, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn shell_is_zsh_detection() {
+        assert!(shell_is_zsh("zsh"));
+        assert!(shell_is_zsh("/bin/zsh"));
+        assert!(shell_is_zsh("/usr/local/bin/zsh"));
+        assert!(!shell_is_zsh("/bin/bash"));
+        assert!(!shell_is_zsh("fish"));
+    }
+
+    #[test]
+    fn zdotdir_shim_creates_expected_files() {
+        let mut dummy_cmd = CommandBuilder::new("zsh");
+        let tmpdir = create_zdotdir_shim(&mut dummy_cmd).expect("shim creation should succeed");
+        let dir = tmpdir.path();
+        for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin", "shax.zsh"] {
+            assert!(
+                dir.join(name).exists(),
+                "expected shim file not found: {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_blocks_returns_empty_for_unknown_pane() {
+        let manager = PtyManager::new();
+        let unknown = PtyId::new();
+        let result = manager.list_blocks(unknown).await;
+        assert!(result.is_empty());
     }
 }

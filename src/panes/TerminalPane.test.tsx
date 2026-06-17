@@ -61,11 +61,14 @@ const mockKillPty = vi.fn().mockResolvedValue(undefined);
 const mockWritePty = vi.fn().mockResolvedValue(undefined);
 const mockResizePty = vi.fn().mockResolvedValue(undefined);
 
+const mockListBlocks = vi.fn().mockResolvedValue([]);
+
 vi.mock("../lib/ipc", () => ({
   spawnPty: (...args: unknown[]): Promise<string> => mockSpawnPty(...args) as Promise<string>,
   writePty: (...args: unknown[]): Promise<void> => mockWritePty(...args) as Promise<void>,
   resizePty: (...args: unknown[]): Promise<void> => mockResizePty(...args) as Promise<void>,
   killPty: (...args: unknown[]): Promise<void> => mockKillPty(...args) as Promise<void>,
+  listBlocks: (...args: unknown[]): Promise<[]> => mockListBlocks(...args) as Promise<[]>,
   base64Decode: (b64: string): Uint8Array => new TextEncoder().encode(b64),
   base64Encode: (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)),
 }));
@@ -124,5 +127,10 @@ describe("TerminalPane", () => {
     render(<TerminalPane />);
     expect(mockTerminalOpen).toHaveBeenCalledTimes(1);
     expect(mockFitAddonFit).toHaveBeenCalled();
+  });
+
+  it("renders the dev status bar", () => {
+    render(<TerminalPane />);
+    expect(screen.getByTestId("dev-status-bar")).toBeInTheDocument();
   });
 });

@@ -1,1 +1,404 @@
-//! Block assembly and lifecycle: command boundaries, exit codes, timing, cwd.
+//! Block assembly and lifecycle: command boundaries, exit codes, timing.
+//!
+//! This module owns the per-pane block state machine.  It is driven by
+//! `VtEvent`s produced by the VT parser and emits `PtyEvent`s to the frontend
+//! over the Tauri channel.
+//!
+//! # State machine
+//!
+//! ```text
+//! Idle ──(CommandStart)──► Running { id, started_at_ms }
+//!                               │
+//!                 (CommandStart again, no D received)
+//!                               │  close current with exit_code=-1, then open new
+//!                               ▼
+//!                           Running { new_id, now }
+//!                               │
+//!               (CommandFinished { exit_code })
+//!                               │
+//!                               ▼
+//!                            Idle
+//! ```
+//!
+//! Output bytes received while Running are accumulated into `current_output`
+//! for the BlockRecord AND still forwarded to xterm.js by the caller (fidelity
+//! contract).
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use uuid::Uuid;
+
+use crate::pty::PtyEvent;
+use crate::vt::VtEvent;
+
+// ── BlockId ────────────────────────────────────────────────────────────────────
+
+/// Opaque identifier for a single captured command block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct BlockId(pub Uuid);
+
+impl BlockId {
+    fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl std::fmt::Display for BlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+// ── Public summary (cheap snapshot for IPC) ────────────────────────────────────
+
+/// A lightweight snapshot of a block, used by `pty_list_blocks`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlockSummary {
+    pub id: BlockId,
+    pub started_at_ms: u64,
+    pub ended_at_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+}
+
+// ── Full record (in-memory) ────────────────────────────────────────────────────
+
+/// Full in-memory record for a block, including captured output bytes.
+///
+/// In slice 4 this will be written through to SQLite; for now it lives only
+/// in RAM.  The `output` field is not yet consumed outside tests; the
+/// annotation avoids a dead-code lint while the storage layer is absent.
+struct BlockRecord {
+    id: BlockId,
+    started_at_ms: u64,
+    ended_at_ms: Option<u64>,
+    exit_code: Option<i32>,
+    /// Raw bytes captured between OSC 133 C and OSC 133 D.
+    #[allow(dead_code)]
+    output: Vec<u8>,
+}
+
+impl BlockRecord {
+    fn to_summary(&self) -> BlockSummary {
+        BlockSummary {
+            id: self.id,
+            started_at_ms: self.started_at_ms,
+            ended_at_ms: self.ended_at_ms,
+            exit_code: self.exit_code,
+        }
+    }
+}
+
+// ── Block state machine ────────────────────────────────────────────────────────
+
+enum BlockState {
+    /// No command is running: waiting for the next OSC 133 C.
+    Idle,
+    /// A command started with OSC 133 C but the D has not arrived yet.
+    Running { id: BlockId, started_at_ms: u64 },
+}
+
+/// Per-pane block state machine.  Lives inside the reader thread.
+pub struct BlockMachine {
+    state: BlockState,
+    /// True when a program has taken the alternate screen (`?1049h`).
+    pub alt_screen: bool,
+    /// Completed (and any prematurely-closed) blocks in arrival order.
+    records: Vec<BlockRecord>,
+    /// Raw bytes accumulated since the last OSC 133 C.
+    current_output: Vec<u8>,
+}
+
+impl BlockMachine {
+    /// Create a new machine in the `Idle` state.
+    pub fn new() -> Self {
+        Self {
+            state: BlockState::Idle,
+            alt_screen: false,
+            records: Vec::new(),
+            current_output: Vec::new(),
+        }
+    }
+
+    /// Append `bytes` to the active block's output buffer.
+    ///
+    /// The caller must also forward the same bytes to xterm.js; this method
+    /// only accumulates, it does not forward.
+    pub fn push_output(&mut self, bytes: &[u8]) {
+        if matches!(self.state, BlockState::Running { .. }) {
+            self.current_output.extend_from_slice(bytes);
+        }
+    }
+
+    /// Process a `VtEvent` and return zero or more `PtyEvent`s to emit to the
+    /// frontend.  The caller sends them on the Tauri channel in the order
+    /// returned.
+    pub fn handle_vt_event(&mut self, event: VtEvent) -> Vec<PtyEvent> {
+        match event {
+            VtEvent::AltScreenEntered => {
+                self.alt_screen = true;
+                vec![PtyEvent::AltScreenChanged { active: true }]
+            }
+            VtEvent::AltScreenLeft => {
+                self.alt_screen = false;
+                vec![PtyEvent::AltScreenChanged { active: false }]
+            }
+            VtEvent::PromptStart | VtEvent::PromptEnd => {
+                // A and B markers are captured but no frontend event is emitted in
+                // slice 2 (they will carry cwd/argv in later slices).
+                vec![]
+            }
+            VtEvent::CommandStart => self.on_command_start(),
+            VtEvent::CommandFinished { exit_code } => self.on_command_finished(exit_code),
+        }
+    }
+
+    /// Take a snapshot of all recorded blocks for `pty_list_blocks`.
+    pub fn block_summaries(&self) -> Vec<BlockSummary> {
+        self.records.iter().map(|r| r.to_summary()).collect()
+    }
+
+    // ── Transitions ───────────────────────────────────────────────────────────
+
+    fn on_command_start(&mut self) -> Vec<PtyEvent> {
+        let mut events = Vec::new();
+
+        // Safety net: if a C arrives before a D, close the previous block.
+        if let BlockState::Running { id, started_at_ms } =
+            std::mem::replace(&mut self.state, BlockState::Idle)
+        {
+            let now = now_ms();
+            let output = std::mem::take(&mut self.current_output);
+            let duration_ms = now.saturating_sub(started_at_ms);
+            tracing::warn!(%id, "OSC 133 C received while already Running; closing with exit_code=-1");
+            self.records.push(BlockRecord {
+                id,
+                started_at_ms,
+                ended_at_ms: Some(now),
+                exit_code: Some(-1),
+                output,
+            });
+            events.push(PtyEvent::BlockCompleted {
+                block_id: id,
+                exit_code: -1,
+                ended_at_ms: now,
+                duration_ms,
+            });
+        }
+
+        let id = BlockId::new();
+        let started_at_ms = now_ms();
+        self.state = BlockState::Running { id, started_at_ms };
+        self.current_output.clear();
+        events.push(PtyEvent::BlockStarted {
+            block_id: id,
+            started_at_ms,
+        });
+        events
+    }
+
+    fn on_command_finished(&mut self, exit_code: i32) -> Vec<PtyEvent> {
+        match std::mem::replace(&mut self.state, BlockState::Idle) {
+            BlockState::Running { id, started_at_ms } => {
+                let ended_at_ms = now_ms();
+                let duration_ms = ended_at_ms.saturating_sub(started_at_ms);
+                let output = std::mem::take(&mut self.current_output);
+                self.records.push(BlockRecord {
+                    id,
+                    started_at_ms,
+                    ended_at_ms: Some(ended_at_ms),
+                    exit_code: Some(exit_code),
+                    output,
+                });
+                vec![PtyEvent::BlockCompleted {
+                    block_id: id,
+                    exit_code,
+                    ended_at_ms,
+                    duration_ms,
+                }]
+            }
+            BlockState::Idle => {
+                // D without a preceding C — defensive ignore.
+                tracing::debug!("OSC 133 D received while Idle; ignoring");
+                vec![]
+            }
+        }
+    }
+
+    /// Called when the PTY exits without a final D.  Any running block is left
+    /// in the records list with `ended_at_ms: None` and `exit_code: None` so
+    /// the frontend can see it was aborted.  This matches the spec edge case:
+    /// "Commands that never emit D (killed shell, crash): mark the block
+    /// aborted after the shell dies; do not leave it Running forever."
+    pub fn finalize_on_exit(&mut self) {
+        if let BlockState::Running { id, started_at_ms } =
+            std::mem::replace(&mut self.state, BlockState::Idle)
+        {
+            let output = std::mem::take(&mut self.current_output);
+            tracing::info!(%id, "PTY exited while block was Running; marking aborted");
+            self.records.push(BlockRecord {
+                id,
+                started_at_ms,
+                ended_at_ms: None,
+                exit_code: None,
+                output,
+            });
+        }
+    }
+}
+
+impl Default for BlockMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/// Current time as milliseconds since the Unix epoch.
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block_started_id(ev: &PtyEvent) -> Option<BlockId> {
+        if let PtyEvent::BlockStarted { block_id, .. } = ev {
+            Some(*block_id)
+        } else {
+            None
+        }
+    }
+
+    fn block_completed_fields(ev: &PtyEvent) -> Option<(BlockId, i32)> {
+        if let PtyEvent::BlockCompleted {
+            block_id,
+            exit_code,
+            ..
+        } = ev
+        {
+            Some((*block_id, *exit_code))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn osc133_lifecycle() {
+        let mut machine = BlockMachine::new();
+
+        // Simulate: A, B, C, output bytes, D;0
+        let mut all_events: Vec<PtyEvent> = Vec::new();
+
+        all_events.extend(machine.handle_vt_event(VtEvent::PromptStart));
+        all_events.extend(machine.handle_vt_event(VtEvent::PromptEnd));
+        all_events.extend(machine.handle_vt_event(VtEvent::CommandStart));
+
+        // Output arrives between C and D.
+        machine.push_output(b"hi\n");
+
+        all_events.extend(machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 }));
+
+        // Exactly two events: BlockStarted then BlockCompleted.
+        let started: Vec<_> = all_events.iter().filter_map(block_started_id).collect();
+        let completed: Vec<_> = all_events
+            .iter()
+            .filter_map(block_completed_fields)
+            .collect();
+
+        assert_eq!(started.len(), 1, "expected one BlockStarted");
+        assert_eq!(completed.len(), 1, "expected one BlockCompleted");
+        assert_eq!(completed[0].0, started[0], "ids must match");
+        assert_eq!(completed[0].1, 0, "exit code must be 0");
+
+        // Summaries carry the completed block.
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].exit_code, Some(0));
+        assert!(summaries[0].ended_at_ms.is_some());
+
+        // Output was captured in the record.
+        assert_eq!(machine.records[0].output, b"hi\n");
+    }
+
+    #[test]
+    fn osc133_nonzero_exit() {
+        let mut machine = BlockMachine::new();
+
+        machine.handle_vt_event(VtEvent::CommandStart);
+        let events = machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 127 });
+
+        let (_, code) = block_completed_fields(&events[0]).unwrap();
+        assert_eq!(code, 127);
+    }
+
+    #[test]
+    fn alt_screen_events_emitted() {
+        let mut machine = BlockMachine::new();
+
+        let ev_enter = machine.handle_vt_event(VtEvent::AltScreenEntered);
+        assert!(matches!(
+            ev_enter[0],
+            PtyEvent::AltScreenChanged { active: true }
+        ));
+        assert!(machine.alt_screen);
+
+        let ev_leave = machine.handle_vt_event(VtEvent::AltScreenLeft);
+        assert!(matches!(
+            ev_leave[0],
+            PtyEvent::AltScreenChanged { active: false }
+        ));
+        assert!(!machine.alt_screen);
+    }
+
+    #[test]
+    fn block_unfinished_on_kill() {
+        let mut machine = BlockMachine::new();
+
+        machine.handle_vt_event(VtEvent::CommandStart);
+        machine.push_output(b"partial output");
+
+        // PTY dies without a D.
+        machine.finalize_on_exit();
+
+        // The block is in the list with no exit code and no end time.
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].exit_code, None);
+        assert_eq!(summaries[0].ended_at_ms, None);
+    }
+
+    #[test]
+    fn double_c_closes_first_block() {
+        // A second C without D should close the first block with exit_code=-1.
+        let mut machine = BlockMachine::new();
+
+        let first_events = machine.handle_vt_event(VtEvent::CommandStart);
+        let first_id = block_started_id(&first_events[0]).unwrap();
+
+        let second_events = machine.handle_vt_event(VtEvent::CommandStart);
+        // second_events[0] should be BlockCompleted for the first block,
+        // second_events[1] should be BlockStarted for the new block.
+        let (closed_id, closed_code) = block_completed_fields(&second_events[0]).unwrap();
+        assert_eq!(closed_id, first_id);
+        assert_eq!(closed_code, -1);
+
+        let new_id = block_started_id(&second_events[1]).unwrap();
+        assert_ne!(new_id, first_id);
+    }
+
+    #[test]
+    fn d_without_c_is_ignored() {
+        let mut machine = BlockMachine::new();
+        let events = machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        assert!(events.is_empty(), "D without C should produce no events");
+        assert!(machine.block_summaries().is_empty());
+    }
+}
