@@ -57,6 +57,10 @@ export function TerminalPane(): React.ReactElement {
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     fitAddon.fit();
+    // Without this, the xterm canvas does not receive keystrokes until the
+    // user clicks on it. Auto-focus on mount so the pane is interactive
+    // immediately (matches the behavior of every native terminal app).
+    terminal.focus();
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;

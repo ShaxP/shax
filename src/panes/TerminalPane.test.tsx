@@ -24,6 +24,7 @@ const mockTerminalDispose = vi.fn();
 const mockTerminalOnData = vi.fn(() => ({ dispose: vi.fn() }));
 const mockTerminalWrite = vi.fn();
 const mockTerminalOpen = vi.fn();
+const mockTerminalFocus = vi.fn();
 const mockFitAddonFit = vi.fn();
 const mockLoadAddon = vi.fn();
 
@@ -36,6 +37,7 @@ vi.mock("@xterm/xterm", () => {
       onData: mockTerminalOnData,
       write: mockTerminalWrite,
       dispose: mockTerminalDispose,
+      focus: mockTerminalFocus,
       rows: 24,
       cols: 80,
     };
