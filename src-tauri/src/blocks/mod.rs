@@ -318,12 +318,19 @@ impl BlockMachine {
                 let ended_at_ms = now_ms();
                 let duration_ms = ended_at_ms.saturating_sub(started_at_ms);
                 let output = std::mem::take(&mut self.current_output);
-                // Prefer the cwd/branch the shell reported on D (the directory
-                // the command *ended* in — what the user expects for
-                // `cd X && ls`). Fall back to the start-time values when the
-                // shell integration didn't report them.
-                let cwd = end_cwd.or(start_cwd);
-                let git_branch = end_branch.or(start_branch);
+                // If the D event carried any cwd/branch hint, treat it as
+                // authoritative for both fields — an integration that
+                // reports cwd but not branch (e.g. after `cd /tmp` from a
+                // git repo) is signalling "no branch here", not "carry the
+                // previous prompt's branch over". Only fall back to the
+                // start-time values when D was bare (older or third-party
+                // integrations that don't extend D at all).
+                let d_extended = end_cwd.is_some() || end_branch.is_some();
+                let (cwd, git_branch) = if d_extended {
+                    (end_cwd, end_branch)
+                } else {
+                    (start_cwd, start_branch)
+                };
                 // Stash the end cwd/branch as the latest known so the NEXT
                 // block opened by C inherits them — without this the next
                 // command would still see the previous prompt's cwd from A,
@@ -557,6 +564,34 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].cwd.as_deref(), Some("/target"));
         assert_eq!(summaries[0].git_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn command_finished_with_extended_d_clears_branch_when_absent() {
+        // `cd /tmp` from a git repo: precmd reports cwd=/tmp but
+        // `git symbolic-ref` fails so branch is empty (None after parsing).
+        // Because the D event carries cwd, we treat the whole event as
+        // authoritative — the user wants no branch shown, not the stale
+        // one from the previous prompt.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/repo".into()),
+            git_branch: Some("main".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("cd /tmp".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: Some("/tmp".into()),
+            git_branch: None, // empty branch value in the OSC parses to None
+        });
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries[0].cwd.as_deref(), Some("/tmp"));
+        assert!(
+            summaries[0].git_branch.is_none(),
+            "branch must be cleared when D's extended params don't carry one"
+        );
     }
 
     #[test]

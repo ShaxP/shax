@@ -281,26 +281,29 @@ describe("blockReducer / completed", () => {
     expect(next.blocks[0]?.git_branch).toBe("feat/x");
   });
 
-  it("null cwd on the completed event keeps the start-time value", () => {
-    // Defensive: shells without our extended D markers still emit
-    // `OSC 133;D;<exit>`. The reducer must not blank out a cwd we already
-    // had from the C-time attachment.
+  it("the event's cwd/branch are authoritative — null clears, no fallback", () => {
+    // Models `cd /tmp` from a git repo: the backend's D reports
+    // cwd=/tmp and (correctly) no branch. The reducer must NOT carry the
+    // previous prompt's branch over via a fallback — the user expects the
+    // row to show /tmp with no branch separator. The bare-D / start-time
+    // fallback is handled in the backend's `on_command_finished`; by the
+    // time the reducer sees a completed action, the values are final.
     const state: BlockState = {
-      blocks: [makeBlock({ id: "x", cwd: "/start", git_branch: "main" })],
+      blocks: [makeBlock({ id: "cd-tmp", cwd: "/repo", git_branch: "main" })],
       altScreen: false,
     };
     const next = blockReducer(state, {
       type: "completed",
-      id: "x",
+      id: "cd-tmp",
       exit_code: 0,
       ended_at_ms: 1,
       duration_ms: 1,
       aborted: false,
-      cwd: null,
+      cwd: "/tmp",
       git_branch: null,
     });
-    expect(next.blocks[0]?.cwd).toBe("/start");
-    expect(next.blocks[0]?.git_branch).toBe("main");
+    expect(next.blocks[0]?.cwd).toBe("/tmp");
+    expect(next.blocks[0]?.git_branch).toBeNull();
   });
 });
 
