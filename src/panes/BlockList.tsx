@@ -10,6 +10,7 @@
  * design lands at M4/M5 once formatters exist.
  */
 
+import { useLayoutEffect, useRef } from "react";
 import type { BlockSummary, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -26,8 +27,21 @@ export function BlockList({
   blocks,
   getOutput = getBlockOutput,
 }: BlockListProps): React.ReactElement {
+  // Stick to the bottom of the list so the most recent block is always
+  // visible — both when the app starts (the history seed bumps length from
+  // 0 to N) and when a new command runs (a new BlockStarted appends a row).
+  // `useLayoutEffect` runs after the DOM update but before paint, so the
+  // user never sees the list at the wrong scroll position.
+  const scrollRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    el.scrollTop = el.scrollHeight;
+  }, [blocks.length]);
+
   return (
     <aside
+      ref={scrollRef}
       data-testid="block-list"
       style={{
         width: 360,

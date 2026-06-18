@@ -18,6 +18,8 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
   return {
     id: "block-1",
     command: "echo hi",
+    cwd: null,
+    git_branch: null,
     started_at_ms: 1000,
     ended_at_ms: 1500,
     exit_code: 0,
@@ -103,6 +105,30 @@ describe("BlockRow / expand", () => {
     fireEvent.click(screen.getByTestId("block-row").firstChild as Element);
     expect(getOutput).not.toHaveBeenCalled();
     expect(screen.queryByTestId("block-output")).toBeNull();
+  });
+});
+
+describe("BlockRow / metadata line", () => {
+  it("renders cwd · branch when both are present", () => {
+    render(
+      <BlockRow pty="pty-1" block={makeBlock({ cwd: "/Users/me/repo", git_branch: "feat/x" })} />,
+    );
+    const meta = screen.getByTestId("block-meta");
+    expect(meta).toHaveTextContent("/Users/me/repo");
+    expect(meta).toHaveTextContent("feat/x");
+  });
+
+  it("renders only the cwd when no branch is available", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock({ cwd: "/tmp", git_branch: null })} />);
+    const meta = screen.getByTestId("block-meta");
+    expect(meta).toHaveTextContent("/tmp");
+    // The · separator only shows when both are present.
+    expect(meta.textContent).not.toContain("·");
+  });
+
+  it("omits the metadata line entirely when both are null", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock({ cwd: null, git_branch: null })} />);
+    expect(screen.queryByTestId("block-meta")).toBeNull();
   });
 });
 

@@ -32,6 +32,8 @@ export type PtyEvent =
       kind: "block_started";
       block_id: BlockId;
       command: string | null;
+      cwd: string | null;
+      git_branch: string | null;
       started_at_ms: number;
     }
   | {
@@ -46,19 +48,29 @@ export type PtyEvent =
        * not off `exit_code` — `exit_code` is `-1` as a sentinel in abort cases.
        */
       aborted: boolean;
+      /**
+       * cwd and branch the command *ended* in, reported by the shell on
+       * OSC 133 D. For `cd X && ls` this is X, not the previous prompt's
+       * directory. `null` when the shell integration didn't include them.
+       */
+      cwd: string | null;
+      git_branch: string | null;
     };
 
 /**
  * A summary of a single captured command block.
  *
  * `ended_at_ms`, `exit_code`, and `duration_ms` are null while the block is
- * still running. `command` is null when the shell did not emit it (older or
- * third-party integration). `aborted` is true when the block closed without a
- * clean OSC 133 D — either by the PTY exiting mid-block or by a second C.
+ * still running. `command`, `cwd`, and `git_branch` are null when the shell
+ * did not emit them (older or third-party integration). `aborted` is true
+ * when the block closed without a clean OSC 133 D — either by the PTY
+ * exiting mid-block or by a second C.
  */
 export interface BlockSummary {
   id: BlockId;
   command: string | null;
+  cwd: string | null;
+  git_branch: string | null;
   started_at_ms: number;
   ended_at_ms: number | null;
   exit_code: number | null;

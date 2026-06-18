@@ -17,7 +17,14 @@ export interface BlockState {
 
 export type BlockAction =
   | { type: "seed"; blocks: BlockSummary[] }
-  | { type: "started"; id: BlockId; command: string | null; started_at_ms: number }
+  | {
+      type: "started";
+      id: BlockId;
+      command: string | null;
+      cwd: string | null;
+      git_branch: string | null;
+      started_at_ms: number;
+    }
   | {
       type: "completed";
       id: BlockId;
@@ -25,6 +32,9 @@ export type BlockAction =
       ended_at_ms: number;
       duration_ms: number;
       aborted: boolean;
+      /** End-of-command cwd from OSC 133 D; overrides the running block's. */
+      cwd: string | null;
+      git_branch: string | null;
     }
   | { type: "alt_screen"; active: boolean };
 
@@ -56,6 +66,8 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
           {
             id: action.id,
             command: action.command,
+            cwd: action.cwd,
+            git_branch: action.git_branch,
             started_at_ms: action.started_at_ms,
             ended_at_ms: null,
             exit_code: null,
@@ -72,12 +84,20 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       const existing = state.blocks[index];
       // index is guaranteed valid by findIndex above; existing is always defined.
       if (existing === undefined) return state;
+      // cwd/branch on the event are authoritative — the backend already
+      // decided whether the shell's D was extended (use those values, even
+      // if a field is null meaning "explicitly no branch here") or bare
+      // (carry the start-time values forward). Don't second-guess it with
+      // a fallback or `cd /tmp` from a git repo leaves the stale branch
+      // attached.
       const updated: BlockSummary = {
         ...existing,
         ended_at_ms: action.ended_at_ms,
         exit_code: action.exit_code,
         duration_ms: action.duration_ms,
         aborted: action.aborted,
+        cwd: action.cwd,
+        git_branch: action.git_branch,
       };
       const blocks = [...state.blocks];
       blocks[index] = updated;

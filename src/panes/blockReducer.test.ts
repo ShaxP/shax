@@ -19,6 +19,8 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
   return {
     id: "block-1",
     command: null,
+    cwd: null,
+    git_branch: null,
     started_at_ms: 1000,
     ended_at_ms: null,
     exit_code: null,
@@ -67,17 +69,21 @@ describe("blockReducer / seed", () => {
 // ---------------------------------------------------------------------------
 
 describe("blockReducer / started", () => {
-  it("appends a new running block with command", () => {
+  it("appends a new running block with command, cwd, and git_branch", () => {
     const next = blockReducer(initialBlockState, {
       type: "started",
       id: "block-abc",
       command: "echo hi",
+      cwd: "/Users/me/repo",
+      git_branch: "main",
       started_at_ms: 5000,
     });
     expect(next.blocks).toHaveLength(1);
     expect(next.blocks[0]).toEqual({
       id: "block-abc",
       command: "echo hi",
+      cwd: "/Users/me/repo",
+      git_branch: "main",
       started_at_ms: 5000,
       ended_at_ms: null,
       exit_code: null,
@@ -86,14 +92,18 @@ describe("blockReducer / started", () => {
     });
   });
 
-  it("accepts a null command when integration didn't report one", () => {
+  it("accepts a null command, cwd, and git_branch when integration didn't report them", () => {
     const next = blockReducer(initialBlockState, {
       type: "started",
       id: "no-cmd",
       command: null,
+      cwd: null,
+      git_branch: null,
       started_at_ms: 1,
     });
     expect(next.blocks[0]?.command).toBeNull();
+    expect(next.blocks[0]?.cwd).toBeNull();
+    expect(next.blocks[0]?.git_branch).toBeNull();
   });
 
   it("preserves previously recorded blocks", () => {
@@ -105,6 +115,8 @@ describe("blockReducer / started", () => {
       type: "started",
       id: "second",
       command: null,
+      cwd: null,
+      git_branch: null,
       started_at_ms: 2000,
     });
     expect(next.blocks).toHaveLength(2);
@@ -115,7 +127,14 @@ describe("blockReducer / started", () => {
 
   it("does not mutate the previous state", () => {
     const prev = { ...initialBlockState };
-    blockReducer(prev, { type: "started", id: "x", command: null, started_at_ms: 0 });
+    blockReducer(prev, {
+      type: "started",
+      id: "x",
+      command: null,
+      cwd: null,
+      git_branch: null,
+      started_at_ms: 0,
+    });
     expect(prev.blocks).toHaveLength(0);
   });
 });
@@ -137,10 +156,14 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 9999,
       duration_ms: 8999,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     expect(next.blocks[0]).toEqual({
       id: "target",
       command: "ls",
+      cwd: null,
+      git_branch: null,
       started_at_ms: 1000,
       ended_at_ms: 9999,
       exit_code: 0,
@@ -164,6 +187,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 5000,
       duration_ms: 4000,
       aborted: true,
+      cwd: null,
+      git_branch: null,
     });
     const [b] = next.blocks;
     expect(b?.aborted).toBe(true);
@@ -183,6 +208,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 2000,
       duration_ms: 100,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     // Reference equality: no new state object because nothing changed.
     expect(next).toBe(state);
@@ -200,6 +227,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 3000,
       duration_ms: 2000,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     const [blockA, blockB] = next.blocks;
     expect(blockA?.exit_code).toBeNull();
@@ -220,10 +249,61 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 1,
       duration_ms: 1,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     expect(state.blocks).toBe(blocksBefore);
     const [firstBlock] = state.blocks;
     expect(firstBlock?.exit_code).toBeNull();
+  });
+
+  it("cwd/branch from the completed event override the start-time values", () => {
+    // Models `cd /target && ls` run from /start. The block opened with
+    // cwd=/start (from the previous prompt's A), but precmd's D reports
+    // the dir the command ended in (/target). The completion should
+    // update the row so the user sees /target — the dir they associate
+    // with the just-run `ls`.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "cd-block", cwd: "/start", git_branch: "main" })],
+      altScreen: false,
+    };
+    const next = blockReducer(state, {
+      type: "completed",
+      id: "cd-block",
+      exit_code: 0,
+      ended_at_ms: 2000,
+      duration_ms: 500,
+      aborted: false,
+      cwd: "/target",
+      git_branch: "feat/x",
+    });
+    expect(next.blocks[0]?.cwd).toBe("/target");
+    expect(next.blocks[0]?.git_branch).toBe("feat/x");
+  });
+
+  it("the event's cwd/branch are authoritative — null clears, no fallback", () => {
+    // Models `cd /tmp` from a git repo: the backend's D reports
+    // cwd=/tmp and (correctly) no branch. The reducer must NOT carry the
+    // previous prompt's branch over via a fallback — the user expects the
+    // row to show /tmp with no branch separator. The bare-D / start-time
+    // fallback is handled in the backend's `on_command_finished`; by the
+    // time the reducer sees a completed action, the values are final.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "cd-tmp", cwd: "/repo", git_branch: "main" })],
+      altScreen: false,
+    };
+    const next = blockReducer(state, {
+      type: "completed",
+      id: "cd-tmp",
+      exit_code: 0,
+      ended_at_ms: 1,
+      duration_ms: 1,
+      aborted: false,
+      cwd: "/tmp",
+      git_branch: null,
+    });
+    expect(next.blocks[0]?.cwd).toBe("/tmp");
+    expect(next.blocks[0]?.git_branch).toBeNull();
   });
 });
 

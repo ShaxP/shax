@@ -18,7 +18,7 @@
  * page still mounts and tests can assert on the DOM.
  */
 
-import { useEffect, useReducer, useRef, useState } from "react";
+import { startTransition, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -109,6 +109,8 @@ export function TerminalPane(): React.ReactElement {
             type: "started",
             id: event.block_id,
             command: event.command,
+            cwd: event.cwd,
+            git_branch: event.git_branch,
             started_at_ms: event.started_at_ms,
           });
           break;
@@ -121,6 +123,8 @@ export function TerminalPane(): React.ReactElement {
             ended_at_ms: event.ended_at_ms,
             duration_ms: event.duration_ms,
             aborted: event.aborted,
+            cwd: event.cwd,
+            git_branch: event.git_branch,
           });
           break;
 
@@ -133,12 +137,17 @@ export function TerminalPane(): React.ReactElement {
     void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
       ptyIdRef.current = id;
       setPtyId(id);
-      // Seed block state from any blocks that already existed before the
-      // frontend mounted (defensive; in practice the pane mounts before the
-      // first block is recorded).
+      // Seed block state from blocks already present before the frontend
+      // mounted — historical rows from the persistent store on boot, and
+      // (defensively) any in-flight blocks of this PTY. Wrapped in
+      // `startTransition` so the bounded but non-trivial render work yields
+      // to the event loop and lets xterm's scheduler keep up with the
+      // initial shell prompt and any keystrokes the user is already typing.
       void listBlocks(id).then((blocks) => {
         if (blocks.length > 0) {
-          dispatch({ type: "seed", blocks });
+          startTransition(() => {
+            dispatch({ type: "seed", blocks });
+          });
         }
       });
     });

@@ -14,9 +14,17 @@
  * path-one passthrough; path-two rendering only begins after OSC 133 D).
  *
  * The `getOutput` and `now` props let tests inject deterministic seams.
+ *
+ * Wrapped in `React.memo` so unchanged rows skip re-render when the BlockList
+ * re-renders for an unrelated event. With a couple of hundred historical
+ * blocks seeded on boot, naive re-rendering was starving the main thread
+ * enough to back up the Tauri IPC channel — output events queued behind the
+ * reconciler and xterm appeared to freeze after the initial prompt. The
+ * reducer creates a new BlockSummary object only for the slot that changed,
+ * so default shallow-compare memoization is enough.
  */
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { BlockSummary, PtyId } from "../lib/ipc";
 import { formatDuration } from "./blockFormat";
 
@@ -79,7 +87,7 @@ function useElapsedNow(running: boolean, now: () => number): number {
   return tick;
 }
 
-export function BlockRow({
+function BlockRowInner({
   pty,
   block,
   getOutput,
@@ -178,6 +186,26 @@ export function BlockRow({
           RAW
         </span>
       </div>
+      {(block.cwd !== null || block.git_branch !== null) && (
+        <div
+          data-testid="block-meta"
+          style={{
+            marginLeft: 14,
+            marginTop: 2,
+            fontSize: 11,
+            color: "#7a8290",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {block.cwd}
+          {block.cwd !== null && block.git_branch !== null && (
+            <span style={{ padding: "0 6px", color: "#525a64" }}>·</span>
+          )}
+          {block.git_branch}
+        </div>
+      )}
       {expanded && (
         <pre
           data-testid="block-output"
@@ -195,3 +223,5 @@ export function BlockRow({
     </div>
   );
 }
+
+export const BlockRow = memo(BlockRowInner);
