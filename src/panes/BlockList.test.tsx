@@ -11,6 +11,26 @@ import type { BlockSummary } from "../lib/ipc";
 import { BlockList } from "./BlockList";
 import { blockReducer, initialBlockState } from "./blockReducer";
 
+/**
+ * jsdom doesn't run layout, so `scrollHeight` is always 0 by default.
+ * Override it for the auto-scroll test so the effect's assignment is
+ * observable.
+ */
+function withFakeScrollHeight(value: number): () => void {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => value,
+  });
+  return () => {
+    if (original) {
+      Object.defineProperty(HTMLElement.prototype, "scrollHeight", original);
+    } else {
+      delete (HTMLElement.prototype as unknown as { scrollHeight?: unknown }).scrollHeight;
+    }
+  };
+}
+
 afterEach(() => cleanup());
 
 function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
@@ -34,6 +54,45 @@ describe("BlockList", () => {
     expect(screen.getByTestId("block-list")).toBeInTheDocument();
     expect(screen.getByTestId("block-list-empty")).toBeInTheDocument();
     expect(screen.getByTestId("block-list-empty")).toHaveTextContent(/Run a command/i);
+  });
+
+  it("scrolls to the bottom whenever the block count changes", () => {
+    const restore = withFakeScrollHeight(1000);
+    try {
+      const { rerender } = render(<BlockList pty="p" blocks={[]} />);
+      const list = screen.getByTestId("block-list");
+
+      // Initial mount with empty list → effect runs with scrollHeight=1000.
+      expect(list.scrollTop).toBe(1000);
+
+      // Simulate the boot-time history seed by bumping length from 0 → 3.
+      // The list should snap to the bottom again.
+      list.scrollTop = 0;
+      rerender(
+        <BlockList
+          pty="p"
+          blocks={[makeBlock({ id: "a" }), makeBlock({ id: "b" }), makeBlock({ id: "c" })]}
+        />,
+      );
+      expect(list.scrollTop).toBe(1000);
+
+      // A new live command appends a row → bottom again.
+      list.scrollTop = 0;
+      rerender(
+        <BlockList
+          pty="p"
+          blocks={[
+            makeBlock({ id: "a" }),
+            makeBlock({ id: "b" }),
+            makeBlock({ id: "c" }),
+            makeBlock({ id: "live" }),
+          ]}
+        />,
+      );
+      expect(list.scrollTop).toBe(1000);
+    } finally {
+      restore();
+    }
   });
 
   it("renders a row per block and shows the count in the header", () => {
