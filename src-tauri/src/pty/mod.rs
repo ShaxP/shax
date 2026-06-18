@@ -608,17 +608,21 @@ fn persist_new_blocks(
 
 // ── Shell builder ──────────────────────────────────────────────────────────────
 
-/// Embedded zsh integration script (bundled at compile time).
+/// Embedded shell integration scripts (bundled at compile time).
 const SHAX_ZSH: &str = include_str!("../../shell-integration/shax.zsh");
+const SHAX_BASH: &str = include_str!("../../shell-integration/shax.bash");
+const SHAX_FISH: &str = include_str!("../../shell-integration/shax.fish");
 
 /// Build the shell `CommandBuilder` from spawn options.
 ///
-/// Returns the command and, for zsh shells, a `TempDir` holding the ZDOTDIR
-/// shim.  The `TempDir` must be kept alive for the PTY's lifetime.
+/// Returns the command and, when the resolved shell is one we ship
+/// integration for, a `TempDir` holding the per-shell shim. The `TempDir`
+/// must be kept alive for the PTY's lifetime so the shell can keep
+/// reading from it.
 fn build_shell_command(
     opts: &SpawnOpts,
 ) -> Result<(CommandBuilder, Option<tempfile::TempDir>), PtyError> {
-    let shell = resolve_shell();
+    let shell = resolve_shell(opts);
     let mut cmd = CommandBuilder::new(&shell);
 
     // Inherit the parent environment so the shell starts with a sane PATH,
@@ -639,26 +643,63 @@ fn build_shell_command(
         }
     }
 
-    // Inject the zsh integration via an invisible ZDOTDIR shim.
-    let zdotdir_tmpdir = if shell_is_zsh(&shell) {
-        match create_zdotdir_shim(&mut cmd) {
+    // Dispatch on the resolved shell kind. Each integration uses a
+    // per-PTY tempdir + a shell-specific shim so the user's dotfiles are
+    // never touched. The tempdir handle is returned to the caller so it
+    // lives as long as the PTY does.
+    let integration_tmpdir = match classify_shell(&shell) {
+        ShellKind::Zsh => match create_zdotdir_shim(&mut cmd) {
             Ok(tmpdir) => Some(tmpdir),
             Err(e) => {
-                // Non-fatal: log and continue without integration.
                 tracing::warn!("zsh ZDOTDIR shim failed, OSC 133 will not fire: {e}");
                 None
             }
-        }
-    } else {
-        None
+        },
+        ShellKind::Bash => match create_bash_rcfile_shim(&mut cmd) {
+            Ok(tmpdir) => Some(tmpdir),
+            Err(e) => {
+                tracing::warn!("bash rcfile shim failed, OSC 133 will not fire: {e}");
+                None
+            }
+        },
+        ShellKind::Fish => match create_fish_xdg_shim(&mut cmd) {
+            Ok(tmpdir) => Some(tmpdir),
+            Err(e) => {
+                tracing::warn!("fish XDG_CONFIG_HOME shim failed, OSC 133 will not fire: {e}");
+                None
+            }
+        },
+        ShellKind::Other => None,
     };
 
-    Ok((cmd, zdotdir_tmpdir))
+    Ok((cmd, integration_tmpdir))
 }
 
-/// Returns `true` when the resolved shell path ends in `zsh` or equals `zsh`.
+/// Which shell family the resolved binary belongs to. Detected by basename
+/// to match common install paths (`/bin/zsh`, `/usr/local/bin/bash`,
+/// `/opt/homebrew/bin/fish`, plain `zsh`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellKind {
+    Zsh,
+    Bash,
+    Fish,
+    Other,
+}
+
+fn classify_shell(shell: &str) -> ShellKind {
+    // Strip a trailing path separator and take the final segment as basename.
+    let basename = shell.rsplit(['/', '\\']).next().unwrap_or(shell);
+    match basename {
+        "zsh" => ShellKind::Zsh,
+        "bash" => ShellKind::Bash,
+        "fish" => ShellKind::Fish,
+        _ => ShellKind::Other,
+    }
+}
+
+#[cfg(test)]
 fn shell_is_zsh(shell: &str) -> bool {
-    shell == "zsh" || shell.ends_with("/zsh") || shell.ends_with("\\zsh") // Windows
+    matches!(classify_shell(shell), ShellKind::Zsh)
 }
 
 /// Create a per-PTY temp directory containing the ZDOTDIR shim files and
@@ -729,8 +770,108 @@ fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, Pt
     Ok(tmpdir)
 }
 
-/// Resolve the shell binary: `$SHELL` first, then OS-specific fallback.
-fn resolve_shell() -> String {
+/// Create a per-PTY tempdir with `shax.bash` plus an `rcfile` that bash
+/// will source instead of `~/.bashrc`. The rcfile sources the user's
+/// real bashrc first, then our integration, so user customisations win
+/// for everything except the OSC 133 hooks we install at the end.
+///
+/// Bash is invoked as `bash --rcfile <tmpdir>/rcfile -i`; the `-i`
+/// guarantees interactive mode so the rcfile is actually read.
+fn create_bash_rcfile_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
+    use std::fs;
+
+    let tmpdir = tempfile::TempDir::new()
+        .map_err(|e| PtyError::Spawn(format!("tempdir for bash rcfile shim: {e}")))?;
+    let dir = tmpdir.path();
+
+    fs::write(dir.join("shax.bash"), SHAX_BASH)
+        .map_err(|e| PtyError::Spawn(format!("write shax.bash: {e}")))?;
+
+    // The rcfile bash sources on startup. We source `~/.bashrc` (if it
+    // exists) before our integration so the user's PROMPT_COMMAND, aliases,
+    // and DEBUG traps (if any) are in place when our integration chains
+    // onto them. `${BASH_SOURCE[0]}` and friends are intentionally not used
+    // — the path is fixed at spawn time.
+    let rcfile = "_shax_user_bashrc=\"${HOME}/.bashrc\"\n\
+                  if [ -f \"$_shax_user_bashrc\" ]; then\n  \
+                    . \"$_shax_user_bashrc\"\n\
+                  fi\n\
+                  unset _shax_user_bashrc\n\
+                  . \"$SHAX_INTEGRATION_DIR/shax.bash\"\n";
+    fs::write(dir.join("rcfile"), rcfile)
+        .map_err(|e| PtyError::Spawn(format!("write bash rcfile: {e}")))?;
+
+    let dir_str = dir
+        .to_str()
+        .ok_or_else(|| PtyError::Spawn("bash shim temp path is not valid UTF-8".into()))?;
+    cmd.env("SHAX_INTEGRATION_DIR", dir_str);
+    cmd.arg("--rcfile");
+    cmd.arg(dir.join("rcfile"));
+    cmd.arg("-i");
+
+    Ok(tmpdir)
+}
+
+/// Create a per-PTY tempdir laid out as a fish `XDG_CONFIG_HOME` (i.e. with
+/// a `fish/config.fish` inside). The config.fish sources the user's real
+/// fish config first and then our integration. The `SHAX_REAL_XDG_CONFIG_HOME`
+/// env var preserves the user's original value, falling back to `~/.config`.
+fn create_fish_xdg_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
+    use std::fs;
+
+    let tmpdir = tempfile::TempDir::new()
+        .map_err(|e| PtyError::Spawn(format!("tempdir for fish XDG shim: {e}")))?;
+    let dir = tmpdir.path();
+    let fish_dir = dir.join("fish");
+    fs::create_dir_all(&fish_dir)
+        .map_err(|e| PtyError::Spawn(format!("create fish shim dir: {e}")))?;
+
+    fs::write(fish_dir.join("shax.fish"), SHAX_FISH)
+        .map_err(|e| PtyError::Spawn(format!("write shax.fish: {e}")))?;
+
+    // The shim config: source the user's real fish config (if any) from
+    // their original XDG_CONFIG_HOME (or `~/.config`), then our integration.
+    let config = "set -l _shax_user_xdg \"$SHAX_REAL_XDG_CONFIG_HOME\"\n\
+                  if test -z \"$_shax_user_xdg\"\n  \
+                    set _shax_user_xdg \"$HOME/.config\"\n\
+                  end\n\
+                  set -l _shax_user_config \"$_shax_user_xdg/fish/config.fish\"\n\
+                  if test -f \"$_shax_user_config\"\n  \
+                    source \"$_shax_user_config\"\n\
+                  end\n\
+                  source \"$SHAX_INTEGRATION_DIR/fish/shax.fish\"\n";
+    fs::write(fish_dir.join("config.fish"), config)
+        .map_err(|e| PtyError::Spawn(format!("write fish config.fish: {e}")))?;
+
+    let dir_str = dir
+        .to_str()
+        .ok_or_else(|| PtyError::Spawn("fish shim temp path is not valid UTF-8".into()))?;
+    let real_xdg = std::env::var_os("XDG_CONFIG_HOME");
+    if let Some(ref real) = real_xdg {
+        cmd.env("SHAX_REAL_XDG_CONFIG_HOME", real);
+    }
+    // SHAX_INTEGRATION_DIR points at the tempdir root; the config.fish
+    // sources `$SHAX_INTEGRATION_DIR/fish/shax.fish`. Keep them on the
+    // same key as zsh/bash for symmetry.
+    cmd.env("SHAX_INTEGRATION_DIR", dir_str);
+    cmd.env("XDG_CONFIG_HOME", dir_str);
+
+    Ok(tmpdir)
+}
+
+/// Resolve the shell binary. Precedence:
+/// 1. `SHELL` in the caller-supplied `opts.env` (lets tests pick a shell
+///    without mutating process-global env).
+/// 2. The process's own `$SHELL` env var.
+/// 3. An OS-specific fallback.
+fn resolve_shell(opts: &SpawnOpts) -> String {
+    if let Some(env) = &opts.env {
+        if let Some(shell) = env.get("SHELL") {
+            if !shell.is_empty() {
+                return shell.clone();
+            }
+        }
+    }
     if let Ok(shell) = std::env::var("SHELL") {
         if !shell.is_empty() {
             return shell;
@@ -899,6 +1040,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_shell_recognises_zsh_bash_fish() {
+        assert_eq!(classify_shell("zsh"), ShellKind::Zsh);
+        assert_eq!(classify_shell("/bin/zsh"), ShellKind::Zsh);
+        assert_eq!(classify_shell("/usr/local/bin/zsh"), ShellKind::Zsh);
+        assert_eq!(classify_shell("bash"), ShellKind::Bash);
+        assert_eq!(classify_shell("/bin/bash"), ShellKind::Bash);
+        assert_eq!(classify_shell("/opt/homebrew/bin/bash"), ShellKind::Bash);
+        assert_eq!(classify_shell("fish"), ShellKind::Fish);
+        assert_eq!(classify_shell("/usr/local/bin/fish"), ShellKind::Fish);
+        assert_eq!(classify_shell("/opt/homebrew/bin/fish"), ShellKind::Fish);
+        assert_eq!(classify_shell("/bin/sh"), ShellKind::Other);
+        assert_eq!(classify_shell("/usr/bin/dash"), ShellKind::Other);
+    }
+
+    /// Back-compat alias for the helper used by the public test below;
+    /// kept narrow so the rest of the codebase has one entry point.
+    #[test]
     fn shell_is_zsh_detection() {
         assert!(shell_is_zsh("zsh"));
         assert!(shell_is_zsh("/bin/zsh"));
@@ -918,6 +1076,320 @@ mod tests {
                 "expected shim file not found: {name}"
             );
         }
+    }
+
+    #[test]
+    fn bash_rcfile_shim_creates_expected_files() {
+        let mut dummy_cmd = CommandBuilder::new("bash");
+        let tmpdir = create_bash_rcfile_shim(&mut dummy_cmd).expect("shim creation should succeed");
+        let dir = tmpdir.path();
+        for name in ["rcfile", "shax.bash"] {
+            assert!(
+                dir.join(name).exists(),
+                "expected shim file not found: {name}"
+            );
+        }
+        // The rcfile must source the user's bashrc AND our integration so a
+        // user with no .bashrc still gets OSC 133, and one with an existing
+        // .bashrc keeps their customisations.
+        let rcfile = std::fs::read_to_string(dir.join("rcfile")).expect("read rcfile");
+        assert!(
+            rcfile.contains(".bashrc"),
+            "rcfile must reference ~/.bashrc, got: {rcfile}",
+        );
+        assert!(
+            rcfile.contains("shax.bash"),
+            "rcfile must source shax.bash, got: {rcfile}",
+        );
+    }
+
+    /// Best-effort lookup of a shell binary on `PATH`. Returns `None` when
+    /// the binary isn't installed, so live-shell integration tests can skip
+    /// cleanly on CI runners that don't have fish (etc.).
+    #[cfg(unix)]
+    fn shell_on_path(name: &str) -> Option<String> {
+        let output = std::process::Command::new("/usr/bin/which")
+            .arg(name)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let path = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path)
+        }
+    }
+
+    /// Spawn a real `bash -i` through the rcfile shim, run a command in a
+    /// disposable cwd, and assert that a clean BlockCompleted with cwd
+    /// from `shax.bash` arrives. This is the smallest end-to-end proof that
+    /// the integration is wired into the right place and fires for a real
+    /// user command.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_emits_block_with_cwd() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash integration test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Spawn bash inside an isolated empty HOME so the user's real
+        // ~/.bashrc doesn't perturb the test, and pin SHELL to bash so our
+        // resolver picks it.
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        while rx.try_recv().is_ok() {}
+
+        manager
+            .write(id, &B64.encode(b"true\n"))
+            .await
+            .expect("write");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got_cwd: Option<String> = None;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockCompleted {
+                    aborted: false,
+                    cwd,
+                    ..
+                })) => {
+                    got_cwd = cwd;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        assert!(
+            got_cwd.is_some(),
+            "bash integration must emit a BlockCompleted with the cwd it ran in"
+        );
+        // The cwd resolves through symlinks (e.g. /var → /private/var on
+        // macOS), so compare on the basename to keep the assertion portable.
+        let cwd = got_cwd.unwrap();
+        let basename = std::path::Path::new(&cwd)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let expected_basename = home
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        assert_eq!(
+            basename, expected_basename,
+            "bash should report the tempdir HOME as its cwd, got {cwd}",
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// `PS1` command substitutions (`$(git branch)`, `$(date)`, etc.) run
+    /// in subshells and fire the bash `DEBUG` trap. Without filtering them
+    /// out we'd emit a phantom `OSC 133 C` for each one, steal output
+    /// attribution from the real user command, and starve the UI with
+    /// re-renders. This regression test pins the PS1 expansion fix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_ignores_ps1_command_substitutions() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash PS1 substitution test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Set a PS1 that runs an external command (`true` is universal and
+        // produces no output). Without the BASH_SUBSHELL filter, this would
+        // emit a phantom OSC 133 C on every prompt redraw.
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+        env.insert("PS1".into(), "$(true)$(true)\\$ ".into());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        while rx.try_recv().is_ok() {}
+
+        manager
+            .write(id, &B64.encode(b"true\n"))
+            .await
+            .expect("write");
+
+        // Collect every BlockStarted that arrives in the next second. With
+        // the filter in place there should be exactly one — for the user's
+        // `true`. Without it, each `$(...)` in PS1 would add another.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut starts = 0usize;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockStarted { .. })) => starts += 1,
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert_eq!(
+            starts, 1,
+            "expected exactly one BlockStarted for the user's `true`; saw {starts} (PS1 \
+             $() expansions are leaking through the DEBUG-trap filter)"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// Same end-to-end proof as the bash test but for fish.
+    ///
+    /// fish 4.x sends a Primary Device Attribute query (`\e[c`) on startup
+    /// and waits up to 10 seconds for the terminal to respond. Our test PTY
+    /// has no UI on the other end, so the response never arrives and fish
+    /// stalls for the full timeout before it starts reading the user's
+    /// commands. We work around this by writing the test command upfront —
+    /// fish buffers it and processes it after init — and giving the test
+    /// a deadline long enough to absorb the DA timeout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fish_integration_emits_block_with_cwd() {
+        let Some(fish) = shell_on_path("fish") else {
+            eprintln!("skipping fish integration test: fish not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), fish.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        // Pre-write the command so fish has it queued by the time it
+        // finishes its 10s DA-query timeout and starts reading stdin.
+        manager
+            .write(id, &B64.encode(b"true\n"))
+            .await
+            .expect("write");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut got_cwd: Option<String> = None;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockCompleted {
+                    aborted: false,
+                    cwd,
+                    ..
+                })) => {
+                    got_cwd = cwd;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        assert!(
+            got_cwd.is_some(),
+            "fish integration must emit a BlockCompleted with the cwd it ran in"
+        );
+        let cwd = got_cwd.unwrap();
+        let basename = std::path::Path::new(&cwd)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let expected_basename = home
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        assert_eq!(
+            basename, expected_basename,
+            "fish should report the tempdir HOME as its cwd, got {cwd}",
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    #[test]
+    fn fish_xdg_shim_creates_expected_files() {
+        let mut dummy_cmd = CommandBuilder::new("fish");
+        let tmpdir = create_fish_xdg_shim(&mut dummy_cmd).expect("shim creation should succeed");
+        let dir = tmpdir.path();
+        let fish_dir = dir.join("fish");
+        for name in ["config.fish", "shax.fish"] {
+            assert!(
+                fish_dir.join(name).exists(),
+                "expected shim file not found: fish/{name}",
+            );
+        }
+        // The config.fish must source the user's real fish config and our
+        // integration. Source path for our integration uses the SHAX_*
+        // env var so the script doesn't bake the tempdir path.
+        let config = std::fs::read_to_string(fish_dir.join("config.fish")).expect("read config");
+        assert!(
+            config.contains("config.fish"),
+            "fish shim must reference the user's config.fish, got: {config}",
+        );
+        assert!(
+            config.contains("shax.fish"),
+            "fish shim must source shax.fish, got: {config}",
+        );
     }
 
     #[tokio::test]
