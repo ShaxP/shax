@@ -15,6 +15,7 @@
 import type { Channel } from "@tauri-apps/api/core";
 
 export type PtyId = string; // uuid serialized as string
+export type BlockId = string; // uuid serialized as string
 
 export interface SpawnOpts {
   rows: number;
@@ -25,7 +26,28 @@ export interface SpawnOpts {
 
 export type PtyEvent =
   | { kind: "output"; data: string } // base64-encoded bytes
-  | { kind: "exit"; code: number | null };
+  | { kind: "exit"; code: number | null }
+  | { kind: "alt_screen_changed"; active: boolean }
+  | { kind: "block_started"; block_id: BlockId; started_at_ms: number }
+  | {
+      kind: "block_completed";
+      block_id: BlockId;
+      exit_code: number;
+      ended_at_ms: number;
+      duration_ms: number;
+    };
+
+/**
+ * A summary of a single captured command block.
+ *
+ * `ended_at_ms` and `exit_code` are null while the block is still running.
+ */
+export interface BlockSummary {
+  id: BlockId;
+  started_at_ms: number;
+  ended_at_ms: number | null;
+  exit_code: number | null;
+}
 
 // ---------------------------------------------------------------------------
 // Base64 helpers
@@ -119,4 +141,17 @@ export async function killPty(id: PtyId): Promise<void> {
   if (!isTauriContext() || id === "non-tauri") return;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke("pty_kill", { id });
+}
+
+/**
+ * Returns all block summaries recorded for the given PTY, in chronological
+ * order. Used to seed React state when mounting a pane that may have blocks
+ * from before the frontend started listening.
+ *
+ * In non-Tauri contexts returns an empty array so callers need no special case.
+ */
+export async function listBlocks(id: PtyId): Promise<BlockSummary[]> {
+  if (!isTauriContext() || id === "non-tauri") return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BlockSummary[]>("pty_list_blocks", { id });
 }

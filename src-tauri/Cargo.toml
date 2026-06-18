@@ -31,4 +31,6 @@ uuid = { version = "1.23.3", features = ["v4", "serde"] }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 base64 = "0.22.1"
+vte = "0.15.0"
+tempfile = "3.27.0"
 

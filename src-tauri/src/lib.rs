@@ -10,7 +10,7 @@ mod vt;
 
 use std::sync::Arc;
 
-use ipc::{pty_kill, pty_resize, pty_spawn, pty_write};
+use ipc::{pty_kill, pty_list_blocks, pty_resize, pty_spawn, pty_write};
 use pty::PtyManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,7 +25,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(manager)
         .invoke_handler(tauri::generate_handler![
-            pty_spawn, pty_write, pty_resize, pty_kill,
+            pty_spawn,
+            pty_write,
+            pty_resize,
+            pty_kill,
+            pty_list_blocks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")
