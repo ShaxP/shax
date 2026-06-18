@@ -38,6 +38,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Persists window size + position to a JSON file under the app data
+        // dir so relaunches restore what the user last had. The plugin
+        // installs window-event handlers automatically; no other glue needed.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(manager)
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
