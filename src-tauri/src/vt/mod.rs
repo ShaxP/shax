@@ -35,8 +35,19 @@ pub enum VtEvent {
     /// `command` is then `None`. The command may itself contain `;`, so we
     /// re-join all trailing OSC params with `;` when reconstructing it.
     CommandStart { command: Option<String> },
-    /// `OSC 133 ; D ; <exit> ST` – command finished with exit code.
-    CommandFinished { exit_code: i32 },
+    /// `OSC 133 ; D ; <exit> [ ; key=value … ] ST` – command finished with
+    /// exit code, optionally carrying the cwd/branch the command ended in.
+    ///
+    /// Shax's zsh integration emits `cwd=<base64>` and `branch=<base64>` on
+    /// every D so the just-closed block can be tagged with the directory the
+    /// command *ended* in (rather than the directory it started in, captured
+    /// at OSC C). The two values match for non-`cd` commands; they differ
+    /// when the command itself changes directory.
+    CommandFinished {
+        exit_code: i32,
+        cwd: Option<String>,
+        git_branch: Option<String>,
+    },
 }
 
 /// One item in the VT layer's interleaved message stream.
@@ -160,7 +171,7 @@ impl vte::Perform for Performer {
         let marker = params.get(1).copied().unwrap_or_default();
         match marker {
             b"A" => {
-                let (cwd, git_branch) = parse_prompt_params(&params[2..]);
+                let (cwd, git_branch) = parse_kv_params(&params[2..]);
                 self.emit_event(VtEvent::PromptStart { cwd, git_branch });
             }
             b"B" => self.emit_event(VtEvent::PromptEnd),
@@ -174,7 +185,12 @@ impl vte::Perform for Performer {
                     .ok()
                     .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(0);
-                self.emit_event(VtEvent::CommandFinished { exit_code: code });
+                let (cwd, git_branch) = parse_kv_params(&params[3..]);
+                self.emit_event(VtEvent::CommandFinished {
+                    exit_code: code,
+                    cwd,
+                    git_branch,
+                });
             }
             _ => {}
         }
@@ -190,14 +206,14 @@ impl vte::Perform for Performer {
 }
 
 /// Parse `cwd=<base64>` and `branch=<base64>` from the trailing params of
-/// `OSC 133 ; A ; … ST`. Unrecognised keys are ignored so future additions
-/// (e.g. `host=`) don't break parsing.
+/// `OSC 133 ; A ; … ST` or `OSC 133 ; D ; <exit> ; … ST`. Unrecognised keys
+/// are ignored so future additions (e.g. `host=`) don't break parsing.
 ///
 /// The values are base64 (standard alphabet, no line breaks) so they can
 /// safely carry `;`, `=`, and unicode without colliding with the OSC param
 /// delimiter. A decode error yields `None` for that field rather than
 /// failing the whole event — the marker itself is still useful.
-fn parse_prompt_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
+fn parse_kv_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
     let mut cwd: Option<String> = None;
@@ -312,7 +328,11 @@ mod tests {
                 },
                 VtEvent::PromptEnd,
                 VtEvent::CommandStart { command: None },
-                VtEvent::CommandFinished { exit_code: 0 },
+                VtEvent::CommandFinished {
+                    exit_code: 0,
+                    cwd: None,
+                    git_branch: None,
+                },
             ]
         );
     }
@@ -404,7 +424,35 @@ mod tests {
     fn osc133_nonzero_exit() {
         let bytes = b"\x1b]133;D;127\x07";
         let events = collect_events(bytes);
-        assert_eq!(events, vec![VtEvent::CommandFinished { exit_code: 127 }]);
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandFinished {
+                exit_code: 127,
+                cwd: None,
+                git_branch: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_d_carries_cwd_and_branch() {
+        // OSC 133;D;<exit>;cwd=<b64>;branch=<b64> — Shax's zsh integration
+        // emits these so the just-closed block can be tagged with the
+        // directory the command ENDED in, not just the directory it started
+        // in. This is what makes `cd X && ls` show X.
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let cwd_b64 = B64.encode("/Users/me/source/repos/shax");
+        let branch_b64 = B64.encode("main");
+        let bytes = format!("\x1b]133;D;0;cwd={cwd_b64};branch={branch_b64}\x07");
+        let events = collect_events(bytes.as_bytes());
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandFinished {
+                exit_code: 0,
+                cwd: Some("/Users/me/source/repos/shax".into()),
+                git_branch: Some("main".into()),
+            }]
+        );
     }
 
     #[test]
@@ -471,7 +519,11 @@ mod tests {
                     command: Some("cmd".into()),
                 }),
                 VtMessage::Output(b"post".to_vec()),
-                VtMessage::Event(VtEvent::CommandFinished { exit_code: 0 }),
+                VtMessage::Event(VtEvent::CommandFinished {
+                    exit_code: 0,
+                    cwd: None,
+                    git_branch: None,
+                }),
                 VtMessage::Output(b"tail".to_vec()),
             ]
         );

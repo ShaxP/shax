@@ -156,6 +156,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 9999,
       duration_ms: 8999,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     expect(next.blocks[0]).toEqual({
       id: "target",
@@ -185,6 +187,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 5000,
       duration_ms: 4000,
       aborted: true,
+      cwd: null,
+      git_branch: null,
     });
     const [b] = next.blocks;
     expect(b?.aborted).toBe(true);
@@ -204,6 +208,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 2000,
       duration_ms: 100,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     // Reference equality: no new state object because nothing changed.
     expect(next).toBe(state);
@@ -221,6 +227,8 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 3000,
       duration_ms: 2000,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     const [blockA, blockB] = next.blocks;
     expect(blockA?.exit_code).toBeNull();
@@ -241,10 +249,58 @@ describe("blockReducer / completed", () => {
       ended_at_ms: 1,
       duration_ms: 1,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     expect(state.blocks).toBe(blocksBefore);
     const [firstBlock] = state.blocks;
     expect(firstBlock?.exit_code).toBeNull();
+  });
+
+  it("cwd/branch from the completed event override the start-time values", () => {
+    // Models `cd /target && ls` run from /start. The block opened with
+    // cwd=/start (from the previous prompt's A), but precmd's D reports
+    // the dir the command ended in (/target). The completion should
+    // update the row so the user sees /target — the dir they associate
+    // with the just-run `ls`.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "cd-block", cwd: "/start", git_branch: "main" })],
+      altScreen: false,
+    };
+    const next = blockReducer(state, {
+      type: "completed",
+      id: "cd-block",
+      exit_code: 0,
+      ended_at_ms: 2000,
+      duration_ms: 500,
+      aborted: false,
+      cwd: "/target",
+      git_branch: "feat/x",
+    });
+    expect(next.blocks[0]?.cwd).toBe("/target");
+    expect(next.blocks[0]?.git_branch).toBe("feat/x");
+  });
+
+  it("null cwd on the completed event keeps the start-time value", () => {
+    // Defensive: shells without our extended D markers still emit
+    // `OSC 133;D;<exit>`. The reducer must not blank out a cwd we already
+    // had from the C-time attachment.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "x", cwd: "/start", git_branch: "main" })],
+      altScreen: false,
+    };
+    const next = blockReducer(state, {
+      type: "completed",
+      id: "x",
+      exit_code: 0,
+      ended_at_ms: 1,
+      duration_ms: 1,
+      aborted: false,
+      cwd: null,
+      git_branch: null,
+    });
+    expect(next.blocks[0]?.cwd).toBe("/start");
+    expect(next.blocks[0]?.git_branch).toBe("main");
   });
 });
 

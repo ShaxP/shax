@@ -123,6 +123,8 @@ export function TerminalPane(): React.ReactElement {
             ended_at_ms: event.ended_at_ms,
             duration_ms: event.duration_ms,
             aborted: event.aborted,
+            cwd: event.cwd,
+            git_branch: event.git_branch,
           });
           break;
 

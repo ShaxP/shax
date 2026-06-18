@@ -85,6 +85,8 @@ describe("BlockList", () => {
       ended_at_ms: 9100,
       duration_ms: 100,
       aborted: false,
+      cwd: null,
+      git_branch: null,
     });
     expect(state2.blocks[0]).toBe(state1.blocks[0]);
     expect(state2.blocks[1]).toBe(state1.blocks[1]);

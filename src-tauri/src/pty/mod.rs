@@ -95,12 +95,19 @@ pub enum PtyEvent {
     /// `aborted` is true for both abort paths. The frontend uses it directly
     /// for the status pill — `exit_code` is `-1` in the abort cases as a
     /// sentinel and is not meant to be displayed when `aborted` is true.
+    ///
+    /// `cwd` and `git_branch` are the values the shell reported on the D
+    /// marker — the directory the command *ended* in, which is what the user
+    /// associates with the block in cases like `cd X && ls`. `None` when the
+    /// shell integration didn't include them (older or third-party).
     BlockCompleted {
         block_id: BlockId,
         exit_code: i32,
         ended_at_ms: u64,
         duration_ms: u64,
         aborted: bool,
+        cwd: Option<String>,
+        git_branch: Option<String>,
     },
 }
 

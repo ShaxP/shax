@@ -211,7 +211,11 @@ impl BlockMachine {
             }
             VtEvent::PromptEnd => vec![],
             VtEvent::CommandStart { command } => self.on_command_start(command),
-            VtEvent::CommandFinished { exit_code } => self.on_command_finished(exit_code),
+            VtEvent::CommandFinished {
+                exit_code,
+                cwd,
+                git_branch,
+            } => self.on_command_finished(exit_code, cwd, git_branch),
         }
     }
 
@@ -256,8 +260,8 @@ impl BlockMachine {
             self.records.push(BlockRecord {
                 id,
                 command: prev_cmd,
-                cwd: prev_cwd,
-                git_branch: prev_branch,
+                cwd: prev_cwd.clone(),
+                git_branch: prev_branch.clone(),
                 started_at_ms,
                 ended_at_ms: Some(now),
                 exit_code: Some(-1),
@@ -270,6 +274,8 @@ impl BlockMachine {
                 ended_at_ms: now,
                 duration_ms,
                 aborted: true,
+                cwd: prev_cwd,
+                git_branch: prev_branch,
             });
         }
 
@@ -295,23 +301,40 @@ impl BlockMachine {
         events
     }
 
-    fn on_command_finished(&mut self, exit_code: i32) -> Vec<PtyEvent> {
+    fn on_command_finished(
+        &mut self,
+        exit_code: i32,
+        end_cwd: Option<String>,
+        end_branch: Option<String>,
+    ) -> Vec<PtyEvent> {
         match std::mem::replace(&mut self.state, BlockState::Idle) {
             BlockState::Running {
                 id,
                 command,
-                cwd,
-                git_branch,
+                cwd: start_cwd,
+                git_branch: start_branch,
                 started_at_ms,
             } => {
                 let ended_at_ms = now_ms();
                 let duration_ms = ended_at_ms.saturating_sub(started_at_ms);
                 let output = std::mem::take(&mut self.current_output);
+                // Prefer the cwd/branch the shell reported on D (the directory
+                // the command *ended* in — what the user expects for
+                // `cd X && ls`). Fall back to the start-time values when the
+                // shell integration didn't report them.
+                let cwd = end_cwd.or(start_cwd);
+                let git_branch = end_branch.or(start_branch);
+                // Stash the end cwd/branch as the latest known so the NEXT
+                // block opened by C inherits them — without this the next
+                // command would still see the previous prompt's cwd from A,
+                // which for a `cd` is the pre-cd directory.
+                self.latest_cwd = cwd.clone();
+                self.latest_git_branch = git_branch.clone();
                 self.records.push(BlockRecord {
                     id,
                     command,
-                    cwd,
-                    git_branch,
+                    cwd: cwd.clone(),
+                    git_branch: git_branch.clone(),
                     started_at_ms,
                     ended_at_ms: Some(ended_at_ms),
                     exit_code: Some(exit_code),
@@ -324,10 +347,19 @@ impl BlockMachine {
                     ended_at_ms,
                     duration_ms,
                     aborted: false,
+                    cwd,
+                    git_branch,
                 }]
             }
             BlockState::Idle => {
-                // D without a preceding C — defensive ignore.
+                // D without a preceding C — defensive ignore. The D's cwd may
+                // still be informative for the next prompt; update latest.
+                if end_cwd.is_some() {
+                    self.latest_cwd = end_cwd;
+                }
+                if end_branch.is_some() {
+                    self.latest_git_branch = end_branch;
+                }
                 tracing::debug!("OSC 133 D received while Idle; ignoring");
                 vec![]
             }
@@ -359,8 +391,8 @@ impl BlockMachine {
             self.records.push(BlockRecord {
                 id,
                 command,
-                cwd,
-                git_branch,
+                cwd: cwd.clone(),
+                git_branch: git_branch.clone(),
                 started_at_ms,
                 ended_at_ms: Some(ended_at_ms),
                 exit_code: Some(-1),
@@ -373,6 +405,8 @@ impl BlockMachine {
                 ended_at_ms,
                 duration_ms,
                 aborted: true,
+                cwd,
+                git_branch,
             }];
         }
         Vec::new()
@@ -449,7 +483,11 @@ mod tests {
         // Output arrives between C and D.
         machine.push_output(b"hi\n");
 
-        all_events.extend(machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 }));
+        all_events.extend(machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        }));
 
         // Exactly two events: BlockStarted then BlockCompleted.
         let started: Vec<_> = all_events.iter().filter_map(block_started_id).collect();
@@ -495,6 +533,87 @@ mod tests {
     }
 
     #[test]
+    fn command_finished_cwd_overrides_running_cwd() {
+        // Models `cd /target && ls` run from /start:
+        //   - precmd1 reports A;cwd=/start  (block opens here)
+        //   - preexec emits C;cd /target && ls
+        //   - precmd2 reports D;0;cwd=/target  (block closes here)
+        // The closed block must show /target — the dir the command ended in —
+        // not /start, because that's the dir the user associates with `ls`.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/start".into()),
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("cd /target && ls".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: Some("/target".into()),
+            git_branch: Some("main".into()),
+        });
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].cwd.as_deref(), Some("/target"));
+        assert_eq!(summaries[0].git_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn command_finished_without_cwd_keeps_running_cwd() {
+        // A shell that emits a bare D (no extended params) — the running
+        // block's cwd carries over so we don't lose attribution.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/home/me".into()),
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("ls".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries[0].cwd.as_deref(), Some("/home/me"));
+    }
+
+    #[test]
+    fn command_finished_cwd_updates_latest_for_next_block() {
+        // After `cd /new` finishes, the NEXT command should start with
+        // cwd=/new even before the next precmd's A arrives.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/old".into()),
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("cd /new".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: Some("/new".into()),
+            git_branch: None,
+        });
+        // Next command's C — no PromptStart in between (would be unusual,
+        // but proves the latest_cwd carryover works either way).
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("pwd".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: Some("/new".into()),
+            git_branch: None,
+        });
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].cwd.as_deref(), Some("/new"));
+        assert_eq!(summaries[1].cwd.as_deref(), Some("/new"));
+    }
+
+    #[test]
     fn prompt_start_without_params_clears_stale_cwd() {
         // A bare PromptStart must overwrite any previously cached cwd/branch
         // so a fresh shell session never picks up a prior pane's metadata.
@@ -510,7 +629,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("ls".into()),
         });
-        machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
         let summaries = machine.block_summaries();
         assert_eq!(summaries[0].cwd, None);
         assert_eq!(summaries[0].git_branch, None);
@@ -521,7 +644,11 @@ mod tests {
         let mut machine = BlockMachine::new();
 
         machine.handle_vt_event(VtEvent::CommandStart { command: None });
-        let events = machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 127 });
+        let events = machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 127,
+            cwd: None,
+            git_branch: None,
+        });
 
         let (_, code) = block_completed_fields(&events[0]).unwrap();
         assert_eq!(code, 127);
@@ -625,7 +752,11 @@ mod tests {
     #[test]
     fn d_without_c_is_ignored() {
         let mut machine = BlockMachine::new();
-        let events = machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        let events = machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
         assert!(events.is_empty(), "D without C should produce no events");
         assert!(machine.block_summaries().is_empty());
     }
@@ -637,7 +768,11 @@ mod tests {
             command: Some("echo a".into()),
         });
         machine.push_output(b"alpha");
-        machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
 
         let first_id = machine.records[0].id;
 
@@ -672,7 +807,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::CommandStart { command: None });
         // tiny sleep so started/ended differ on most clocks
         std::thread::sleep(std::time::Duration::from_millis(2));
-        let events = machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        let events = machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
         let (_, _) = block_completed_fields(&events[0]).unwrap();
         let s = &machine.block_summaries()[0];
         assert!(s.duration_ms.is_some());

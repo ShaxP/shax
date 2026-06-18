@@ -48,6 +48,13 @@ export type PtyEvent =
        * not off `exit_code` — `exit_code` is `-1` as a sentinel in abort cases.
        */
       aborted: boolean;
+      /**
+       * cwd and branch the command *ended* in, reported by the shell on
+       * OSC 133 D. For `cd X && ls` this is X, not the previous prompt's
+       * directory. `null` when the shell integration didn't include them.
+       */
+      cwd: string | null;
+      git_branch: string | null;
     };
 
 /**

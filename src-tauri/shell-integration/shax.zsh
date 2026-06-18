@@ -19,8 +19,12 @@ _shax_b64() { printf '%s' "$1" | base64 | tr -d '\n' }
 # escape. For our block state machine the precise placement of B is not
 # important — only C and D are consumed.
 _shax_precmd() {
+  # Capture $? before any subsequent command can stomp on it.
   local _shax_last_exit=$?
-  _shax_osc "D;$_shax_last_exit"
+  # Capture cwd + branch first so we can attach them to BOTH the just-closed
+  # block (via OSC 133 D extended params) and the upcoming prompt (via A).
+  # Attaching to D is what lets `cd X && ls` show X — the directory the
+  # command ended in — rather than the previous prompt's directory.
   local _shax_cwd_b64
   _shax_cwd_b64="$(_shax_b64 "$PWD")"
   local _shax_branch=""
@@ -31,6 +35,8 @@ _shax_precmd() {
   fi
   local _shax_branch_b64
   _shax_branch_b64="$(_shax_b64 "$_shax_branch")"
+  printf '\033]133;D;%s;cwd=%s;branch=%s\007' \
+    "$_shax_last_exit" "$_shax_cwd_b64" "$_shax_branch_b64"
   printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
   _shax_osc "B"
 }

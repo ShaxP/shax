@@ -32,6 +32,9 @@ export type BlockAction =
       ended_at_ms: number;
       duration_ms: number;
       aborted: boolean;
+      /** End-of-command cwd from OSC 133 D; overrides the running block's. */
+      cwd: string | null;
+      git_branch: string | null;
     }
   | { type: "alt_screen"; active: boolean };
 
@@ -81,12 +84,17 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       const existing = state.blocks[index];
       // index is guaranteed valid by findIndex above; existing is always defined.
       if (existing === undefined) return state;
+      // cwd/branch from the D event overrides what was attached at C-time
+      // (the start-of-command cwd). Falls back to the existing values when
+      // the shell didn't report them — never blanks out a value we had.
       const updated: BlockSummary = {
         ...existing,
         ended_at_ms: action.ended_at_ms,
         exit_code: action.exit_code,
         duration_ms: action.duration_ms,
         aborted: action.aborted,
+        cwd: action.cwd ?? existing.cwd,
+        git_branch: action.git_branch ?? existing.git_branch,
       };
       const blocks = [...state.blocks];
       blocks[index] = updated;
