@@ -235,6 +235,7 @@ impl BlockMachine {
                 exit_code: -1,
                 ended_at_ms: now,
                 duration_ms,
+                aborted: true,
             });
         }
 
@@ -278,6 +279,7 @@ impl BlockMachine {
                     exit_code,
                     ended_at_ms,
                     duration_ms,
+                    aborted: false,
                 }]
             }
             BlockState::Idle => {
@@ -288,30 +290,44 @@ impl BlockMachine {
         }
     }
 
-    /// Called when the PTY exits without a final D.  Any running block is left
-    /// in the records list with `ended_at_ms: None`, `exit_code: None`, and
-    /// `aborted: true` so the frontend can see it was aborted.  Matches the
-    /// spec edge case: "Commands that never emit D (killed shell, crash): mark
-    /// the block aborted after the shell dies; do not leave it Running forever."
-    pub fn finalize_on_exit(&mut self) {
+    /// Called when the PTY exits without a final D.  Any running block is
+    /// finalized as aborted with `ended_at_ms = now` and `exit_code = -1`
+    /// (sentinel — the UI keys off `aborted`, not the code). Returns a
+    /// `BlockCompleted` event the caller forwards to the frontend so the row's
+    /// status pill flips from "running" to "aborted" before teardown.
+    ///
+    /// Matches the spec edge case: "Commands that never emit D (killed shell,
+    /// crash): mark the block aborted after the shell dies; do not leave it
+    /// Running forever."
+    pub fn finalize_on_exit(&mut self) -> Vec<PtyEvent> {
         if let BlockState::Running {
             id,
             command,
             started_at_ms,
         } = std::mem::replace(&mut self.state, BlockState::Idle)
         {
+            let ended_at_ms = now_ms();
+            let duration_ms = ended_at_ms.saturating_sub(started_at_ms);
             let output = std::mem::take(&mut self.current_output);
             tracing::info!(%id, "PTY exited while block was Running; marking aborted");
             self.records.push(BlockRecord {
                 id,
                 command,
                 started_at_ms,
-                ended_at_ms: None,
-                exit_code: None,
+                ended_at_ms: Some(ended_at_ms),
+                exit_code: Some(-1),
                 aborted: true,
                 output,
             });
+            return vec![PtyEvent::BlockCompleted {
+                block_id: id,
+                exit_code: -1,
+                ended_at_ms,
+                duration_ms,
+                aborted: true,
+            }];
         }
+        Vec::new()
     }
 }
 
@@ -358,6 +374,14 @@ mod tests {
         }
     }
 
+    fn block_completed_aborted(ev: &PtyEvent) -> Option<bool> {
+        if let PtyEvent::BlockCompleted { aborted, .. } = ev {
+            Some(*aborted)
+        } else {
+            None
+        }
+    }
+
     #[test]
     fn osc133_lifecycle() {
         let mut machine = BlockMachine::new();
@@ -387,6 +411,13 @@ mod tests {
         assert_eq!(completed.len(), 1, "expected one BlockCompleted");
         assert_eq!(completed[0].0, started[0], "ids must match");
         assert_eq!(completed[0].1, 0, "exit code must be 0");
+
+        // Clean completion: event carries aborted=false.
+        let completed_aborted: Vec<_> = all_events
+            .iter()
+            .filter_map(block_completed_aborted)
+            .collect();
+        assert_eq!(completed_aborted, vec![false]);
 
         // BlockStarted carries the typed command.
         let started_cmd = all_events.iter().find_map(|e| match e {
@@ -443,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn block_unfinished_on_kill() {
+    fn block_unfinished_on_kill_emits_aborted_completed() {
         let mut machine = BlockMachine::new();
 
         machine.handle_vt_event(VtEvent::CommandStart {
@@ -452,16 +483,32 @@ mod tests {
         machine.push_output(b"partial output");
 
         // PTY dies without a D.
-        machine.finalize_on_exit();
+        let events = machine.finalize_on_exit();
 
-        // The block is in the list with no exit code, no end time, and aborted.
+        // The block emits a single BlockCompleted event with aborted=true so
+        // the frontend's status pill flips before teardown.
+        assert_eq!(events.len(), 1);
+        assert_eq!(block_completed_aborted(&events[0]), Some(true));
+        let (_, code) = block_completed_fields(&events[0]).unwrap();
+        assert_eq!(code, -1, "aborted blocks emit -1 as the sentinel");
+
+        // The summary now carries the sentinel exit code and timestamps; the
+        // `aborted` flag is the truth signal for the UI.
         let summaries = machine.block_summaries();
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].exit_code, None);
-        assert_eq!(summaries[0].ended_at_ms, None);
-        assert_eq!(summaries[0].duration_ms, None);
+        assert_eq!(summaries[0].exit_code, Some(-1));
+        assert!(summaries[0].ended_at_ms.is_some());
+        assert!(summaries[0].duration_ms.is_some());
         assert!(summaries[0].aborted);
         assert_eq!(summaries[0].command.as_deref(), Some("sleep 99"));
+    }
+
+    #[test]
+    fn finalize_on_exit_idle_emits_nothing() {
+        let mut machine = BlockMachine::new();
+        let events = machine.finalize_on_exit();
+        assert!(events.is_empty());
+        assert!(machine.block_summaries().is_empty());
     }
 
     #[test]
@@ -483,6 +530,11 @@ mod tests {
         let (closed_id, closed_code) = block_completed_fields(&second_events[0]).unwrap();
         assert_eq!(closed_id, first_id);
         assert_eq!(closed_code, -1);
+        assert_eq!(
+            block_completed_aborted(&second_events[0]),
+            Some(true),
+            "double-C close must emit aborted=true so the UI flips the pill"
+        );
 
         let new_id = block_started_id(&second_events[1]).unwrap();
         assert_ne!(new_id, first_id);

@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     blocks::{BlockId, BlockMachine, BlockSummary},
     pty::error::PtyError,
-    vt::OscParser,
+    vt::{OscParser, VtMessage},
 };
 
 pub mod error;
@@ -84,12 +84,18 @@ pub enum PtyEvent {
         command: Option<String>,
         started_at_ms: u64,
     },
-    /// A command block has completed (OSC 133 D received).
+    /// A command block has completed (OSC 133 D received, or the block was
+    /// aborted because the PTY exited or a second OSC 133 C arrived first).
+    ///
+    /// `aborted` is true for both abort paths. The frontend uses it directly
+    /// for the status pill — `exit_code` is `-1` in the abort cases as a
+    /// sentinel and is not meant to be displayed when `aborted` is true.
     BlockCompleted {
         block_id: BlockId,
         exit_code: i32,
         ended_at_ms: u64,
         duration_ms: u64,
+        aborted: bool,
     },
 }
 
@@ -319,13 +325,15 @@ impl Default for PtyManager {
 /// block state machines, and forwards events to the frontend.
 ///
 /// Order per chunk:
-/// 1. Feed bytes to the VT parser (may emit state-change events synchronously).
-/// 2. Emit those state-change events on the channel.
-/// 3. Emit `PtyEvent::Output` with the raw bytes.
-///
-/// This order ensures state transitions (e.g. `BlockStarted`) arrive at the
-/// frontend just before the bytes that triggered them, which keeps the UI's
-/// mental model consistent.
+/// 1. Feed bytes to the VT parser. The parser emits an interleaved stream of
+///    `VtMessage::Output(bytes)` (plain print/execute bytes between escape
+///    sequences) and `VtMessage::Event(...)` (recognised state transitions).
+/// 2. Walk that stream in order. Plain bytes go to `push_output`, so they
+///    land in whichever block is `Running` at that exact moment; events go
+///    through `handle_vt_event`, which may open or close a block before the
+///    next chunk of bytes is pushed. This is what lets us correctly attribute
+///    output when an `OSC 133 C` and command output arrive in the same chunk.
+/// 3. Forward the raw chunk to xterm.js unchanged (fidelity contract).
 fn spawn_reader_task(
     id: PtyId,
     mut reader: Box<dyn std::io::Read + Send>,
@@ -343,33 +351,43 @@ fn spawn_reader_task(
         // The VT parser and block machine live entirely inside this thread;
         // they are never moved or accessed from outside.
         let mut machine = BlockMachine::new();
-        let mut vt_parser = OscParser::new(move |vt_event| {
-            // This closure is called synchronously inside `vt_parser.advance()`.
-            // We push the VT event onto a thread-local queue so the reader loop
-            // can emit the channel events in the right order.
-            VT_EVENT_QUEUE.with(|q| q.borrow_mut().push(vt_event));
+        let mut vt_parser = OscParser::new(move |msg| {
+            // Synchronous callback inside `vt_parser.advance()`; push the
+            // message onto a thread-local queue so the loop below can drive
+            // the block machine without re-entering the parser.
+            VT_MSG_QUEUE.with(|q| q.borrow_mut().push(msg));
         });
 
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    // 1. Run through VT parser; events land in the thread-local queue.
                     vt_parser.advance(&buf[..n]);
 
-                    // 2. Drain queued VT events through the block machine and emit.
-                    let vt_events: Vec<_> =
-                        VT_EVENT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+                    let messages: Vec<_> =
+                        VT_MSG_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
 
-                    machine.push_output(&buf[..n]);
-
-                    for vt_ev in vt_events {
-                        let pty_events = machine.handle_vt_event(vt_ev);
-                        for ev in pty_events {
-                            if on_event.send(ev).is_err() {
-                                return;
+                    let mut send_failed = false;
+                    for msg in messages {
+                        match msg {
+                            VtMessage::Output(bytes) => {
+                                machine.push_output(&bytes);
+                            }
+                            VtMessage::Event(ev) => {
+                                for pty_ev in machine.handle_vt_event(ev) {
+                                    if on_event.send(pty_ev).is_err() {
+                                        send_failed = true;
+                                        break;
+                                    }
+                                }
+                                if send_failed {
+                                    break;
+                                }
                             }
                         }
+                    }
+                    if send_failed {
+                        return;
                     }
 
                     // Sync block summaries and drain completed-block output bytes
@@ -380,7 +398,7 @@ fn spawn_reader_task(
                         shared.summaries = machine.block_summaries();
                     });
 
-                    // 3. Forward raw bytes to xterm.js (fidelity contract).
+                    // Forward raw bytes to xterm.js (fidelity contract).
                     let encoded = B64.encode(&buf[..n]);
                     if on_event.send(PtyEvent::Output { data: encoded }).is_err() {
                         break;
@@ -393,8 +411,14 @@ fn spawn_reader_task(
             }
         }
 
-        // PTY exited; finalize any running block as aborted.
-        machine.finalize_on_exit();
+        // PTY exited; finalize any running block as aborted and forward the
+        // resulting BlockCompleted event so the frontend's row flips before
+        // the exit event arrives.
+        for ev in machine.finalize_on_exit() {
+            if on_event.send(ev).is_err() {
+                break;
+            }
+        }
         rt.block_on(async {
             let mut shared = block_shared.lock().await;
             machine.collect_completed_output(&mut shared.outputs);
@@ -421,10 +445,10 @@ fn spawn_reader_task(
     });
 }
 
-// Thread-local queue so the VT parser closure can hand events back to the
-// reader loop without needing `Send`.
+// Thread-local queue so the VT parser closure can hand the interleaved
+// message stream back to the reader loop without needing `Send`.
 std::thread_local! {
-    static VT_EVENT_QUEUE: std::cell::RefCell<Vec<crate::vt::VtEvent>> =
+    static VT_MSG_QUEUE: std::cell::RefCell<Vec<crate::vt::VtMessage>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -759,14 +783,19 @@ mod tests {
         assert!(bytes.is_empty());
     }
 
-    /// Drive a real PTY-backed shell with raw OSC 133 escapes via `printf`,
-    /// then assert that `get_block_output` returns the bytes between C and D.
+    /// Drive a real PTY-backed shell with raw OSC 133 escapes via `printf`
+    /// and assert the captured output of the *cleanly closed* inner block
+    /// contains the body bytes.
     ///
-    /// This bypasses Shax's zsh shell-integration so the test is portable to
-    /// any unix runner regardless of which shell is `$SHELL`.
+    /// Bypasses Shax's zsh shell-integration so the test is portable across
+    /// unix runners regardless of `$SHELL`. The key behaviour under test:
+    /// even when the OSC 133 C, the body, and the OSC 133 D all arrive in
+    /// the same `read()` chunk, the interleaved VtMessage stream attributes
+    /// the body bytes to the block opened by that C — which is exactly the
+    /// case real shells produce when a command emits short output.
     #[cfg(unix)]
     #[tokio::test]
-    async fn osc133_round_trip_through_pty() {
+    async fn osc133_round_trip_through_pty_captures_body_in_clean_block() {
         let manager = Arc::new(PtyManager::new());
         set_global_manager(Arc::clone(&manager));
 
@@ -785,19 +814,26 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         while rx.try_recv().is_ok() {}
 
-        // Emit OSC 133 ; C ; cmd, then body bytes, then OSC 133 ; D ; 0.
-        // `printf` is universally available; the shell forwards these bytes
-        // unchanged through the PTY so the VT parser sees them.
-        let line = b"printf '\\033]133;C;hello\\007BODYMARKER\\n\\033]133;D;0\\007'\n";
+        // The shell's preexec (under zsh integration) emits its own OSC C
+        // for the typed printf command; then printf emits a complete C..D
+        // cycle of its own. Double-C closes the preexec block as aborted,
+        // and the inner C opens the block that the body bytes belong to,
+        // which is closed cleanly by the inner D.
+        let line = b"printf '\\033]133;C;inner\\007BODYMARKER\\n\\033]133;D;0\\007'\n";
         manager.write(id, &B64.encode(line)).await.expect("write");
 
-        // Wait for a BlockCompleted event identifying the just-finished block.
+        // Wait for the first non-aborted BlockCompleted — that's the inner
+        // block that carries the body bytes.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut completed_id: Option<BlockId> = None;
+        let mut clean_block: Option<BlockId> = None;
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Some(PtyEvent::BlockCompleted { block_id, .. })) => {
-                    completed_id = Some(block_id);
+                Ok(Some(PtyEvent::BlockCompleted {
+                    block_id,
+                    aborted: false,
+                    ..
+                })) => {
+                    clean_block = Some(block_id);
                     break;
                 }
                 Ok(Some(_)) => {}
@@ -806,7 +842,7 @@ mod tests {
             }
         }
 
-        let block_id = completed_id.expect("expected a BlockCompleted event");
+        let block_id = clean_block.expect("expected a clean BlockCompleted event");
 
         // Give the reader thread a moment to drain output into shared state.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -815,7 +851,7 @@ mod tests {
         let s = String::from_utf8_lossy(&bytes);
         assert!(
             s.contains("BODYMARKER"),
-            "expected captured output to contain BODYMARKER, got {s:?}"
+            "expected captured output of the clean block to contain BODYMARKER, got {s:?}"
         );
 
         manager.kill(id).await.expect("kill");

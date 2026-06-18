@@ -125,7 +125,7 @@ describe("blockReducer / started", () => {
 // ---------------------------------------------------------------------------
 
 describe("blockReducer / completed", () => {
-  it("fills ended_at_ms, exit_code, and duration_ms on the matching block", () => {
+  it("fills ended_at_ms, exit_code, duration_ms, and aborted on the matching block", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "target", command: "ls" })],
       altScreen: false,
@@ -136,6 +136,7 @@ describe("blockReducer / completed", () => {
       exit_code: 0,
       ended_at_ms: 9999,
       duration_ms: 8999,
+      aborted: false,
     });
     expect(next.blocks[0]).toEqual({
       id: "target",
@@ -146,6 +147,28 @@ describe("blockReducer / completed", () => {
       duration_ms: 8999,
       aborted: false,
     });
+  });
+
+  it("flips aborted to true when the event carries aborted=true", () => {
+    // Drives the abort paths end-to-end: shell-died-mid-block (finalize_on_exit
+    // on the backend) and double-C both emit BlockCompleted{aborted: true},
+    // and the reducer must surface that on the existing block.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "running" })],
+      altScreen: false,
+    };
+    const next = blockReducer(state, {
+      type: "completed",
+      id: "running",
+      exit_code: -1,
+      ended_at_ms: 5000,
+      duration_ms: 4000,
+      aborted: true,
+    });
+    const [b] = next.blocks;
+    expect(b?.aborted).toBe(true);
+    expect(b?.exit_code).toBe(-1);
+    expect(b?.ended_at_ms).toBe(5000);
   });
 
   it("is a no-op when the block id is not found", () => {
@@ -159,6 +182,7 @@ describe("blockReducer / completed", () => {
       exit_code: 1,
       ended_at_ms: 2000,
       duration_ms: 100,
+      aborted: false,
     });
     // Reference equality: no new state object because nothing changed.
     expect(next).toBe(state);
@@ -175,6 +199,7 @@ describe("blockReducer / completed", () => {
       exit_code: 42,
       ended_at_ms: 3000,
       duration_ms: 2000,
+      aborted: false,
     });
     const [blockA, blockB] = next.blocks;
     expect(blockA?.exit_code).toBeNull();
@@ -194,6 +219,7 @@ describe("blockReducer / completed", () => {
       exit_code: 0,
       ended_at_ms: 1,
       duration_ms: 1,
+      aborted: false,
     });
     expect(state.blocks).toBe(blocksBefore);
     const [firstBlock] = state.blocks;

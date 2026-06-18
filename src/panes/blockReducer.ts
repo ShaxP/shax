@@ -24,6 +24,7 @@ export type BlockAction =
       exit_code: number;
       ended_at_ms: number;
       duration_ms: number;
+      aborted: boolean;
     }
   | { type: "alt_screen"; active: boolean };
 
@@ -37,9 +38,9 @@ export const initialBlockState: BlockState = {
  *
  * - `seed`: replaces the entire block list (used on mount).
  * - `started`: appends a new running block.
- * - `completed`: fills `ended_at_ms`, `exit_code`, and `duration_ms` on the
- *   matching block; no-ops if the block is not found (event arrived before
- *   frontend mounted).
+ * - `completed`: fills `ended_at_ms`, `exit_code`, `duration_ms`, and `aborted`
+ *   on the matching block; no-ops if the block is not found (event arrived
+ *   before frontend mounted).
  * - `alt_screen`: updates the alternate-screen flag.
  */
 export function blockReducer(state: BlockState, action: BlockAction): BlockState {
@@ -76,6 +77,7 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
         ended_at_ms: action.ended_at_ms,
         exit_code: action.exit_code,
         duration_ms: action.duration_ms,
+        aborted: action.aborted,
       };
       const blocks = [...state.blocks];
       blocks[index] = updated;

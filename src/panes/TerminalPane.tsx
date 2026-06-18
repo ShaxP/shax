@@ -120,6 +120,7 @@ export function TerminalPane(): React.ReactElement {
             exit_code: event.exit_code,
             ended_at_ms: event.ended_at_ms,
             duration_ms: event.duration_ms,
+            aborted: event.aborted,
           });
           break;
 

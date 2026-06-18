@@ -40,6 +40,12 @@ export type PtyEvent =
       exit_code: number;
       ended_at_ms: number;
       duration_ms: number;
+      /**
+       * True for both abort paths (PTY exited mid-block, or a second OSC 133 C
+       * arrived first). The UI keys the "aborted" status pill off this flag,
+       * not off `exit_code` — `exit_code` is `-1` as a sentinel in abort cases.
+       */
+      aborted: boolean;
     };
 
 /**
