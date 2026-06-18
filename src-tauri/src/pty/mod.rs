@@ -223,11 +223,18 @@ impl PtyManager {
 
         // Create a per-pane block shared state for the reader thread, seeded
         // with the most recent historical blocks so the BlockList shows the
-        // user's previous session immediately on boot.
+        // user's previous session immediately on boot. Their ids are also
+        // pre-loaded into the reader's `persisted` set further down so the
+        // first VT round doesn't try to re-UPSERT them (and clobber their
+        // stored output bytes with the empty live cache).
         let mut shared = BlockShared::default();
+        let mut seeded_ids: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
         if let Some(store) = &self.store {
             match store.load_recent(HISTORY_SEED_LIMIT) {
-                Ok(history) => shared.summaries = history,
+                Ok(history) => {
+                    seeded_ids = history.iter().map(|s| s.id).collect();
+                    shared.summaries = history;
+                }
                 Err(e) => tracing::warn!("failed to load block history: {e}"),
             }
         }
@@ -253,6 +260,7 @@ impl PtyManager {
             on_event,
             block_shared,
             self.store.clone(),
+            seeded_ids,
         );
 
         tracing::info!(%id, rows = opts.rows, cols = opts.cols, "PTY spawned");
@@ -398,6 +406,7 @@ fn spawn_reader_task(
     on_event: Channel<PtyEvent>,
     block_shared: Arc<Mutex<BlockShared>>,
     store: Option<Arc<Store>>,
+    seeded_persisted: std::collections::HashSet<BlockId>,
 ) {
     let rt = tokio::runtime::Handle::current();
 
@@ -406,11 +415,13 @@ fn spawn_reader_task(
 
         let mut buf = [0u8; 4096];
 
-        // Ids that have already been written to the store. Lets the persist
-        // step idempotently inspect every summary each VT round without
-        // double-writing — keeps the SQL traffic bounded by the number of
-        // newly-completed blocks.
-        let mut persisted: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
+        // Ids that have already been written to the store. Pre-seeded with
+        // the historical block ids loaded into the BlockList on spawn so the
+        // first VT round doesn't re-UPSERT those rows — which would also
+        // clobber their stored output bytes with the empty live cache and
+        // overwrite their original `pane_id` with this session's. From there
+        // on, new completions are added as they're persisted.
+        let mut persisted: std::collections::HashSet<BlockId> = seeded_persisted;
 
         // The VT parser and block machine live entirely inside this thread;
         // they are never moved or accessed from outside.
@@ -917,6 +928,68 @@ mod tests {
         let unknown_block = BlockId(Uuid::new_v4());
         let bytes = manager.get_block_output(unknown_pty, unknown_block).await;
         assert!(bytes.is_empty());
+    }
+
+    /// The first VT round of a freshly spawned pane must not re-UPSERT the
+    /// historical blocks that were just loaded into the BlockList — doing
+    /// so would clobber their stored output bytes (the live cache is empty
+    /// at that point) and overwrite their original `pane_id` with the new
+    /// session's id. The seeded `persisted` set is what prevents that.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_preserves_historical_block_output_on_first_round() {
+        use crate::store::PersistedBlock;
+
+        let store = Arc::new(Store::open_in_memory().expect("open store"));
+        // Pre-populate a historical block with real output bytes and a
+        // specific pane_id from an "earlier session".
+        let earlier_pane = PtyId::new();
+        let historical = PersistedBlock {
+            id: BlockId(Uuid::new_v4()),
+            pane_id: earlier_pane,
+            command: Some("ls".into()),
+            cwd: Some("/Users/me".into()),
+            git_branch: Some("main".into()),
+            started_at_ms: 1000,
+            ended_at_ms: Some(1050),
+            exit_code: Some(0),
+            duration_ms: Some(50),
+            aborted: false,
+            output: b"a.txt b.txt".to_vec(),
+        };
+        store.insert_block(&historical).expect("seed historical");
+
+        let manager = Arc::new(PtyManager::with_store(Arc::clone(&store)));
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, _rx) = make_test_channel();
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: None,
+                    env: None,
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        // Drive a short delay so the reader thread has time to process the
+        // shell's first prompt chunk (which is what would have triggered the
+        // bad re-UPSERT prior to this fix).
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The stored output must still be the historical bytes — not empty.
+        let bytes = store.load_output(historical.id).expect("load_output");
+        assert_eq!(
+            bytes.as_deref(),
+            Some(&b"a.txt b.txt"[..]),
+            "historical output must not be clobbered by an empty re-UPSERT on first VT round",
+        );
+
+        manager.kill(id).await.expect("kill");
     }
 
     /// New pane spawns seed `BlockShared.summaries` with the most recent
