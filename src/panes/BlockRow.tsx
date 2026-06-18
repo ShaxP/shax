@@ -178,6 +178,26 @@ export function BlockRow({
           RAW
         </span>
       </div>
+      {(block.cwd !== null || block.git_branch !== null) && (
+        <div
+          data-testid="block-meta"
+          style={{
+            marginLeft: 14,
+            marginTop: 2,
+            fontSize: 11,
+            color: "#7a8290",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {block.cwd}
+          {block.cwd !== null && block.git_branch !== null && (
+            <span style={{ padding: "0 6px", color: "#525a64" }}>·</span>
+          )}
+          {block.git_branch}
+        </div>
+      )}
       {expanded && (
         <pre
           data-testid="block-output"

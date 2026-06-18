@@ -5,7 +5,15 @@ SHAX_SHELL_INTEGRATION_LOADED=1
 
 _shax_osc() { printf '\033]133;%s\007' "$1" }
 
-# Emit D (previous exit), A (prompt start), B (command input start) in precmd.
+# Base64-encode an arbitrary string for safe transport as an OSC 133;A param.
+# Values may contain `;`, `=`, or non-ASCII — we don't want the receiver to
+# split them — so we always encode. `tr -d '\n'` strips the wrap that some
+# `base64` builds insert.
+_shax_b64() { printf '%s' "$1" | base64 | tr -d '\n' }
+
+# Emit D (previous exit), A (prompt start with cwd + branch), B (command
+# input start) in precmd.
+#
 # We emit B here (not via a PS1 append) because themes like oh-my-zsh and
 # powerlevel10k rebuild PROMPT on every precmd, which would drop a PS1-appended
 # escape. For our block state machine the precise placement of B is not
@@ -13,7 +21,17 @@ _shax_osc() { printf '\033]133;%s\007' "$1" }
 _shax_precmd() {
   local _shax_last_exit=$?
   _shax_osc "D;$_shax_last_exit"
-  _shax_osc "A"
+  local _shax_cwd_b64
+  _shax_cwd_b64="$(_shax_b64 "$PWD")"
+  local _shax_branch=""
+  # `command git` skips any user alias; `2>/dev/null` swallows the "not a git
+  # repo" error. Empty string when not in a repo or git is missing.
+  if command -v git >/dev/null 2>&1; then
+    _shax_branch="$(command git symbolic-ref --short HEAD 2>/dev/null)"
+  fi
+  local _shax_branch_b64
+  _shax_branch_b64="$(_shax_b64 "$_shax_branch")"
+  printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
   _shax_osc "B"
 }
 

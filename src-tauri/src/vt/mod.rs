@@ -17,8 +17,16 @@ pub enum VtEvent {
     AltScreenEntered,
     /// `ESC [ ? 1049 l` – the program has left the alternate screen buffer.
     AltScreenLeft,
-    /// `OSC 133 ; A ST` – prompt start.
-    PromptStart,
+    /// `OSC 133 ; A [ ; key=value … ] ST` – prompt start.
+    ///
+    /// Shax's zsh integration carries `cwd=<base64>` and `branch=<base64>`
+    /// as trailing key/value params on the A marker; the values are
+    /// base64-encoded so they may safely contain `;` and `=`. Older or
+    /// third-party integrations emit a bare `A` and both fields are `None`.
+    PromptStart {
+        cwd: Option<String>,
+        git_branch: Option<String>,
+    },
     /// `OSC 133 ; B ST` – prompt end (command input begins).
     PromptEnd,
     /// `OSC 133 ; C [ ; <cmd> ] ST` – command output begins (preexec).
@@ -151,7 +159,10 @@ impl vte::Perform for Performer {
         }
         let marker = params.get(1).copied().unwrap_or_default();
         match marker {
-            b"A" => self.emit_event(VtEvent::PromptStart),
+            b"A" => {
+                let (cwd, git_branch) = parse_prompt_params(&params[2..]);
+                self.emit_event(VtEvent::PromptStart { cwd, git_branch });
+            }
             b"B" => self.emit_event(VtEvent::PromptEnd),
             b"C" => {
                 let command = parse_command_param(&params[2..]);
@@ -176,6 +187,45 @@ impl vte::Perform for Performer {
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+}
+
+/// Parse `cwd=<base64>` and `branch=<base64>` from the trailing params of
+/// `OSC 133 ; A ; … ST`. Unrecognised keys are ignored so future additions
+/// (e.g. `host=`) don't break parsing.
+///
+/// The values are base64 (standard alphabet, no line breaks) so they can
+/// safely carry `;`, `=`, and unicode without colliding with the OSC param
+/// delimiter. A decode error yields `None` for that field rather than
+/// failing the whole event — the marker itself is still useful.
+fn parse_prompt_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    let mut cwd: Option<String> = None;
+    let mut branch: Option<String> = None;
+    for raw in tail {
+        let Ok(s) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        let Some((key, value)) = s.split_once('=') else {
+            continue;
+        };
+        let decoded = match B64.decode(value.as_bytes()) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(decoded) => decoded,
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+        if decoded.is_empty() {
+            continue;
+        }
+        match key {
+            "cwd" => cwd = Some(decoded),
+            "branch" => branch = Some(decoded),
+            _ => {}
+        }
+    }
+    (cwd, branch)
 }
 
 /// Reassemble the command string that lives in OSC 133;C;<cmd...> params.
@@ -256,11 +306,59 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                VtEvent::PromptStart,
+                VtEvent::PromptStart {
+                    cwd: None,
+                    git_branch: None,
+                },
                 VtEvent::PromptEnd,
                 VtEvent::CommandStart { command: None },
                 VtEvent::CommandFinished { exit_code: 0 },
             ]
+        );
+    }
+
+    #[test]
+    fn osc133_a_carries_cwd_and_branch_base64() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let cwd_b64 = B64.encode("/Users/me/project");
+        let branch_b64 = B64.encode("feat/x");
+        let bytes = format!("\x1b]133;A;cwd={cwd_b64};branch={branch_b64}\x07");
+        let events = collect_events(bytes.as_bytes());
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: Some("/Users/me/project".into()),
+                git_branch: Some("feat/x".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_a_tolerates_only_cwd() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let cwd_b64 = B64.encode("/tmp");
+        let bytes = format!("\x1b]133;A;cwd={cwd_b64}\x07");
+        let events = collect_events(bytes.as_bytes());
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: Some("/tmp".into()),
+                git_branch: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_a_ignores_unknown_keys_and_bad_base64() {
+        // Unknown `host=` is ignored; an empty branch value yields None.
+        let bytes = b"\x1b]133;A;host=not-encoded;branch=\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: None,
+                git_branch: None,
+            }]
         );
     }
 

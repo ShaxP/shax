@@ -16,6 +16,8 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
   return {
     id: "block-1",
     command: "ls",
+    cwd: null,
+    git_branch: null,
     started_at_ms: 1,
     ended_at_ms: 2,
     exit_code: 0,

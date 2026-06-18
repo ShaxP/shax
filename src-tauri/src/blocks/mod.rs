@@ -35,7 +35,7 @@ use crate::vt::VtEvent;
 /// Cap captured output at 1 MiB per block while everything lives in RAM.
 /// M4 will replace this with a head+tail + spill-to-disk strategy per
 /// `specs/05-search-and-data-model.md`.
-const OUTPUT_CAP_BYTES: usize = 1024 * 1024;
+pub const OUTPUT_CAP_BYTES: usize = 1024 * 1024;
 
 // ── BlockId ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,12 @@ pub struct BlockId(pub Uuid);
 impl BlockId {
     fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    /// Parse a `BlockId` from its `Display` form (a UUID string).
+    /// Used by the SQLite store when loading rows.
+    pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+        Uuid::parse_str(s).map(Self)
     }
 }
 
@@ -61,13 +67,18 @@ impl std::fmt::Display for BlockId {
 /// A lightweight snapshot of a block, used by `pty_list_blocks`.
 ///
 /// `command` is `None` when the shell did not emit it (older or third-party
-/// integration). `duration_ms` is `Some` iff `ended_at_ms` is `Some`. `aborted`
-/// is `true` when the block was closed without a clean OSC 133 D — either by
-/// the PTY exiting mid-block or by a second OSC 133 C arriving first.
+/// integration). `cwd` and `git_branch` are also `None` when the shell did
+/// not report them via the OSC 133;A params; for Shax's zsh integration they
+/// are populated on every prompt. `duration_ms` is `Some` iff `ended_at_ms`
+/// is `Some`. `aborted` is `true` when the block was closed without a clean
+/// OSC 133 D — either by the PTY exiting mid-block or by a second
+/// OSC 133 C arriving first.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BlockSummary {
     pub id: BlockId,
     pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
     pub exit_code: Option<i32>,
@@ -84,6 +95,8 @@ pub struct BlockSummary {
 struct BlockRecord {
     id: BlockId,
     command: Option<String>,
+    cwd: Option<String>,
+    git_branch: Option<String>,
     started_at_ms: u64,
     ended_at_ms: Option<u64>,
     exit_code: Option<i32>,
@@ -100,6 +113,8 @@ impl BlockRecord {
         BlockSummary {
             id: self.id,
             command: self.command.clone(),
+            cwd: self.cwd.clone(),
+            git_branch: self.git_branch.clone(),
             started_at_ms: self.started_at_ms,
             ended_at_ms: self.ended_at_ms,
             exit_code: self.exit_code,
@@ -118,6 +133,8 @@ enum BlockState {
     Running {
         id: BlockId,
         command: Option<String>,
+        cwd: Option<String>,
+        git_branch: Option<String>,
         started_at_ms: u64,
     },
 }
@@ -131,6 +148,13 @@ pub struct BlockMachine {
     records: Vec<BlockRecord>,
     /// Raw bytes accumulated since the last OSC 133 C.
     current_output: Vec<u8>,
+    /// Most recent cwd reported on OSC 133;A (precmd). Attached to the next
+    /// block opened by OSC 133;C (preexec). `None` until the integration
+    /// reports one — older or third-party integrations may not.
+    latest_cwd: Option<String>,
+    /// Most recent git branch reported on OSC 133;A. Same semantics as
+    /// `latest_cwd`.
+    latest_git_branch: Option<String>,
 }
 
 impl BlockMachine {
@@ -141,6 +165,8 @@ impl BlockMachine {
             alt_screen: false,
             records: Vec::new(),
             current_output: Vec::new(),
+            latest_cwd: None,
+            latest_git_branch: None,
         }
     }
 
@@ -175,11 +201,15 @@ impl BlockMachine {
                 self.alt_screen = false;
                 vec![PtyEvent::AltScreenChanged { active: false }]
             }
-            VtEvent::PromptStart | VtEvent::PromptEnd => {
-                // A and B markers are captured but no frontend event is emitted in
-                // slice 2 (they will carry cwd/argv in later slices).
+            VtEvent::PromptStart { cwd, git_branch } => {
+                // Stash the latest values so the next OSC 133 C can attach them
+                // to its block. A bare `A` clears any stale prior values so we
+                // never carry one shell's cwd into another shell's block.
+                self.latest_cwd = cwd;
+                self.latest_git_branch = git_branch;
                 vec![]
             }
+            VtEvent::PromptEnd => vec![],
             VtEvent::CommandStart { command } => self.on_command_start(command),
             VtEvent::CommandFinished { exit_code } => self.on_command_finished(exit_code),
         }
@@ -214,6 +244,8 @@ impl BlockMachine {
         if let BlockState::Running {
             id,
             command: prev_cmd,
+            cwd: prev_cwd,
+            git_branch: prev_branch,
             started_at_ms,
         } = std::mem::replace(&mut self.state, BlockState::Idle)
         {
@@ -224,6 +256,8 @@ impl BlockMachine {
             self.records.push(BlockRecord {
                 id,
                 command: prev_cmd,
+                cwd: prev_cwd,
+                git_branch: prev_branch,
                 started_at_ms,
                 ended_at_ms: Some(now),
                 exit_code: Some(-1),
@@ -241,15 +275,21 @@ impl BlockMachine {
 
         let id = BlockId::new();
         let started_at_ms = now_ms();
+        let cwd = self.latest_cwd.clone();
+        let git_branch = self.latest_git_branch.clone();
         self.state = BlockState::Running {
             id,
             command: command.clone(),
+            cwd: cwd.clone(),
+            git_branch: git_branch.clone(),
             started_at_ms,
         };
         self.current_output.clear();
         events.push(PtyEvent::BlockStarted {
             block_id: id,
             command,
+            cwd,
+            git_branch,
             started_at_ms,
         });
         events
@@ -260,6 +300,8 @@ impl BlockMachine {
             BlockState::Running {
                 id,
                 command,
+                cwd,
+                git_branch,
                 started_at_ms,
             } => {
                 let ended_at_ms = now_ms();
@@ -268,6 +310,8 @@ impl BlockMachine {
                 self.records.push(BlockRecord {
                     id,
                     command,
+                    cwd,
+                    git_branch,
                     started_at_ms,
                     ended_at_ms: Some(ended_at_ms),
                     exit_code: Some(exit_code),
@@ -303,6 +347,8 @@ impl BlockMachine {
         if let BlockState::Running {
             id,
             command,
+            cwd,
+            git_branch,
             started_at_ms,
         } = std::mem::replace(&mut self.state, BlockState::Idle)
         {
@@ -313,6 +359,8 @@ impl BlockMachine {
             self.records.push(BlockRecord {
                 id,
                 command,
+                cwd,
+                git_branch,
                 started_at_ms,
                 ended_at_ms: Some(ended_at_ms),
                 exit_code: Some(-1),
@@ -389,7 +437,10 @@ mod tests {
         // Simulate: A, B, C(cmd), output bytes, D;0
         let mut all_events: Vec<PtyEvent> = Vec::new();
 
-        all_events.extend(machine.handle_vt_event(VtEvent::PromptStart));
+        all_events.extend(machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/Users/me/proj".into()),
+            git_branch: Some("main".into()),
+        }));
         all_events.extend(machine.handle_vt_event(VtEvent::PromptEnd));
         all_events.extend(machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("echo hi".into()),
@@ -435,8 +486,34 @@ mod tests {
         assert!(summaries[0].duration_ms.is_some());
         assert!(!summaries[0].aborted);
 
+        // cwd/git_branch from the preceding PromptStart flowed into the record.
+        assert_eq!(summaries[0].cwd.as_deref(), Some("/Users/me/proj"));
+        assert_eq!(summaries[0].git_branch.as_deref(), Some("main"));
+
         // Output was captured in the record.
         assert_eq!(machine.records[0].output, b"hi\n");
+    }
+
+    #[test]
+    fn prompt_start_without_params_clears_stale_cwd() {
+        // A bare PromptStart must overwrite any previously cached cwd/branch
+        // so a fresh shell session never picks up a prior pane's metadata.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/old".into()),
+            git_branch: Some("old-branch".into()),
+        });
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("ls".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished { exit_code: 0 });
+        let summaries = machine.block_summaries();
+        assert_eq!(summaries[0].cwd, None);
+        assert_eq!(summaries[0].git_branch, None);
     }
 
     #[test]

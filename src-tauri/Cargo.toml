@@ -33,4 +33,5 @@ tracing = "0.1.44"
 base64 = "0.22.1"
 vte = "0.15.0"
 tempfile = "3.27.0"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 

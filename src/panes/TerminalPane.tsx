@@ -109,6 +109,8 @@ export function TerminalPane(): React.ReactElement {
             type: "started",
             id: event.block_id,
             command: event.command,
+            cwd: event.cwd,
+            git_branch: event.git_branch,
             started_at_ms: event.started_at_ms,
           });
           break;

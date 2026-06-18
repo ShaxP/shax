@@ -17,7 +17,14 @@ export interface BlockState {
 
 export type BlockAction =
   | { type: "seed"; blocks: BlockSummary[] }
-  | { type: "started"; id: BlockId; command: string | null; started_at_ms: number }
+  | {
+      type: "started";
+      id: BlockId;
+      command: string | null;
+      cwd: string | null;
+      git_branch: string | null;
+      started_at_ms: number;
+    }
   | {
       type: "completed";
       id: BlockId;
@@ -56,6 +63,8 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
           {
             id: action.id,
             command: action.command,
+            cwd: action.cwd,
+            git_branch: action.git_branch,
             started_at_ms: action.started_at_ms,
             ended_at_ms: null,
             exit_code: null,
