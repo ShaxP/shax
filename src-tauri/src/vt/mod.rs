@@ -18,8 +18,12 @@ pub enum VtEvent {
     PromptStart,
     /// `OSC 133 ; B ST` – prompt end (command input begins).
     PromptEnd,
-    /// `OSC 133 ; C ST` – command output begins (preexec).
-    CommandStart,
+    /// `OSC 133 ; C [ ; <cmd> ] ST` – command output begins (preexec).
+    /// Shax's zsh integration carries the typed command in the optional third
+    /// parameter; older or third-party integrations may emit a bare `C` and
+    /// `command` is then `None`. The command may itself contain `;`, so we
+    /// re-join all trailing OSC params with `;` when reconstructing it.
+    CommandStart { command: Option<String> },
     /// `OSC 133 ; D ; <exit> ST` – command finished with exit code.
     CommandFinished { exit_code: i32 },
 }
@@ -92,7 +96,10 @@ impl vte::Perform for Performer {
         match marker {
             b"A" => (self.on_event)(VtEvent::PromptStart),
             b"B" => (self.on_event)(VtEvent::PromptEnd),
-            b"C" => (self.on_event)(VtEvent::CommandStart),
+            b"C" => {
+                let command = parse_command_param(&params[2..]);
+                (self.on_event)(VtEvent::CommandStart { command });
+            }
             b"D" => {
                 let raw = params.get(2).copied().unwrap_or(b"0");
                 let code = std::str::from_utf8(raw)
@@ -112,6 +119,32 @@ impl vte::Perform for Performer {
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+}
+
+/// Reassemble the command string that lives in OSC 133;C;<cmd...> params.
+///
+/// vte splits OSC parameters on `;`, so a command like `echo a;echo b` arrives
+/// as multiple params. We join them back with `;` and trim a single trailing
+/// CR or LF the shell may have included. An empty (or all-empty) tail returns
+/// `None`, matching the "bare C" case for shells without command capture.
+fn parse_command_param(tail: &[&[u8]]) -> Option<String> {
+    if tail.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::with_capacity(tail.len());
+    for raw in tail {
+        // Drop non-UTF-8 fragments rather than mangle them; in practice the
+        // shell emits the command verbatim and zsh sources are UTF-8.
+        let s = std::str::from_utf8(raw).ok()?;
+        parts.push(s);
+    }
+    let joined = parts.join(";");
+    let trimmed = joined.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -148,7 +181,7 @@ mod tests {
 
     #[test]
     fn osc133_markers_abc_d_zero() {
-        // A, B, C then D with exit 0
+        // A, B, C (bare) then D with exit 0
         let bytes = b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07";
         let events = collect_events(bytes);
         assert_eq!(
@@ -156,9 +189,47 @@ mod tests {
             vec![
                 VtEvent::PromptStart,
                 VtEvent::PromptEnd,
-                VtEvent::CommandStart,
+                VtEvent::CommandStart { command: None },
                 VtEvent::CommandFinished { exit_code: 0 },
             ]
+        );
+    }
+
+    #[test]
+    fn osc133_c_carries_command() {
+        // OSC 133;C;<cmd> – Shax's zsh integration emits the typed command.
+        let bytes = b"\x1b]133;C;ls -la\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandStart {
+                command: Some("ls -la".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_c_command_with_semicolons() {
+        // vte splits OSC params on `;`; we must rejoin the tail.
+        let bytes = b"\x1b]133;C;echo a;echo b\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandStart {
+                command: Some("echo a;echo b".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_c_command_trims_trailing_newline() {
+        let bytes = b"\x1b]133;C;true\n\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandStart {
+                command: Some("true".into()),
+            }]
         );
     }
 
@@ -184,7 +255,7 @@ mod tests {
         drop(parser);
 
         let got = Arc::try_unwrap(events).unwrap().into_inner().unwrap();
-        assert_eq!(got, vec![VtEvent::CommandStart]);
+        assert_eq!(got, vec![VtEvent::CommandStart { command: None }]);
     }
 
     #[test]

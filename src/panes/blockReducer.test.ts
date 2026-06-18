@@ -18,9 +18,12 @@ import type { BlockSummary } from "../lib/ipc";
 function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
   return {
     id: "block-1",
+    command: null,
     started_at_ms: 1000,
     ended_at_ms: null,
     exit_code: null,
+    duration_ms: null,
+    aborted: false,
     ...overrides,
   };
 }
@@ -51,6 +54,12 @@ describe("blockReducer / seed", () => {
     blockReducer(prev, { type: "seed", blocks: [makeBlock()] });
     expect(prev.blocks).toHaveLength(0);
   });
+
+  it("preserves aborted blocks supplied in the seed", () => {
+    const blocks = [makeBlock({ id: "x", aborted: true })];
+    const next = blockReducer(initialBlockState, { type: "seed", blocks });
+    expect(next.blocks[0]?.aborted).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -58,19 +67,33 @@ describe("blockReducer / seed", () => {
 // ---------------------------------------------------------------------------
 
 describe("blockReducer / started", () => {
-  it("appends a new running block", () => {
+  it("appends a new running block with command", () => {
     const next = blockReducer(initialBlockState, {
       type: "started",
       id: "block-abc",
+      command: "echo hi",
       started_at_ms: 5000,
     });
     expect(next.blocks).toHaveLength(1);
     expect(next.blocks[0]).toEqual({
       id: "block-abc",
+      command: "echo hi",
       started_at_ms: 5000,
       ended_at_ms: null,
       exit_code: null,
+      duration_ms: null,
+      aborted: false,
     });
+  });
+
+  it("accepts a null command when integration didn't report one", () => {
+    const next = blockReducer(initialBlockState, {
+      type: "started",
+      id: "no-cmd",
+      command: null,
+      started_at_ms: 1,
+    });
+    expect(next.blocks[0]?.command).toBeNull();
   });
 
   it("preserves previously recorded blocks", () => {
@@ -78,7 +101,12 @@ describe("blockReducer / started", () => {
       blocks: [makeBlock({ id: "first" })],
       altScreen: false,
     };
-    const next = blockReducer(state, { type: "started", id: "second", started_at_ms: 2000 });
+    const next = blockReducer(state, {
+      type: "started",
+      id: "second",
+      command: null,
+      started_at_ms: 2000,
+    });
     expect(next.blocks).toHaveLength(2);
     const [first, second] = next.blocks;
     expect(first?.id).toBe("first");
@@ -87,7 +115,7 @@ describe("blockReducer / started", () => {
 
   it("does not mutate the previous state", () => {
     const prev = { ...initialBlockState };
-    blockReducer(prev, { type: "started", id: "x", started_at_ms: 0 });
+    blockReducer(prev, { type: "started", id: "x", command: null, started_at_ms: 0 });
     expect(prev.blocks).toHaveLength(0);
   });
 });
@@ -97,9 +125,9 @@ describe("blockReducer / started", () => {
 // ---------------------------------------------------------------------------
 
 describe("blockReducer / completed", () => {
-  it("fills ended_at_ms and exit_code on the matching block", () => {
+  it("fills ended_at_ms, exit_code, and duration_ms on the matching block", () => {
     const state: BlockState = {
-      blocks: [makeBlock({ id: "target" })],
+      blocks: [makeBlock({ id: "target", command: "ls" })],
       altScreen: false,
     };
     const next = blockReducer(state, {
@@ -107,12 +135,16 @@ describe("blockReducer / completed", () => {
       id: "target",
       exit_code: 0,
       ended_at_ms: 9999,
+      duration_ms: 8999,
     });
     expect(next.blocks[0]).toEqual({
       id: "target",
+      command: "ls",
       started_at_ms: 1000,
       ended_at_ms: 9999,
       exit_code: 0,
+      duration_ms: 8999,
+      aborted: false,
     });
   });
 
@@ -126,6 +158,7 @@ describe("blockReducer / completed", () => {
       id: "unknown",
       exit_code: 1,
       ended_at_ms: 2000,
+      duration_ms: 100,
     });
     // Reference equality: no new state object because nothing changed.
     expect(next).toBe(state);
@@ -141,10 +174,12 @@ describe("blockReducer / completed", () => {
       id: "b",
       exit_code: 42,
       ended_at_ms: 3000,
+      duration_ms: 2000,
     });
     const [blockA, blockB] = next.blocks;
     expect(blockA?.exit_code).toBeNull();
     expect(blockB?.exit_code).toBe(42);
+    expect(blockB?.duration_ms).toBe(2000);
   });
 
   it("does not mutate the previous state", () => {
@@ -153,7 +188,13 @@ describe("blockReducer / completed", () => {
       altScreen: false,
     };
     const blocksBefore = state.blocks;
-    blockReducer(state, { type: "completed", id: "x", exit_code: 0, ended_at_ms: 1 });
+    blockReducer(state, {
+      type: "completed",
+      id: "x",
+      exit_code: 0,
+      ended_at_ms: 1,
+      duration_ms: 1,
+    });
     expect(state.blocks).toBe(blocksBefore);
     const [firstBlock] = state.blocks;
     expect(firstBlock?.exit_code).toBeNull();

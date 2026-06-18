@@ -18,7 +18,11 @@ _shax_precmd() {
 }
 
 _shax_preexec() {
-  _shax_osc "C"
+  # $1 is the command line as typed (preexec convention). We emit it as a
+  # third OSC 133;C parameter so the backend can attach it to the block. The
+  # OSC 133 spec lets parsers ignore unknown trailing params, so this stays
+  # compatible with consumers that only understand bare `C`.
+  printf '\033]133;C;%s\007' "$1"
 }
 
 autoload -Uz add-zsh-hook 2>/dev/null

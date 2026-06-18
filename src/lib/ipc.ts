@@ -28,7 +28,12 @@ export type PtyEvent =
   | { kind: "output"; data: string } // base64-encoded bytes
   | { kind: "exit"; code: number | null }
   | { kind: "alt_screen_changed"; active: boolean }
-  | { kind: "block_started"; block_id: BlockId; started_at_ms: number }
+  | {
+      kind: "block_started";
+      block_id: BlockId;
+      command: string | null;
+      started_at_ms: number;
+    }
   | {
       kind: "block_completed";
       block_id: BlockId;
@@ -40,13 +45,19 @@ export type PtyEvent =
 /**
  * A summary of a single captured command block.
  *
- * `ended_at_ms` and `exit_code` are null while the block is still running.
+ * `ended_at_ms`, `exit_code`, and `duration_ms` are null while the block is
+ * still running. `command` is null when the shell did not emit it (older or
+ * third-party integration). `aborted` is true when the block closed without a
+ * clean OSC 133 D — either by the PTY exiting mid-block or by a second C.
  */
 export interface BlockSummary {
   id: BlockId;
+  command: string | null;
   started_at_ms: number;
   ended_at_ms: number | null;
   exit_code: number | null;
+  duration_ms: number | null;
+  aborted: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,4 +165,17 @@ export async function listBlocks(id: PtyId): Promise<BlockSummary[]> {
   if (!isTauriContext() || id === "non-tauri") return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<BlockSummary[]>("pty_list_blocks", { id });
+}
+
+/**
+ * Fetches the captured stdout/stderr bytes for a single completed block.
+ *
+ * Returns an empty Uint8Array if the pane or block id is unknown, or if the
+ * block is still running. Callers should treat an empty result uniformly.
+ */
+export async function getBlockOutput(id: PtyId, blockId: BlockId): Promise<Uint8Array> {
+  if (!isTauriContext() || id === "non-tauri") return new Uint8Array();
+  const { invoke } = await import("@tauri-apps/api/core");
+  const b64 = await invoke<string>("pty_get_block_output", { id, blockId });
+  return base64Decode(b64);
 }

@@ -76,8 +76,12 @@ pub enum PtyEvent {
     /// The alternate screen buffer was entered (`?1049h`) or left (`?1049l`).
     AltScreenChanged { active: bool },
     /// A new command block has started (OSC 133 C received).
+    ///
+    /// `command` is the typed command line when the shell integration reported
+    /// it (Shax's zsh script does), and `None` otherwise.
     BlockStarted {
         block_id: BlockId,
+        command: Option<String>,
         started_at_ms: u64,
     },
     /// A command block has completed (OSC 133 D received).
@@ -105,13 +109,22 @@ struct PtyHandle {
 
 // ── PtyManager ─────────────────────────────────────────────────────────────────
 
+/// Per-pane shared block state written by the reader thread and read by IPC.
+///
+/// Holds both the chronological summary list and a map of captured output
+/// bytes keyed by `BlockId`. The reader thread refreshes `summaries` and
+/// drains completed-block bytes into `outputs` on each VT round.
+#[derive(Default)]
+struct BlockShared {
+    summaries: Vec<BlockSummary>,
+    outputs: HashMap<BlockId, Vec<u8>>,
+}
+
 /// Owns all active PTYs. Lives as a `tauri::State` singleton.
 pub struct PtyManager {
     inner: Mutex<HashMap<PtyId, PtyHandle>>,
-    /// Per-pane block summary lists; written by reader threads, read by IPC.
-    ///
-    /// Keyed by `PtyId`; the `Vec<BlockSummary>` is in arrival order.
-    blocks: Mutex<HashMap<PtyId, Arc<Mutex<Vec<BlockSummary>>>>>,
+    /// Per-pane shared block state. Keyed by `PtyId`.
+    blocks: Mutex<HashMap<PtyId, Arc<Mutex<BlockShared>>>>,
 }
 
 impl PtyManager {
@@ -172,9 +185,12 @@ impl PtyManager {
 
         let child = Arc::new(Mutex::new(child));
 
-        // Create a per-pane block summary list shared with the reader thread.
-        let block_list: Arc<Mutex<Vec<BlockSummary>>> = Arc::new(Mutex::new(Vec::new()));
-        self.blocks.lock().await.insert(id, Arc::clone(&block_list));
+        // Create a per-pane block shared state for the reader thread.
+        let block_shared: Arc<Mutex<BlockShared>> = Arc::new(Mutex::new(BlockShared::default()));
+        self.blocks
+            .lock()
+            .await
+            .insert(id, Arc::clone(&block_shared));
 
         let handle = PtyHandle {
             master: pair.master,
@@ -185,7 +201,7 @@ impl PtyManager {
 
         self.inner.lock().await.insert(id, handle);
 
-        spawn_reader_task(id, reader, child, on_event, block_list);
+        spawn_reader_task(id, reader, child, on_event, block_shared);
 
         tracing::info!(%id, rows = opts.rows, cols = opts.cols, "PTY spawned");
         Ok(id)
@@ -261,9 +277,27 @@ impl PtyManager {
     pub async fn list_blocks(&self, id: PtyId) -> Vec<BlockSummary> {
         let blocks_guard = self.blocks.lock().await;
         match blocks_guard.get(&id) {
-            Some(list) => list.lock().await.clone(),
+            Some(shared) => shared.lock().await.summaries.clone(),
             None => Vec::new(),
         }
+    }
+
+    /// Return the captured output bytes for a single completed block, or an
+    /// empty vec if the pane or block id is unknown (e.g. still running, or
+    /// already evicted in a future spill-to-disk world). Bytes are exactly
+    /// what was emitted on stdout/stderr between OSC 133 C and D.
+    pub async fn get_block_output(&self, id: PtyId, block_id: BlockId) -> Vec<u8> {
+        // Clone the per-pane Arc out, then drop the outer guard before acquiring
+        // the inner mutex so we never hold both locks at once.
+        let shared = {
+            let blocks_guard = self.blocks.lock().await;
+            match blocks_guard.get(&id) {
+                Some(arc) => Arc::clone(arc),
+                None => return Vec::new(),
+            }
+        };
+        let guard = shared.lock().await;
+        guard.outputs.get(&block_id).cloned().unwrap_or_default()
     }
 
     /// Return the number of active PTYs. Useful in tests.
@@ -297,7 +331,7 @@ fn spawn_reader_task(
     mut reader: Box<dyn std::io::Read + Send>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     on_event: Channel<PtyEvent>,
-    block_list: Arc<Mutex<Vec<BlockSummary>>>,
+    block_shared: Arc<Mutex<BlockShared>>,
 ) {
     let rt = tokio::runtime::Handle::current();
 
@@ -308,14 +342,12 @@ fn spawn_reader_task(
 
         // The VT parser and block machine live entirely inside this thread;
         // they are never moved or accessed from outside.
-        let block_list_clone = Arc::clone(&block_list);
         let mut machine = BlockMachine::new();
         let mut vt_parser = OscParser::new(move |vt_event| {
             // This closure is called synchronously inside `vt_parser.advance()`.
             // We push the VT event onto a thread-local queue so the reader loop
             // can emit the channel events in the right order.
             VT_EVENT_QUEUE.with(|q| q.borrow_mut().push(vt_event));
-            let _ = block_list_clone; // keep the Arc alive in the closure
         });
 
         loop {
@@ -340,10 +372,12 @@ fn spawn_reader_task(
                         }
                     }
 
-                    // Sync completed block summaries to the shared list.
+                    // Sync block summaries and drain completed-block output bytes
+                    // into the shared state so IPC can serve them.
                     rt.block_on(async {
-                        let mut list = block_list.lock().await;
-                        *list = machine.block_summaries();
+                        let mut shared = block_shared.lock().await;
+                        machine.collect_completed_output(&mut shared.outputs);
+                        shared.summaries = machine.block_summaries();
                     });
 
                     // 3. Forward raw bytes to xterm.js (fidelity contract).
@@ -362,8 +396,9 @@ fn spawn_reader_task(
         // PTY exited; finalize any running block as aborted.
         machine.finalize_on_exit();
         rt.block_on(async {
-            let mut list = block_list.lock().await;
-            *list = machine.block_summaries();
+            let mut shared = block_shared.lock().await;
+            machine.collect_completed_output(&mut shared.outputs);
+            shared.summaries = machine.block_summaries();
         });
 
         let exit_code: Option<i32> = rt.block_on(async {
@@ -713,5 +748,76 @@ mod tests {
         let unknown = PtyId::new();
         let result = manager.list_blocks(unknown).await;
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_block_output_returns_empty_for_unknown_ids() {
+        let manager = PtyManager::new();
+        let unknown_pty = PtyId::new();
+        let unknown_block = BlockId(Uuid::new_v4());
+        let bytes = manager.get_block_output(unknown_pty, unknown_block).await;
+        assert!(bytes.is_empty());
+    }
+
+    /// Drive a real PTY-backed shell with raw OSC 133 escapes via `printf`,
+    /// then assert that `get_block_output` returns the bytes between C and D.
+    ///
+    /// This bypasses Shax's zsh shell-integration so the test is portable to
+    /// any unix runner regardless of which shell is `$SHELL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn osc133_round_trip_through_pty() {
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        let opts = SpawnOpts {
+            rows: 24,
+            cols: 80,
+            cwd: None,
+            env: None,
+        };
+
+        let id = manager.spawn(opts, channel).await.expect("spawn");
+
+        // Let the shell come up and drain its prompt noise.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Emit OSC 133 ; C ; cmd, then body bytes, then OSC 133 ; D ; 0.
+        // `printf` is universally available; the shell forwards these bytes
+        // unchanged through the PTY so the VT parser sees them.
+        let line = b"printf '\\033]133;C;hello\\007BODYMARKER\\n\\033]133;D;0\\007'\n";
+        manager.write(id, &B64.encode(line)).await.expect("write");
+
+        // Wait for a BlockCompleted event identifying the just-finished block.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut completed_id: Option<BlockId> = None;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockCompleted { block_id, .. })) => {
+                    completed_id = Some(block_id);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        let block_id = completed_id.expect("expected a BlockCompleted event");
+
+        // Give the reader thread a moment to drain output into shared state.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let bytes = manager.get_block_output(id, block_id).await;
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            s.contains("BODYMARKER"),
+            "expected captured output to contain BODYMARKER, got {s:?}"
+        );
+
+        manager.kill(id).await.expect("kill");
     }
 }

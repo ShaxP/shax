@@ -71,6 +71,7 @@ vi.mock("../lib/ipc", () => ({
   resizePty: (...args: unknown[]): Promise<void> => mockResizePty(...args) as Promise<void>,
   killPty: (...args: unknown[]): Promise<void> => mockKillPty(...args) as Promise<void>,
   listBlocks: (...args: unknown[]): Promise<[]> => mockListBlocks(...args) as Promise<[]>,
+  getBlockOutput: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
   base64Decode: (b64: string): Uint8Array => new TextEncoder().encode(b64),
   base64Encode: (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)),
 }));
@@ -131,8 +132,10 @@ describe("TerminalPane", () => {
     expect(mockFitAddonFit).toHaveBeenCalled();
   });
 
-  it("renders the dev status bar", () => {
+  it("renders the block list alongside the terminal", () => {
     render(<TerminalPane />);
-    expect(screen.getByTestId("dev-status-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("block-list")).toBeInTheDocument();
+    // Empty by default: no blocks have streamed in yet.
+    expect(screen.getByTestId("block-list-empty")).toBeInTheDocument();
   });
 });
