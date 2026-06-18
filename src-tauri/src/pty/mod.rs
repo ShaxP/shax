@@ -1211,7 +1211,84 @@ mod tests {
         manager.kill(id).await.expect("kill");
     }
 
+    /// `PS1` command substitutions (`$(git branch)`, `$(date)`, etc.) run
+    /// in subshells and fire the bash `DEBUG` trap. Without filtering them
+    /// out we'd emit a phantom `OSC 133 C` for each one, steal output
+    /// attribution from the real user command, and starve the UI with
+    /// re-renders. This regression test pins the PS1 expansion fix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_ignores_ps1_command_substitutions() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash PS1 substitution test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Set a PS1 that runs an external command (`true` is universal and
+        // produces no output). Without the BASH_SUBSHELL filter, this would
+        // emit a phantom OSC 133 C on every prompt redraw.
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+        env.insert("PS1".into(), "$(true)$(true)\\$ ".into());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        while rx.try_recv().is_ok() {}
+
+        manager
+            .write(id, &B64.encode(b"true\n"))
+            .await
+            .expect("write");
+
+        // Collect every BlockStarted that arrives in the next second. With
+        // the filter in place there should be exactly one — for the user's
+        // `true`. Without it, each `$(...)` in PS1 would add another.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut starts = 0usize;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockStarted { .. })) => starts += 1,
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert_eq!(
+            starts, 1,
+            "expected exactly one BlockStarted for the user's `true`; saw {starts} (PS1 \
+             $() expansions are leaking through the DEBUG-trap filter)"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
     /// Same end-to-end proof as the bash test but for fish.
+    ///
+    /// fish 4.x sends a Primary Device Attribute query (`\e[c`) on startup
+    /// and waits up to 10 seconds for the terminal to respond. Our test PTY
+    /// has no UI on the other end, so the response never arrives and fish
+    /// stalls for the full timeout before it starts reading the user's
+    /// commands. We work around this by writing the test command upfront —
+    /// fish buffers it and processes it after init — and giving the test
+    /// a deadline long enough to absorb the DA timeout.
     #[cfg(unix)]
     #[tokio::test]
     async fn fish_integration_emits_block_with_cwd() {
@@ -1242,15 +1319,14 @@ mod tests {
             .await
             .expect("spawn");
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        while rx.try_recv().is_ok() {}
-
+        // Pre-write the command so fish has it queued by the time it
+        // finishes its 10s DA-query timeout and starts reading stdin.
         manager
             .write(id, &B64.encode(b"true\n"))
             .await
             .expect("write");
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut got_cwd: Option<String> = None;
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {

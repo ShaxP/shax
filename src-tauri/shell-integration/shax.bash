@@ -64,12 +64,19 @@ _shax_precmd() {
 
 # Determines whether the current DEBUG firing represents the user's command
 # starting (in which case we emit C) or some internal machinery we should
-# ignore (PROMPT_COMMAND body, completion, our own helpers).
+# ignore (PROMPT_COMMAND body, completion, PS1 command substitutions, our
+# own helpers).
 _shax_preexec() {
+  # Skip when DEBUG fires inside a subshell. PS1 command substitutions
+  # (`$(git branch)` etc.), backticks, `(subshell)` groups, and pipeline
+  # children all run with BASH_SUBSHELL > 0, and emitting OSC 133 C for
+  # them would create phantom blocks and steal output attribution from
+  # the real user command that ran them.
+  if [[ "$BASH_SUBSHELL" -gt 0 ]]; then return; fi
   # Completion machinery: COMP_LINE is set during programmable completion.
   if [[ -n "$COMP_LINE" ]]; then return; fi
   # Skip if we're already inside a command — DEBUG fires for every simple
-  # command in a pipeline, and we only want the first.
+  # command in a chain (`a && b`, `c; d`), and we only want the first.
   if [[ "$_shax_in_command" -eq 1 ]]; then return; fi
   # Skip while PROMPT_COMMAND is running: BASH_COMMAND would be our own
   # helper or whatever else the user wired into PROMPT_COMMAND. We detect
