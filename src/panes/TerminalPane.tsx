@@ -1,14 +1,16 @@
 /**
- * TerminalPane — a single xterm.js instance wired to the backend PTY.
+ * TerminalPane — a single xterm.js instance wired to the backend PTY, with
+ * the BlockList rendered alongside it.
  *
  * Responsibilities:
- * - Mount an xterm Terminal into a full-window div via a ref.
+ * - Mount an xterm Terminal into the main canvas via a ref.
  * - Attach FitAddon and call fit() on mount and on ResizeObserver events
  *   (debounced to avoid thrashing the backend during resize drags).
  * - Subscribe to the backend PTY via spawnPty; pipe Output events into the
  *   terminal and keystrokes out via writePty.
  * - Route block-lifecycle and alt-screen IPC events into the blockReducer.
- * - Render the DevStatusBar so block state is visible during development.
+ * - Render the BlockList beside the xterm so captured commands surface as
+ *   real, structured rows (replaces the slice-2 DevStatusBar).
  * - On unmount: killPty, dispose the Terminal, disconnect the observer.
  *
  * When running outside Tauri (browser dev server, Playwright) the IPC layer
@@ -16,20 +18,16 @@
  * page still mounts and tests can assert on the DOM.
  */
 
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { spawnPty, writePty, resizePty, killPty, listBlocks, base64Decode } from "../lib/ipc";
 import type { PtyId, PtyEvent } from "../lib/ipc";
 import { blockReducer, initialBlockState } from "./blockReducer";
-import { DevStatusBar } from "./DevStatusBar";
+import { BlockList } from "./BlockList";
 
 const RESIZE_DEBOUNCE_MS = 50;
-
-// The status bar is ~24px tall. Keeping it outside the xterm container means
-// xterm never draws under it and scrollback lines stay fully visible.
-const STATUS_BAR_HEIGHT = 24;
 
 function isTauriContext(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -44,6 +42,9 @@ export function TerminalPane(): React.ReactElement {
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   const [blockState, dispatch] = useReducer(blockReducer, initialBlockState);
+  // Mirror the pty id into React state so the BlockList re-renders once the
+  // backend assigns one. (The ref is for the effect; state is for the children.)
+  const [ptyId, setPtyId] = useState<PtyId | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -107,6 +108,7 @@ export function TerminalPane(): React.ReactElement {
           dispatch({
             type: "started",
             id: event.block_id,
+            command: event.command,
             started_at_ms: event.started_at_ms,
           });
           break;
@@ -117,17 +119,20 @@ export function TerminalPane(): React.ReactElement {
             id: event.block_id,
             exit_code: event.exit_code,
             ended_at_ms: event.ended_at_ms,
+            duration_ms: event.duration_ms,
+            aborted: event.aborted,
           });
           break;
 
         case "exit":
-          // Handled by the shell's own output for now; block teardown in slice 3.
+          // Handled by the shell's own output for now; block teardown in slice 4.
           break;
       }
     };
 
     void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
       ptyIdRef.current = id;
+      setPtyId(id);
       // Seed block state from any blocks that already existed before the
       // frontend mounted (defensive; in practice the pane mounts before the
       // first block is recorded).
@@ -159,53 +164,38 @@ export function TerminalPane(): React.ReactElement {
 
   const isInsideTauri = isTauriContext();
 
-  // Derive the last exit code from the most recent completed block.
-  const lastExit = (() => {
-    for (let i = blockState.blocks.length - 1; i >= 0; i--) {
-      const b = blockState.blocks[i];
-      // noUncheckedIndexedAccess: i is always a valid index in this loop.
-      if (b !== undefined && b.exit_code !== null) return b.exit_code;
-    }
-    return null;
-  })();
-
   return (
     <div
       data-testid="terminal-pane"
       style={{
         width: "100%",
         height: "100%",
-        position: "relative",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
       }}
     >
-      {/* xterm container stops short of the status bar so output is never hidden. */}
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, paddingBottom: STATUS_BAR_HEIGHT }} />
-      {!isInsideTauri && (
-        <div
-          data-testid="non-tauri-notice"
-          style={{
-            position: "absolute",
-            inset: 0,
-            bottom: STATUS_BAR_HEIGHT,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#888",
-            fontFamily: "monospace",
-            fontSize: "14px",
-            pointerEvents: "none",
-          }}
-        >
-          Not running inside Shax
-        </div>
-      )}
-      <DevStatusBar
-        blockCount={blockState.blocks.length}
-        altScreen={blockState.altScreen}
-        lastExit={lastExit}
-      />
+      <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+        <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        {!isInsideTauri && (
+          <div
+            data-testid="non-tauri-notice"
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#888",
+              fontFamily: "monospace",
+              fontSize: "14px",
+              pointerEvents: "none",
+            }}
+          >
+            Not running inside Shax
+          </div>
+        )}
+      </div>
+      <BlockList pty={ptyId} blocks={blockState.blocks} />
     </div>
   );
 }

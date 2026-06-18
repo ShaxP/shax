@@ -11,7 +11,9 @@ test("terminal pane is mounted in the DOM", async ({ page }) => {
   await expect(page.getByTestId("terminal-pane")).toBeVisible();
 });
 
-test("dev status bar is visible", async ({ page }) => {
+test("block list is rendered alongside the terminal", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator('[data-testid="dev-status-bar"]')).toBeVisible();
+  await expect(page.getByTestId("block-list")).toBeVisible();
+  // No backend means no blocks; the empty-state hint must show.
+  await expect(page.getByTestId("block-list-empty")).toBeVisible();
 });

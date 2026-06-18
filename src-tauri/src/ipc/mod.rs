@@ -3,10 +3,11 @@
 //! All commands return `Result<_, String>` at the IPC boundary. Internally they use
 //! typed `PtyError` values that are converted to strings with `.map_err(|e| e.to_string())`.
 
-pub use crate::blocks::BlockSummary;
+pub use crate::blocks::{BlockId, BlockSummary};
 pub use crate::pty::{PtyEvent, PtyId, SpawnOpts};
 
 use crate::pty::PtyManager;
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::sync::Arc;
 use tauri::State;
 
@@ -72,4 +73,20 @@ pub async fn pty_list_blocks(
     manager: State<'_, Arc<PtyManager>>,
 ) -> Result<Vec<BlockSummary>, String> {
     Ok(manager.list_blocks(id).await)
+}
+
+/// Return the captured stdout/stderr bytes for one completed block.
+///
+/// The bytes are base64-encoded for IPC transit using the same engine as
+/// `PtyEvent::Output`. An unknown pane or block id, or a block that is still
+/// running, returns an empty string rather than an error — the frontend treats
+/// "no bytes available" uniformly.
+#[tauri::command]
+pub async fn pty_get_block_output(
+    id: PtyId,
+    block_id: BlockId,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<String, String> {
+    let bytes = manager.get_block_output(id, block_id).await;
+    Ok(B64.encode(&bytes))
 }

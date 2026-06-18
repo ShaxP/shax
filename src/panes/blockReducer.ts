@@ -17,8 +17,15 @@ export interface BlockState {
 
 export type BlockAction =
   | { type: "seed"; blocks: BlockSummary[] }
-  | { type: "started"; id: BlockId; started_at_ms: number }
-  | { type: "completed"; id: BlockId; exit_code: number; ended_at_ms: number }
+  | { type: "started"; id: BlockId; command: string | null; started_at_ms: number }
+  | {
+      type: "completed";
+      id: BlockId;
+      exit_code: number;
+      ended_at_ms: number;
+      duration_ms: number;
+      aborted: boolean;
+    }
   | { type: "alt_screen"; active: boolean };
 
 export const initialBlockState: BlockState = {
@@ -31,8 +38,9 @@ export const initialBlockState: BlockState = {
  *
  * - `seed`: replaces the entire block list (used on mount).
  * - `started`: appends a new running block.
- * - `completed`: fills `ended_at_ms` and `exit_code` on the matching block;
- *   no-ops if the block is not found (event arrived before frontend mounted).
+ * - `completed`: fills `ended_at_ms`, `exit_code`, `duration_ms`, and `aborted`
+ *   on the matching block; no-ops if the block is not found (event arrived
+ *   before frontend mounted).
  * - `alt_screen`: updates the alternate-screen flag.
  */
 export function blockReducer(state: BlockState, action: BlockAction): BlockState {
@@ -47,9 +55,12 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
           ...state.blocks,
           {
             id: action.id,
+            command: action.command,
             started_at_ms: action.started_at_ms,
             ended_at_ms: null,
             exit_code: null,
+            duration_ms: null,
+            aborted: false,
           },
         ],
       };
@@ -62,10 +73,11 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       // index is guaranteed valid by findIndex above; existing is always defined.
       if (existing === undefined) return state;
       const updated: BlockSummary = {
-        id: existing.id,
-        started_at_ms: existing.started_at_ms,
+        ...existing,
         ended_at_ms: action.ended_at_ms,
         exit_code: action.exit_code,
+        duration_ms: action.duration_ms,
+        aborted: action.aborted,
       };
       const blocks = [...state.blocks];
       blocks[index] = updated;
