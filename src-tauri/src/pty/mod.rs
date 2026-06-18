@@ -144,7 +144,12 @@ pub struct PtyManager {
 /// How many historical blocks to load on each pane spawn so the user sees
 /// their previous session's commands in the BlockList. Older blocks are
 /// still in the store and will be reachable via search at M3.
-const HISTORY_SEED_LIMIT: usize = 200;
+///
+/// Bounded deliberately: the frontend's non-virtualized BlockList commits
+/// every row synchronously on mount, and a large seed starves xterm's
+/// render scheduler. 50 fits comfortably in one frame; virtualization
+/// lifts this in M3 when the search surface lands.
+const HISTORY_SEED_LIMIT: usize = 50;
 
 impl PtyManager {
     /// Create an empty manager without persistence. For tests that don't
