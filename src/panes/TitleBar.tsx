@@ -42,6 +42,11 @@ const IS_MAC = ((): boolean => {
   return /Mac|iPhone|iPad/i.test(navigator.userAgent);
 })();
 
+// Reserve space for the native traffic lights on macOS overlay title bars.
+// Default macOS button cluster is ~70px wide; 78 gives a small extra gap
+// so the first tab does not crowd the close button.
+const MAC_TRAFFIC_LIGHT_INSET = 78;
+
 export interface TitleBarProps {
   /** The current working directory of the active pane, if known. */
   cwd: string | null;
@@ -56,9 +61,9 @@ const ROW: CSSProperties = {
   height: 46,
   paddingTop: 0,
   paddingBottom: 0,
-  // Gutter on macOS so the tab sits clearly to the right of the
-  // traffic-light cluster instead of being overlapped by it.
-  paddingLeft: IS_MAC ? 40 : 14,
+  // Reserve the traffic-light area on macOS so the tab pill starts past
+  // the close/minimise/zoom cluster instead of being overlapped by it.
+  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
   paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
