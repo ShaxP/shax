@@ -6,10 +6,19 @@
  * M1.5; behaviour (real tabs, split panes, search overlay, assistant
  * invocation) lands in M2 / M3 / M6 as those milestones come up.
  *
- * Traffic lights from the design mock are intentionally NOT painted here:
- * Tauri uses native window decorations, so macOS and Windows already render
- * their own close/minimise/zoom controls in the window frame, and redrawing
- * them in the client area would be a confusing duplicate.
+ * Traffic lights are NOT painted here: Tauri uses native window decorations
+ * on every platform, so macOS and Windows already render their own
+ * close/minimise/zoom controls. On macOS the Tauri config opts into
+ * `titleBarStyle: "Overlay"` (see `src-tauri/tauri.conf.json`), so the
+ * native traffic lights float over the webview's top-left corner. To stop
+ * the tab pill sliding under them we reserve ~70px of left padding only on
+ * macOS — Windows and Linux keep the standard native title bar above this
+ * row and need no padding.
+ *
+ * The row background is marked `-webkit-app-region: drag` so the user can
+ * still drag the window from any empty area of the title bar; the active
+ * tab and the toolbar icons opt back out with `no-drag` so they remain
+ * clickable when we wire their behaviours up in later milestones.
  *
  * The active tab pill draws its label from the live PTY's cwd (passed in by
  * the parent). When no cwd is known yet, the pill renders a neutral fallback
@@ -21,6 +30,27 @@
 
 import type { CSSProperties } from "react";
 
+// `-webkit-app-region` is a Chromium-only CSS property that the React types
+// don't include. Extend CSSProperties locally so the title bar can claim
+// drag (and its children can opt out) without an `any` cast.
+type DragRegion = "drag" | "no-drag";
+interface DraggableStyle extends CSSProperties {
+  WebkitAppRegion?: DragRegion;
+}
+
+const IS_MAC = ((): boolean => {
+  if (typeof navigator === "undefined") return false;
+  // jsdom and CI Linux Chromium do not contain "Mac"; real macOS Tauri
+  // webviews and Chromium-on-mac both do. This is enough to gate the
+  // overlay padding without pulling in a Tauri-only OS plugin.
+  return /Mac|iPhone|iPad/i.test(navigator.userAgent);
+})();
+
+// Reserve space for the native traffic lights on macOS overlay title bars.
+// Default macOS button cluster is ~70px wide once you include the right-side
+// breathing room.
+const MAC_TRAFFIC_LIGHT_INSET = 78;
+
 export interface TitleBarProps {
   /** The current working directory of the active pane, if known. */
   cwd: string | null;
@@ -28,16 +58,20 @@ export interface TitleBarProps {
   tabLabel?: string;
 }
 
-const ROW: CSSProperties = {
+const ROW: DraggableStyle = {
   display: "flex",
   alignItems: "center",
   gap: 14,
   height: 46,
-  padding: "0 14px",
+  paddingTop: 0,
+  paddingBottom: 0,
+  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
+  paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
   flexShrink: 0,
   fontFamily: "var(--font-ui)",
+  WebkitAppRegion: "drag",
 };
 
 const TABS_ROW: CSSProperties = {
@@ -49,7 +83,7 @@ const TABS_ROW: CSSProperties = {
   minWidth: 0,
 };
 
-const ACTIVE_TAB: CSSProperties = {
+const ACTIVE_TAB: DraggableStyle = {
   display: "flex",
   alignItems: "center",
   gap: 9,
@@ -61,6 +95,7 @@ const ACTIVE_TAB: CSSProperties = {
   borderRadius: "8px 8px 0 0",
   marginBottom: -1,
   maxWidth: 320,
+  WebkitAppRegion: "no-drag",
 };
 
 const TAB_ACCENT_DOT: CSSProperties = {
@@ -89,12 +124,13 @@ const TAB_PATH: CSSProperties = {
   minWidth: 0,
 };
 
-const TOOLBAR: CSSProperties = {
+const TOOLBAR: DraggableStyle = {
   display: "flex",
   alignItems: "center",
   gap: 3,
   flexShrink: 0,
   color: "var(--fg-faint)",
+  WebkitAppRegion: "no-drag",
 };
 
 const ICON_BTN: CSSProperties = {
