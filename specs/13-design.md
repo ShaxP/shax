@@ -31,6 +31,10 @@ The designed surfaces map to the build as follows:
 - Settings, including the two auth lanes -> `09`, frontend `settings/`.
 - Onboarding and empty states -> frontend, first-run flows.
 
+## Tokens in code
+
+The design's CSS variable palette lives in `src/theme/tokens.css` (added in M1.5). All component styles consume the tokens via `var(--…)` rather than hard-coding hex literals or duplicating the palette. When the design's tokens change, update `tokens.css` and the rest follows. Both dark and light variants of every token are required by the non-negotiables above, even when only one is wired in the UI at a given milestone.
+
 ## Process
 
 When new designs arrive, re-export into `/design` (replacing or versioning the prior export) and note in the PR which surfaces changed so the frontend engineer can reconcile.
