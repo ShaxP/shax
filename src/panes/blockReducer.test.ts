@@ -46,6 +46,7 @@ describe("blockReducer / seed", () => {
       blocks: [makeBlock({ id: "old" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const fresh = [makeBlock({ id: "new" })];
     const next = blockReducer(existing, { type: "seed", blocks: fresh });
@@ -53,7 +54,12 @@ describe("blockReducer / seed", () => {
   });
 
   it("does not mutate the previous state", () => {
-    const prev: BlockState = { blocks: [], altScreen: false, liveOutputs: new Map() };
+    const prev: BlockState = {
+      blocks: [],
+      altScreen: false,
+      liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
+    };
     blockReducer(prev, { type: "seed", blocks: [makeBlock()] });
     expect(prev.blocks).toHaveLength(0);
   });
@@ -112,6 +118,7 @@ describe("blockReducer / started", () => {
       blocks: [makeBlock({ id: "first" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "started",
@@ -151,6 +158,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "target", command: "ls" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -183,6 +191,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "running" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -205,6 +214,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "known" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -225,6 +235,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "a" }), makeBlock({ id: "b" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -247,6 +258,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "x" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const blocksBefore = state.blocks;
     blockReducer(state, {
@@ -274,6 +286,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "cd-block", cwd: "/start", git_branch: "main" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -300,6 +313,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "cd-tmp", cwd: "/repo", git_branch: "main" })],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -327,7 +341,12 @@ describe("blockReducer / alt_screen", () => {
   });
 
   it("sets altScreen to false", () => {
-    const state: BlockState = { blocks: [], altScreen: true, liveOutputs: new Map() };
+    const state: BlockState = {
+      blocks: [],
+      altScreen: true,
+      liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
+    };
     const next = blockReducer(state, { type: "alt_screen", active: false });
     expect(next.altScreen).toBe(false);
   });
@@ -337,6 +356,7 @@ describe("blockReducer / alt_screen", () => {
       blocks: [makeBlock()],
       altScreen: false,
       liveOutputs: new Map(),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
     expect(next.blocks).toEqual(state.blocks);
@@ -359,6 +379,7 @@ describe("blockReducer / block_chunk", () => {
       blocks: [],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "block_chunk",
@@ -377,6 +398,7 @@ describe("blockReducer / block_chunk", () => {
         ["a", new Uint8Array([1])],
         ["b", otherBytes],
       ]),
+      promptLine: { text: "", cursor: 0 },
     };
     const next = blockReducer(state, {
       type: "block_chunk",
@@ -395,9 +417,54 @@ describe("blockReducer / block_chunk", () => {
       blocks: [],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1])]]),
+      promptLine: { text: "", cursor: 0 },
     };
     blockReducer(state, { type: "block_chunk", id: "a", bytes: new Uint8Array([2]) });
     expect(state.liveOutputs.get("a")).toEqual(new Uint8Array([1]));
     expect(state.liveOutputs.size).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prompt_chunk
+// ---------------------------------------------------------------------------
+
+describe("blockReducer / prompt_chunk", () => {
+  it("feeds bytes through the renderer and updates promptLine", () => {
+    const next = blockReducer(initialBlockState, {
+      type: "prompt_chunk",
+      bytes: new TextEncoder().encode("hello"),
+    });
+    expect(next.promptLine).toEqual({ text: "hello", cursor: 5 });
+  });
+
+  it("accumulates across chunks", () => {
+    const a = blockReducer(initialBlockState, {
+      type: "prompt_chunk",
+      bytes: new TextEncoder().encode("foo "),
+    });
+    const b = blockReducer(a, {
+      type: "prompt_chunk",
+      bytes: new TextEncoder().encode("bar"),
+    });
+    expect(b.promptLine).toEqual({ text: "foo bar", cursor: 7 });
+  });
+
+  it("resets the prompt line when a new block starts", () => {
+    const prompt = blockReducer(initialBlockState, {
+      type: "prompt_chunk",
+      bytes: new TextEncoder().encode("ls -la"),
+    });
+    expect(prompt.promptLine.text).toBe("ls -la");
+
+    const started = blockReducer(prompt, {
+      type: "started",
+      id: "block-1",
+      command: "ls -la",
+      cwd: null,
+      git_branch: null,
+      started_at_ms: 1000,
+    });
+    expect(started.promptLine).toEqual({ text: "", cursor: 0 });
   });
 });
