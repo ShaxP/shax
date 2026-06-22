@@ -35,11 +35,22 @@ A small bridge milestone between M1 and M2. M1 proved the data model (blocks, OS
 - Theme tokens in `src/theme/tokens.css` matching the design's CSS variable palette (dark only; light deferred to M7 polish). Inline hex colors removed from components.
 - Three-row window chrome: title and tab bar on top, pane area in the middle, statusline on the bottom. Tabs, toolbar icons, and statusline are visual-only at this stage — M2 wires their behaviour.
 - Block anatomy redrawn to the design: coloured 3px left edge, inline `FMT`/`RAW` segmented pill (RAW default; FMT inert until M4), hover-revealed action row (copy works; rerun/share/ask-shax inert until M5/M6), status iconography (❯ + check / × / spinner / amber).
-- The prompt strip owns input. A single-row component at the bottom of the pane captures keystrokes and forwards them to the PTY using the standard xterm keymap, and renders cwd and branch from the latest OSC 133 `A`.
-- The xterm canvas is hidden in the resting state and revealed only when the alternate screen activates (vim, less, top) or shell integration is absent. Output from a running shell-integrated command streams into its block, not into xterm.
-- A new `PtyEvent::BlockChunk { block_id, bytes }` event carries output bytes scoped to the currently-running block alongside the existing raw output stream that xterm continues to consume.
+- A new `PtyEvent::BlockChunk { block_id, bytes }` event carries output bytes scoped to the currently-running block alongside the existing raw output stream that xterm continues to consume. Running blocks render their output inline; the xterm canvas stays in place as the input surface for now (the prompt strip lands in M1.9).
 
-**Exit:** the resting window matches the design (chrome, block stack, prompt strip); running a command shows its output stream into the block; vim and less and top still work untouched (alt-screen reveals xterm); existing M1 behaviour is fully preserved.
+**Exit:** the resting window matches the design's chrome and block anatomy; running a command shows its output stream into the block; vim and less and top still work untouched; existing M1 behaviour is fully preserved.
+
+## M1.9 Prompt strip owns input
+
+**Goal:** the prompt strip is the visible input surface, with full readline fidelity. **Lead:** frontend.
+
+Split out of M1.5 once that milestone landed only the streaming-output half. M1.5 left the xterm canvas as the input surface so we could ship inline block output without committing to a shell-line-editing model. M1.9 finishes the job:
+
+- A new `PromptStrip` component owns keystrokes between OSC 133 D (or B at session start) and the next C. The strip captures keys, forwards them to the PTY, and renders the shell's echo back to the user.
+- A tiny single-line VT renderer inside the strip interprets the relevant escape sequences (cursor left/right, backspace, kill-to-end, kill-to-start, plus printable chars) so history navigation (`↑` / `↓`), Tab completion, `Ctrl-R`, `Ctrl-W`, and `Ctrl-U` all update what the user sees, in lockstep with what the shell is actually editing.
+- The xterm canvas is hidden in the resting state and revealed only when the alternate screen activates. The block stack hides itself in alt-screen mode and xterm takes the pane area.
+- The strip renders cwd and branch from the latest OSC 133 A so the chrome reflects where the next command will run.
+
+**Exit:** typing into the prompt strip drives the shell as if the user were typing into a real terminal; history navigation, completion, and the standard readline shortcuts visibly update the strip; xterm stays out of the way until a program demands the alt screen.
 
 ## M2 Native multiplexing
 
