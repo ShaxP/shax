@@ -1,10 +1,15 @@
 /**
  * TitleBar — the top chrome row of the Shax window.
  *
- * Renders the traffic lights, the active tab pill, and the right-side toolbar
- * icons (split, search, assistant, settings). All interactivity here is
- * visual-only at M1.5; behaviour (real tabs, split panes, search overlay,
- * assistant invocation) lands in M2 / M3 / M6 as those milestones come up.
+ * Renders the active tab pill and the right-side toolbar icons (split,
+ * search, assistant, settings). All interactivity here is visual-only at
+ * M1.5; behaviour (real tabs, split panes, search overlay, assistant
+ * invocation) lands in M2 / M3 / M6 as those milestones come up.
+ *
+ * Traffic lights from the design mock are intentionally NOT painted here:
+ * Tauri uses native window decorations, so macOS and Windows already render
+ * their own close/minimise/zoom controls in the window frame, and redrawing
+ * them in the client area would be a confusing duplicate.
  *
  * The active tab pill draws its label from the live PTY's cwd (passed in by
  * the parent). When no cwd is known yet, the pill renders a neutral fallback
@@ -34,19 +39,6 @@ const ROW: CSSProperties = {
   flexShrink: 0,
   fontFamily: "var(--font-ui)",
 };
-
-const TRAFFIC: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  flexShrink: 0,
-};
-
-const DOT = (color: string): CSSProperties => ({
-  width: 11,
-  height: 11,
-  borderRadius: "50%",
-  background: color,
-});
 
 const TABS_ROW: CSSProperties = {
   display: "flex",
@@ -132,12 +124,6 @@ const SEARCH_PILL: CSSProperties = {
 export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.ReactElement {
   return (
     <div data-testid="title-bar" style={ROW}>
-      <div style={TRAFFIC}>
-        <span style={DOT("#e0635a")} aria-label="close" />
-        <span style={DOT("#e0ab4f")} aria-label="minimize" />
-        <span style={DOT("#56b770")} aria-label="zoom" />
-      </div>
-
       <div style={TABS_ROW}>
         <div data-testid="active-tab" style={ACTIVE_TAB}>
           <span style={TAB_ACCENT_DOT} />

@@ -20,13 +20,6 @@ describe("TitleBar", () => {
     expect(screen.getByTestId("title-bar")).toBeInTheDocument();
   });
 
-  it("renders the three traffic-light dots with accessible labels", () => {
-    render(<TitleBar cwd={null} />);
-    expect(screen.getByLabelText("close")).toBeInTheDocument();
-    expect(screen.getByLabelText("minimize")).toBeInTheDocument();
-    expect(screen.getByLabelText("zoom")).toBeInTheDocument();
-  });
-
   it("renders the active tab pill with the default label and a fallback cwd", () => {
     render(<TitleBar cwd={null} />);
     const tab = screen.getByTestId("active-tab");
