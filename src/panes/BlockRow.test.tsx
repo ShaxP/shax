@@ -173,17 +173,26 @@ describe("BlockRow / live output", () => {
     expect(screen.getByTestId("block-output")).toHaveTextContent("streaming…");
   });
 
-  it("uses liveOutput on expand for completed blocks without calling getOutput", () => {
+  it("renders liveOutput inline by default for completed blocks (no IPC fetch)", () => {
     const live = new TextEncoder().encode("cached bytes");
     const getOutput = vi.fn();
     render(<BlockRow pty="pty-1" block={makeBlock()} liveOutput={live} getOutput={getOutput} />);
+    // Completed block with live bytes is open by default — output shown
+    // immediately, no IPC round-trip.
+    expect(screen.getByTestId("block-output")).toHaveTextContent("cached bytes");
+    expect(getOutput).not.toHaveBeenCalled();
+  });
 
-    // Before expand, no inline output yet for completed blocks.
+  it("lets the user collapse a completed block with live bytes by clicking the header", () => {
+    const live = new TextEncoder().encode("cached bytes");
+    render(<BlockRow pty="pty-1" block={makeBlock()} liveOutput={live} />);
+    expect(screen.getByTestId("block-output")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("block-header"));
     expect(screen.queryByTestId("block-output")).toBeNull();
 
     fireEvent.click(screen.getByTestId("block-header"));
     expect(screen.getByTestId("block-output")).toHaveTextContent("cached bytes");
-    expect(getOutput).not.toHaveBeenCalled();
   });
 });
 

@@ -212,13 +212,16 @@ function BlockRowInner({
   getOutput,
   now = Date.now,
 }: BlockRowProps): React.ReactElement {
-  const [expanded, setExpanded] = useState<boolean>(false);
+  // `userOpen` is the user-toggled override:
+  //   - null  → follow the natural default
+  //   - true  → user opened a historical block (collapsed by default)
+  //   - false → user collapsed a block that was open by default
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [fetchedOutput, setFetchedOutput] = useState<string | null>(null);
   const [fetched, setFetched] = useState<boolean>(false);
 
   const status = statusFor(block);
   const isRunning = status === "running";
-  const isExpandable = !isRunning;
 
   const nowMs = useElapsedNow(isRunning, now);
   const elapsedMs: number | null = isRunning
@@ -231,11 +234,19 @@ function BlockRowInner({
   const liveText = liveOutput !== undefined ? TEXT_DECODER.decode(liveOutput) : null;
   const outputText = liveText ?? fetchedOutput;
 
-  const toggleExpand = (): void => {
-    if (!isExpandable) return;
-    const next = !expanded;
-    setExpanded(next);
-    // Only hit IPC when we don't already have the bytes from streaming.
+  // Natural default: open whenever we already have the bytes in memory, OR
+  // the block is still running (always-open is the rule for running). For
+  // historical blocks the natural default is closed — we don't want to fire
+  // 50 concurrent IPC fetches on boot to populate seeded rows that the user
+  // may never look at.
+  const naturalOpen = isRunning || liveOutput !== undefined;
+  const open = isRunning ? true : (userOpen ?? naturalOpen);
+
+  const toggleOpen = (): void => {
+    if (isRunning) return;
+    const next = !open;
+    setUserOpen(next);
+    // Opening a historical block for the first time: fire the IPC fetch.
     if (next && !fetched && liveOutput === undefined && getOutput !== undefined) {
       setFetched(true);
       void getOutput(pty, block.id).then((bytes) => {
@@ -268,10 +279,10 @@ function BlockRowInner({
       <div style={CONTENT}>
         <div
           data-testid="block-header"
-          onClick={toggleExpand}
+          onClick={toggleOpen}
           style={{
             ...HEADER,
-            cursor: isExpandable ? "pointer" : "default",
+            cursor: isRunning ? "default" : "pointer",
             userSelect: "none",
           }}
         >
@@ -393,15 +404,19 @@ function BlockRowInner({
 
         {/*
          * Output rendering:
-         *  - Running blocks always show their live byte buffer inline so the
-         *    user watches output stream in. No click required.
-         *  - Completed blocks stay expand-on-click; expansion reuses the live
-         *    bytes if available (zero IPC), otherwise pulls from the store
-         *    on first expand via getOutput.
+         *  - Running blocks always show their live byte buffer inline (no
+         *    toggle); the user watches output stream in.
+         *  - Completed blocks are open by default whenever we already have
+         *    the bytes in memory — either from this session's streaming or
+         *    from a previous expand-fetch. The user can collapse with a
+         *    click on the header and re-open with another click.
+         *  - Historical blocks seeded from disk default to closed so we
+         *    don't fire dozens of IPC fetches on boot; clicking opens and
+         *    fetches once.
          * Tier-0 raw rendering: bytes UTF-8 decoded, ANSI escapes pass through
          * untouched (the fidelity contract). M4 brings real formatters.
          */}
-        {(isRunning || expanded) && (
+        {open && (
           <pre
             data-testid="block-output"
             style={{
