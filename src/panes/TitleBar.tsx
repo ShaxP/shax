@@ -10,10 +10,14 @@
  * on every platform, so macOS and Windows already render their own
  * close/minimise/zoom controls. On macOS the Tauri config opts into
  * `titleBarStyle: "Overlay"` (see `src-tauri/tauri.conf.json`), so the
- * native traffic lights float over the webview's top-left corner. To stop
- * the tab pill sliding under them we reserve ~70px of left padding only on
- * macOS — Windows and Linux keep the standard native title bar above this
- * row and need no padding.
+ * native traffic lights float over the webview's top-left corner.
+ *
+ * The layout follows Chrome's unified-title-bar pattern: the active tab
+ * pill is anchored to the top-left of the window with its top-left corner
+ * un-rounded, so the traffic-light cluster floats over the tab's left
+ * edge. To keep the tab's text and accent dot legible past the cluster,
+ * the tab itself carries extra left-padding on macOS. On Windows and Linux
+ * the native title bar sits above this row and no inset is needed.
  *
  * The row background is marked `-webkit-app-region: drag` so the user can
  * still drag the window from any empty area of the title bar; the active
@@ -65,7 +69,9 @@ const ROW: DraggableStyle = {
   height: 46,
   paddingTop: 0,
   paddingBottom: 0,
-  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
+  // No left padding on macOS — the tab pill anchors to the window's
+  // top-left corner and the traffic lights float over its left edge.
+  paddingLeft: IS_MAC ? 0 : 14,
   paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
@@ -88,13 +94,30 @@ const ACTIVE_TAB: DraggableStyle = {
   alignItems: "center",
   gap: 9,
   height: 34,
-  padding: "0 14px",
+  // Inside-the-tab padding: on macOS the left side has to clear the
+  // floating traffic-light cluster (~78px from the window edge) so the
+  // accent dot and tab label are visible. The right side keeps the
+  // design's 14px breathing room everywhere.
+  paddingTop: 0,
+  paddingBottom: 0,
+  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
+  paddingRight: 14,
   background: "var(--pane)",
   border: "1px solid var(--border)",
   borderBottom: "1px solid var(--pane)",
-  borderRadius: "8px 8px 0 0",
+  // Anchor flush to the top-left corner on macOS (no top-left rounding)
+  // so the tab visually extends behind the traffic lights — Chrome's
+  // unified-title-bar look. Other platforms keep the symmetric pill.
+  borderTopLeftRadius: IS_MAC ? 0 : 8,
+  borderTopRightRadius: 8,
+  borderBottomLeftRadius: 0,
+  borderBottomRightRadius: 0,
+  // On macOS strip the left border too — there is nothing to separate from.
+  borderLeftWidth: IS_MAC ? 0 : 1,
   marginBottom: -1,
-  maxWidth: 320,
+  // Account for the traffic-light width when capping the tab. Without
+  // this the path text would be truncated visibly earlier on macOS.
+  maxWidth: IS_MAC ? 320 + MAC_TRAFFIC_LIGHT_INSET : 320,
   WebkitAppRegion: "no-drag",
 };
 
