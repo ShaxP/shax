@@ -17,12 +17,12 @@
  * overlapped by it. On Windows and Linux the native title bar sits above
  * this row and no inset is needed.
  *
- * The row carries the `data-tauri-drag-region` attribute so the user can
- * still drag the window from any empty area of the title bar (this is the
- * Tauri 2 drag mechanism; the CSS `-webkit-app-region` only sets the cursor
- * and does not actually drive window dragging in Wry). The active tab and
- * the toolbar opt back out with `data-tauri-drag-region="false"` so they
- * remain clickable when we wire their behaviours up in later milestones.
+ * Window dragging is wired via an explicit `onMouseDown` handler that calls
+ * `getCurrentWindow().startDragging()` from the Tauri API. We keep the
+ * `data-tauri-drag-region` attribute on the row and `="false"` on the
+ * active tab and toolbar so any Tauri-injected drag script also picks up
+ * the right targets, but the explicit handler is the load-bearing path and
+ * is what the user-visible drag-to-move behaviour relies on.
  *
  * The active tab pill draws its label from the live PTY's cwd (passed in by
  * the parent). When no cwd is known yet, the pill renders a neutral fallback
@@ -32,7 +32,8 @@
  * tokens from `src/theme/tokens.css`.
  */
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const IS_MAC = ((): boolean => {
   if (typeof navigator === "undefined") return false;
@@ -155,9 +156,31 @@ const SEARCH_PILL: CSSProperties = {
   cursor: "default",
 };
 
+function isInsideTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function handleTitleBarMouseDown(e: ReactMouseEvent<HTMLDivElement>): void {
+  // Only left-button drags should move the window. Right/middle clicks
+  // are reserved for context menus and pane actions we will wire later.
+  if (e.button !== 0) return;
+  // Children explicitly opt out by being inside an element with the
+  // no-drag marker. Lets the tab and toolbar take their own clicks.
+  if (e.target instanceof HTMLElement) {
+    if (e.target.closest('[data-tauri-drag-region="false"]') !== null) return;
+  }
+  if (!isInsideTauri()) return;
+  void getCurrentWindow().startDragging();
+}
+
 export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.ReactElement {
   return (
-    <div data-testid="title-bar" data-tauri-drag-region="" style={ROW}>
+    <div
+      data-testid="title-bar"
+      data-tauri-drag-region=""
+      style={ROW}
+      onMouseDown={handleTitleBarMouseDown}
+    >
       <div style={TABS_ROW}>
         <div data-testid="active-tab" data-tauri-drag-region="false" style={ACTIVE_TAB}>
           <span style={TAB_ACCENT_DOT} />
