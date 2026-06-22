@@ -1,0 +1,45 @@
+/*
+ * Shax design tokens (dark, precise).
+ *
+ * Implementation home of the palette defined in `/design`. Components
+ * consume these via `var(--…)` instead of duplicating hex literals.
+ * See `specs/13-design.md`. Light variants are reserved for M7 polish.
+ */
+
+:root {
+  /* Surfaces */
+  --bg: #0c0d10;
+  --pane: #0e0f13;
+  --pane2: #0a0b0e;
+  --surface: #15161c;
+  --surface-hover: #1a1c24;
+  --titlebar: #090a0d;
+
+  /* Borders */
+  --border: #1c1e25;
+  --border-strong: #2b2e37;
+
+  /* Foreground (text) */
+  --fg: #d8dbe2;
+  --fg-dim: #8b909c;
+  --fg-faint: #565b66;
+
+  /* Accent */
+  --accent: oklch(0.72 0.13 250);
+  --accent-soft: oklch(0.72 0.13 250 / 0.14);
+
+  /* Semantic */
+  --green: oklch(0.74 0.11 155);
+  --red: oklch(0.69 0.16 25);
+  --amber: oklch(0.8 0.11 80);
+  --cyan: oklch(0.78 0.09 205);
+
+  /* Geometry */
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  /* Typography */
+  --font-ui: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}

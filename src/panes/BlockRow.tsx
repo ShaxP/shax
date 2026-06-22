@@ -50,12 +50,12 @@ function statusFor(block: BlockSummary): Status {
 function statusColor(status: Status): string {
   switch (status) {
     case "ok":
-      return "#5eba7d";
+      return "var(--green)";
     case "fail":
-      return "#e07070";
+      return "var(--red)";
     case "running":
     case "aborted":
-      return "#9aa6b2";
+      return "var(--fg-dim)";
   }
 }
 
@@ -126,11 +126,11 @@ function BlockRowInner({
       data-block-id={block.id}
       data-status={status}
       style={{
-        borderBottom: "1px solid #2a2f37",
+        borderBottom: "1px solid var(--border)",
         padding: "8px 10px",
-        fontFamily: "ui-monospace, SFMono-Regular, monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: 12,
-        color: "#cdd5df",
+        color: "var(--fg)",
       }}
     >
       <div
@@ -143,7 +143,7 @@ function BlockRowInner({
           userSelect: "none",
         }}
       >
-        <span style={{ color: "#7a8290" }}>&gt;</span>
+        <span style={{ color: "var(--fg-faint)" }}>&gt;</span>
         <span
           data-testid="block-command"
           style={{
@@ -153,9 +153,9 @@ function BlockRowInner({
             textOverflow: "ellipsis",
           }}
         >
-          {block.command ?? <em style={{ color: "#7a8290" }}>(no command)</em>}
+          {block.command ?? <em style={{ color: "var(--fg-faint)" }}>(no command)</em>}
         </span>
-        <span data-testid="block-duration" style={{ color: "#7a8290" }}>
+        <span data-testid="block-duration" style={{ color: "var(--fg-faint)" }}>
           {formatDuration(elapsedMs)}
         </span>
         <span
@@ -170,17 +170,17 @@ function BlockRowInner({
         </span>
         {/*
           The RAW pill is a scaffold for M4's formatter toggle (specs/02 fidelity
-          contract). It has no behavior at slice 3 — there are no formatters
+          contract). It has no behavior at this slice — there are no formatters
           yet — but the surface is wired so M4 can light it up.
         */}
         <span
           data-testid="block-raw-pill"
           style={{
-            border: "1px solid #3a414b",
-            borderRadius: 3,
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-sm)",
             padding: "1px 6px",
             fontSize: 10,
-            color: "#7a8290",
+            color: "var(--fg-faint)",
           }}
         >
           RAW
@@ -193,7 +193,7 @@ function BlockRowInner({
             marginLeft: 14,
             marginTop: 2,
             fontSize: 11,
-            color: "#7a8290",
+            color: "var(--fg-faint)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -201,7 +201,7 @@ function BlockRowInner({
         >
           {block.cwd}
           {block.cwd !== null && block.git_branch !== null && (
-            <span style={{ padding: "0 6px", color: "#525a64" }}>·</span>
+            <span style={{ padding: "0 6px", color: "var(--fg-faint)" }}>·</span>
           )}
           {block.git_branch}
         </div>
@@ -214,7 +214,7 @@ function BlockRowInner({
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
             fontSize: 12,
-            color: "#aab3bf",
+            color: "var(--fg-dim)",
           }}
         >
           {output ?? "…"}

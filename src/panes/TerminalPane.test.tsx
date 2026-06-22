@@ -138,4 +138,19 @@ describe("TerminalPane", () => {
     // Empty by default: no blocks have streamed in yet.
     expect(screen.getByTestId("block-list-empty")).toBeInTheDocument();
   });
+
+  it("wraps the pane in the M1.5 chrome (title bar + pane area + statusline)", () => {
+    render(<TerminalPane />);
+    expect(screen.getByTestId("title-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("pane-area")).toBeInTheDocument();
+    expect(screen.getByTestId("statusline")).toBeInTheDocument();
+  });
+
+  it("seeds the title bar and statusline with neutral fallbacks before the first prompt", () => {
+    render(<TerminalPane />);
+    // No blocks yet → cwd/branch are null and rendered as "—".
+    expect(screen.getByTestId("active-tab")).toHaveTextContent("—");
+    expect(screen.getByTestId("statusline-cwd")).toHaveTextContent("—");
+    expect(screen.getByTestId("statusline-branch")).toHaveTextContent("—");
+  });
 });

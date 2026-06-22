@@ -46,19 +46,19 @@ export function BlockList({
       style={{
         width: 360,
         flexShrink: 0,
-        borderLeft: "1px solid #2a2f37",
-        background: "#15181d",
+        borderLeft: "1px solid var(--border)",
+        background: "var(--pane2)",
         overflowY: "auto",
-        color: "#cdd5df",
+        color: "var(--fg)",
       }}
     >
       <header
         style={{
           padding: "8px 10px",
-          borderBottom: "1px solid #2a2f37",
-          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          borderBottom: "1px solid var(--border)",
+          fontFamily: "var(--font-mono)",
           fontSize: 11,
-          color: "#7a8290",
+          color: "var(--fg-faint)",
           textTransform: "uppercase",
           letterSpacing: 0.5,
         }}
@@ -70,9 +70,9 @@ export function BlockList({
           data-testid="block-list-empty"
           style={{
             padding: 16,
-            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+            fontFamily: "var(--font-mono)",
             fontSize: 12,
-            color: "#7a8290",
+            color: "var(--fg-faint)",
           }}
         >
           Run a command to see it captured here.
