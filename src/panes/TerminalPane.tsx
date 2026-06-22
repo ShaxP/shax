@@ -1,6 +1,7 @@
 /**
  * TerminalPane — a single xterm.js instance wired to the backend PTY, with
- * the BlockList rendered alongside it.
+ * the BlockList rendered alongside it and the M1.5 chrome (title bar +
+ * statusline) wrapped around the whole pane.
  *
  * Responsibilities:
  * - Mount an xterm Terminal into the main canvas via a ref.
@@ -10,7 +11,10 @@
  *   terminal and keystrokes out via writePty.
  * - Route block-lifecycle and alt-screen IPC events into the blockReducer.
  * - Render the BlockList beside the xterm so captured commands surface as
- *   real, structured rows (replaces the slice-2 DevStatusBar).
+ *   real, structured rows.
+ * - Wrap the pane area in TitleBar + Statusline so the window matches the
+ *   /design layout. cwd and branch piped to the chrome from the latest
+ *   block summary (the OSC 133 A on every prompt is the source of truth).
  * - On unmount: killPty, dispose the Terminal, disconnect the observer.
  *
  * When running outside Tauri (browser dev server, Playwright) the IPC layer
@@ -26,6 +30,8 @@ import { spawnPty, writePty, resizePty, killPty, listBlocks, base64Decode } from
 import type { PtyId, PtyEvent } from "../lib/ipc";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
+import { TitleBar } from "./TitleBar";
+import { Statusline } from "./Statusline";
 
 const RESIZE_DEBOUNCE_MS = 50;
 
@@ -173,6 +179,14 @@ export function TerminalPane(): React.ReactElement {
 
   const isInsideTauri = isTauriContext();
 
+  // Derive the current cwd/branch from the most recently observed block. The
+  // OSC 133 A on every prompt updates the block's metadata, so the last entry
+  // always reflects where the shell is now. Null until the first prompt has
+  // run, which the chrome renders as a neutral fallback.
+  const latestBlock = blockState.blocks[blockState.blocks.length - 1];
+  const cwd = latestBlock?.cwd ?? null;
+  const branch = latestBlock?.git_branch ?? null;
+
   return (
     <div
       data-testid="terminal-pane"
@@ -180,31 +194,47 @@ export function TerminalPane(): React.ReactElement {
         width: "100%",
         height: "100%",
         display: "flex",
-        flexDirection: "row",
+        flexDirection: "column",
+        background: "var(--bg)",
+        color: "var(--fg)",
+        fontFamily: "var(--font-ui)",
       }}
     >
-      <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
-        <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-        {!isInsideTauri && (
-          <div
-            data-testid="non-tauri-notice"
-            style={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#888",
-              fontFamily: "monospace",
-              fontSize: "14px",
-              pointerEvents: "none",
-            }}
-          >
-            Not running inside Shax
-          </div>
-        )}
+      <TitleBar cwd={cwd} />
+      <div
+        data-testid="pane-area"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "row",
+          background: "var(--bg)",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0, position: "relative", background: "var(--pane)" }}>
+          <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+          {!isInsideTauri && (
+            <div
+              data-testid="non-tauri-notice"
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--fg-faint)",
+                fontFamily: "var(--font-mono)",
+                fontSize: 14,
+                pointerEvents: "none",
+              }}
+            >
+              Not running inside Shax
+            </div>
+          )}
+        </div>
+        <BlockList pty={ptyId} blocks={blockState.blocks} />
       </div>
-      <BlockList pty={ptyId} blocks={blockState.blocks} />
+      <Statusline cwd={cwd} branch={branch} />
     </div>
   );
 }

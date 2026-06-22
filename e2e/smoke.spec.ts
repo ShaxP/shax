@@ -17,3 +17,13 @@ test("block list is rendered alongside the terminal", async ({ page }) => {
   // No backend means no blocks; the empty-state hint must show.
   await expect(page.getByTestId("block-list-empty")).toBeVisible();
 });
+
+test("M1.5 chrome (title bar, pane area, statusline) is rendered", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("title-bar")).toBeVisible();
+  await expect(page.getByTestId("pane-area")).toBeVisible();
+  await expect(page.getByTestId("statusline")).toBeVisible();
+  // Active tab pill carries the default tab label and a neutral cwd
+  // fallback before the first OSC 133 A arrives.
+  await expect(page.getByTestId("active-tab")).toContainText("shax");
+});

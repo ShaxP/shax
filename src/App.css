@@ -1,4 +1,9 @@
-/* Full-window layout: the single TerminalPane fills the entire viewport. */
+/*
+ * Full-window layout: the single TerminalPane fills the entire viewport.
+ * Background, fg, and typography come from theme tokens (`src/theme/tokens.css`).
+ */
+@import "./theme/tokens.css";
+
 *,
 *::before,
 *::after {
@@ -13,5 +18,7 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #000;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
 }
