@@ -479,24 +479,33 @@ fn spawn_reader_task(
                                 // Capture for the block record (in-memory + DB
                                 // on completion). Also forward to the frontend
                                 // scoped to the active block so the running
-                                // row can render output as it streams, without
-                                // waiting for completion and an IPC fetch.
+                                // row can render output as it streams.
                                 machine.push_output(&bytes);
                                 let encoded = B64.encode(&bytes);
                                 let scoped = if let Some(block_id) = machine.current_block_id() {
-                                    PtyEvent::BlockChunk {
+                                    Some(PtyEvent::BlockChunk {
                                         block_id,
                                         data: encoded,
-                                    }
+                                    })
+                                } else if machine.at_input_prompt() {
+                                    // Only bytes between OSC 133 B and the
+                                    // next C are the user's typing echo. PS1
+                                    // rendering (between A and B) is dropped
+                                    // from the strip's stream so the user's
+                                    // customized prompt — clocks, hostnames,
+                                    // glyphs — doesn't leak into the strip.
+                                    // The raw `Output` event still carries
+                                    // those bytes to xterm for the alt-screen
+                                    // passthrough path.
+                                    Some(PtyEvent::PromptChunk { data: encoded })
                                 } else {
-                                    // Bytes outside any block belong to the
-                                    // prompt area — the shell drawing PS1 and
-                                    // echoing the user's typing before C.
-                                    PtyEvent::PromptChunk { data: encoded }
+                                    None
                                 };
-                                if on_event.send(scoped).is_err() {
-                                    send_failed = true;
-                                    break;
+                                if let Some(ev) = scoped {
+                                    if on_event.send(ev).is_err() {
+                                        send_failed = true;
+                                        break;
+                                    }
                                 }
                             }
                             VtMessage::Event(ev) => {

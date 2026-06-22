@@ -144,6 +144,13 @@ pub struct BlockMachine {
     state: BlockState,
     /// True when a program has taken the alternate screen (`?1049h`).
     pub alt_screen: bool,
+    /// True between OSC 133 B (prompt rendering ended) and the next OSC 133 C
+    /// (user pressed Enter) — the only window in which output bytes are the
+    /// user's typing echo rather than the shell's PS1 rendering or command
+    /// output. The reader thread uses this to gate `PromptChunk` emission so
+    /// the M1.9 PromptStrip mirrors what the user typed, not the shell's
+    /// custom PS1.
+    at_input_prompt: bool,
     /// Completed (and any prematurely-closed) blocks in arrival order.
     records: Vec<BlockRecord>,
     /// Raw bytes accumulated since the last OSC 133 C.
@@ -163,6 +170,7 @@ impl BlockMachine {
         Self {
             state: BlockState::Idle,
             alt_screen: false,
+            at_input_prompt: false,
             records: Vec::new(),
             current_output: Vec::new(),
             latest_cwd: None,
@@ -195,13 +203,25 @@ impl BlockMachine {
         match event {
             VtEvent::AltScreenEntered => {
                 self.alt_screen = true;
+                // A full-screen program took over — anything it prints belongs
+                // to xterm, not the prompt strip.
+                self.at_input_prompt = false;
                 vec![PtyEvent::AltScreenChanged { active: true }]
             }
             VtEvent::AltScreenLeft => {
                 self.alt_screen = false;
+                // The next prompt's A/B will re-establish the input window;
+                // until then we are *not* taking input bytes.
+                self.at_input_prompt = false;
                 vec![PtyEvent::AltScreenChanged { active: false }]
             }
             VtEvent::PromptStart { cwd, git_branch } => {
+                // PS1 rendering is about to start. Whatever bytes follow up
+                // to the next OSC 133 B are the shell drawing its prompt —
+                // not user input. The PromptStrip must not show those, so
+                // we clear the input-window flag here and only re-arm it on
+                // PromptEnd.
+                self.at_input_prompt = false;
                 // Stash the latest values so the next OSC 133 C can attach them
                 // to its block. A bare `A` clears any stale prior values so we
                 // never carry one shell's cwd into another shell's block.
@@ -209,13 +229,26 @@ impl BlockMachine {
                 self.latest_git_branch = git_branch;
                 vec![]
             }
-            VtEvent::PromptEnd => vec![],
-            VtEvent::CommandStart { command } => self.on_command_start(command),
+            VtEvent::PromptEnd => {
+                // PS1 is done; the shell is now waiting for input. Bytes that
+                // arrive from here until the next OSC 133 C are the user's
+                // typing echoed by the shell — that's what the PromptStrip
+                // wants to mirror.
+                self.at_input_prompt = true;
+                vec![]
+            }
+            VtEvent::CommandStart { command } => {
+                self.at_input_prompt = false;
+                self.on_command_start(command)
+            }
             VtEvent::CommandFinished {
                 exit_code,
                 cwd,
                 git_branch,
-            } => self.on_command_finished(exit_code, cwd, git_branch),
+            } => {
+                self.at_input_prompt = false;
+                self.on_command_finished(exit_code, cwd, git_branch)
+            }
         }
     }
 
@@ -234,6 +267,14 @@ impl BlockMachine {
             BlockState::Running { id, .. } => Some(id),
             BlockState::Idle => None,
         }
+    }
+
+    /// True between OSC 133 B and the next OSC 133 C — the window in which
+    /// output bytes are the user's typing echoed by the shell, not PS1
+    /// rendering or command output. The reader thread uses this to gate
+    /// `PromptChunk` so the strip only mirrors user input.
+    pub fn at_input_prompt(&self) -> bool {
+        self.at_input_prompt
     }
 
     /// Drain finished blocks' captured output into the supplied map, leaving
@@ -889,5 +930,70 @@ mod tests {
             git_branch: None,
         });
         assert!(machine.current_block_id().is_none());
+    }
+
+    #[test]
+    fn at_input_prompt_only_between_b_and_next_c() {
+        let mut machine = BlockMachine::new();
+        // Before any OSC events: not at an input prompt.
+        assert!(!machine.at_input_prompt());
+
+        // A starts the prompt-rendering window — PS1 is being drawn, the
+        // user can not yet type. Strip must not echo these bytes.
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        assert!(!machine.at_input_prompt());
+
+        // B closes the prompt-rendering window — the shell is now waiting
+        // for input. Anything that arrives until the next C is the user's
+        // typing echo.
+        machine.handle_vt_event(VtEvent::PromptEnd);
+        assert!(machine.at_input_prompt());
+
+        // C means the user pressed Enter and a command started — back to
+        // running-command bytes (which become BlockChunk, not PromptChunk).
+        machine.handle_vt_event(VtEvent::CommandStart { command: None });
+        assert!(!machine.at_input_prompt());
+
+        // D closes the block; we're between commands again. Until the next
+        // A → B sequence, we are not at an input prompt.
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
+        assert!(!machine.at_input_prompt());
+
+        // Next prompt cycle re-arms the flag.
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        assert!(!machine.at_input_prompt());
+        machine.handle_vt_event(VtEvent::PromptEnd);
+        assert!(machine.at_input_prompt());
+    }
+
+    #[test]
+    fn at_input_prompt_clears_when_alt_screen_takes_over() {
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::PromptEnd);
+        assert!(machine.at_input_prompt());
+
+        // vim / less / top take the alt screen — their output is xterm's
+        // territory now, not the strip's.
+        machine.handle_vt_event(VtEvent::AltScreenEntered);
+        assert!(!machine.at_input_prompt());
+
+        // Leaving alt screen doesn't auto-arm the flag — the shell needs
+        // to emit a fresh B before we treat bytes as user input again.
+        machine.handle_vt_event(VtEvent::AltScreenLeft);
+        assert!(!machine.at_input_prompt());
     }
 }

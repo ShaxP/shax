@@ -54,9 +54,8 @@ export function BlockList({
       ref={scrollRef}
       data-testid="block-list"
       style={{
-        width: 360,
-        flexShrink: 0,
-        borderLeft: "1px solid var(--border)",
+        flex: 1,
+        minWidth: 0,
         background: "var(--pane2)",
         overflowY: "auto",
         color: "var(--fg)",

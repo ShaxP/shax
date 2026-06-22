@@ -11,13 +11,23 @@ _shax_osc() { printf '\033]133;%s\007' "$1" }
 # `base64` builds insert.
 _shax_b64() { printf '%s' "$1" | base64 | tr -d '\n' }
 
-# Emit D (previous exit), A (prompt start with cwd + branch), B (command
-# input start) in precmd.
+# Emit D (previous exit) and A (prompt start with cwd + branch) in precmd,
+# then ensure B (command input start) is appended to PROMPT so it lands at
+# the END of PS1 rendering rather than the start.
 #
-# We emit B here (not via a PS1 append) because themes like oh-my-zsh and
-# powerlevel10k rebuild PROMPT on every precmd, which would drop a PS1-appended
-# escape. For our block state machine the precise placement of B is not
-# important — only C and D are consumed.
+# Why B-in-PROMPT instead of B-in-precmd: M1.9's PromptStrip needs to
+# distinguish PS1 rendering from user-typing echo. PS1 bytes arrive between
+# OSC 133 A and B; user-typing bytes arrive between B and the next C. If B
+# fires in precmd (before zsh prints PROMPT), every byte of PS1 — including
+# customisations like clock icons and hostnames — flows into the strip's
+# input stream. Appending B to PROMPT makes it the very last thing PS1
+# renders, so anything after B is purely the user's typing.
+#
+# Themes like oh-my-zsh and powerlevel10k rebuild PROMPT on every precmd.
+# We re-append our marker idempotently here so the theme can't drop it.
+# Our precmd hook registers via add-zsh-hook *after* the user's zshrc has
+# sourced their theme, so we run last in the hook chain and the marker is
+# preserved through the next prompt render.
 _shax_precmd() {
   # Capture $? before any subsequent command can stomp on it.
   local _shax_last_exit=$?
@@ -38,7 +48,14 @@ _shax_precmd() {
   printf '\033]133;D;%s;cwd=%s;branch=%s\007' \
     "$_shax_last_exit" "$_shax_cwd_b64" "$_shax_branch_b64"
   printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
-  _shax_osc "B"
+
+  # Append B to PROMPT (idempotent — skip if already present). The `%{...%}`
+  # tells zsh the wrapped escape is zero-width so column calculations stay
+  # correct. If PROMPT was rebuilt by the user's theme this precmd cycle,
+  # the marker is missing and we add it back.
+  if [[ "$PROMPT" != *$'\e]133;B\a'* ]]; then
+    PROMPT="${PROMPT}"$'%{\e]133;B\a%}'
+  fi
 }
 
 _shax_preexec() {
