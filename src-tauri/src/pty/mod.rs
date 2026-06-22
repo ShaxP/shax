@@ -109,6 +109,19 @@ pub enum PtyEvent {
         cwd: Option<String>,
         git_branch: Option<String>,
     },
+    /// A chunk of raw output bytes scoped to the currently-running block.
+    ///
+    /// Emitted alongside `Output` whenever VT-parsed bytes arrive while a
+    /// block is in the Running state. `Output` keeps flowing to xterm.js as
+    /// before (so alt-screen passthrough remains exact); `BlockChunk` lets
+    /// the frontend render the same bytes inline in the block stack without
+    /// waiting for `BlockCompleted` and an IPC fetch round-trip.
+    ///
+    /// `data` is base64-encoded so the bytes survive the JSON channel
+    /// unchanged. Cumulative size per block is capped at `OUTPUT_CAP_BYTES`
+    /// by the BlockMachine; anything beyond is dropped on the backend, the
+    /// same as the captured-output buffer.
+    BlockChunk { block_id: BlockId, data: String },
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────
@@ -453,7 +466,25 @@ fn spawn_reader_task(
                     for msg in messages {
                         match msg {
                             VtMessage::Output(bytes) => {
+                                // Capture for the block record (in-memory + DB
+                                // on completion). Also forward to the frontend
+                                // scoped to the active block so the running
+                                // row can render output as it streams, without
+                                // waiting for completion and an IPC fetch.
                                 machine.push_output(&bytes);
+                                if let Some(block_id) = machine.current_block_id() {
+                                    let encoded = B64.encode(&bytes);
+                                    if on_event
+                                        .send(PtyEvent::BlockChunk {
+                                            block_id,
+                                            data: encoded,
+                                        })
+                                        .is_err()
+                                    {
+                                        send_failed = true;
+                                        break;
+                                    }
+                                }
                             }
                             VtMessage::Event(ev) => {
                                 for pty_ev in machine.handle_vt_event(ev) {
@@ -1596,6 +1627,70 @@ mod tests {
         assert!(
             s.contains("BODYMARKER"),
             "expected captured output of the clean block to contain BODYMARKER, got {s:?}"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// While a block is running, each chunk of VT-parsed output must be
+    /// re-emitted as a `BlockChunk` event scoped to that block. Concatenated,
+    /// the chunks for one block must reconstruct the body bytes between C
+    /// and D. This is the contract the frontend's inline-output rendering
+    /// relies on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn block_chunks_carry_output_bytes_while_running() {
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        let opts = SpawnOpts {
+            rows: 24,
+            cols: 80,
+            cwd: None,
+            env: None,
+        };
+
+        let id = manager.spawn(opts, channel).await.expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        while rx.try_recv().is_ok() {}
+
+        let line = b"printf '\\033]133;C;inner\\007CHUNKMARKER\\n\\033]133;D;0\\007'\n";
+        manager.write(id, &B64.encode(line)).await.expect("write");
+
+        // Collect BlockChunk events keyed by block_id and the BlockCompleted
+        // event for the inner block — that's the one whose chunks must
+        // reconstruct CHUNKMARKER.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut chunks: HashMap<BlockId, Vec<u8>> = HashMap::new();
+        let mut clean_block: Option<BlockId> = None;
+        while tokio::time::Instant::now() < deadline && clean_block.is_none() {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockChunk { block_id, data })) => {
+                    let decoded = B64.decode(&data).unwrap_or_default();
+                    chunks.entry(block_id).or_default().extend(decoded);
+                }
+                Ok(Some(PtyEvent::BlockCompleted {
+                    block_id,
+                    aborted: false,
+                    ..
+                })) => clean_block = Some(block_id),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        let block_id = clean_block.expect("expected a clean BlockCompleted event");
+        let body = chunks
+            .remove(&block_id)
+            .expect("expected at least one BlockChunk scoped to the clean block");
+        let s = String::from_utf8_lossy(&body);
+        assert!(
+            s.contains("CHUNKMARKER"),
+            "expected concatenated BlockChunk bytes to contain CHUNKMARKER, got {s:?}"
         );
 
         manager.kill(id).await.expect("kill");

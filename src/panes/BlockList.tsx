@@ -11,13 +11,22 @@
  */
 
 import { useLayoutEffect, useRef } from "react";
-import type { BlockSummary, PtyId } from "../lib/ipc";
+import type { BlockId, BlockSummary, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
 
 export interface BlockListProps {
   pty: PtyId | null;
   blocks: BlockSummary[];
+  /**
+   * Live-streamed output bytes per block, accumulated from `block_chunk`
+   * events. The block row uses this for inline rendering of running and
+   * recently-completed blocks; older blocks (seeded from disk) fall back
+   * to fetching via `getOutput` on expand.
+   *
+   * Defaults to an empty map so callers (mostly tests) need not provide it.
+   */
+  liveOutputs?: Map<BlockId, Uint8Array>;
   /** Injected for tests; defaults to the real IPC client. */
   getOutput?: (pty: PtyId, blockId: string) => Promise<Uint8Array>;
 }
@@ -25,6 +34,7 @@ export interface BlockListProps {
 export function BlockList({
   pty,
   blocks,
+  liveOutputs,
   getOutput = getBlockOutput,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
@@ -82,7 +92,13 @@ export function BlockList({
         // always have a pty id, so the non-null assertion is sound.
         blocks.map((block) =>
           pty === null ? null : (
-            <BlockRow key={block.id} pty={pty} block={block} getOutput={getOutput} />
+            <BlockRow
+              key={block.id}
+              pty={pty}
+              block={block}
+              liveOutput={liveOutputs?.get(block.id)}
+              getOutput={getOutput}
+            />
           ),
         )
       )}

@@ -146,7 +146,7 @@ describe("BlockRow / expand", () => {
     expect(screen.getByTestId("block-output")).toHaveTextContent("captured bytes");
   });
 
-  it("does not fetch or expand while the block is running", () => {
+  it("does not fetch from IPC for a running block — its bytes stream in via liveOutput", () => {
     const getOutput = vi.fn();
     render(
       <BlockRow
@@ -157,7 +157,42 @@ describe("BlockRow / expand", () => {
     );
     fireEvent.click(screen.getByTestId("block-header"));
     expect(getOutput).not.toHaveBeenCalled();
+  });
+});
+
+describe("BlockRow / live output", () => {
+  it("renders the liveOutput buffer inline for running blocks", () => {
+    const live = new TextEncoder().encode("streaming…");
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: null, ended_at_ms: null, duration_ms: null })}
+        liveOutput={live}
+      />,
+    );
+    expect(screen.getByTestId("block-output")).toHaveTextContent("streaming…");
+  });
+
+  it("renders liveOutput inline by default for completed blocks (no IPC fetch)", () => {
+    const live = new TextEncoder().encode("cached bytes");
+    const getOutput = vi.fn();
+    render(<BlockRow pty="pty-1" block={makeBlock()} liveOutput={live} getOutput={getOutput} />);
+    // Completed block with live bytes is open by default — output shown
+    // immediately, no IPC round-trip.
+    expect(screen.getByTestId("block-output")).toHaveTextContent("cached bytes");
+    expect(getOutput).not.toHaveBeenCalled();
+  });
+
+  it("lets the user collapse a completed block with live bytes by clicking the header", () => {
+    const live = new TextEncoder().encode("cached bytes");
+    render(<BlockRow pty="pty-1" block={makeBlock()} liveOutput={live} />);
+    expect(screen.getByTestId("block-output")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("block-header"));
     expect(screen.queryByTestId("block-output")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("block-header"));
+    expect(screen.getByTestId("block-output")).toHaveTextContent("cached bytes");
   });
 });
 

@@ -134,6 +134,14 @@ export function TerminalPane(): React.ReactElement {
           });
           break;
 
+        case "block_chunk":
+          dispatch({
+            type: "block_chunk",
+            id: event.block_id,
+            bytes: base64Decode(event.data),
+          });
+          break;
+
         case "exit":
           // Handled by the shell's own output for now; block teardown in slice 4.
           break;
@@ -232,7 +240,7 @@ export function TerminalPane(): React.ReactElement {
             </div>
           )}
         </div>
-        <BlockList pty={ptyId} blocks={blockState.blocks} />
+        <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
       </div>
       <Statusline cwd={cwd} branch={branch} />
     </div>

@@ -13,6 +13,17 @@ export interface BlockState {
   blocks: BlockSummary[];
   /** True while a program holds the alternate screen buffer. */
   altScreen: boolean;
+  /**
+   * Captured output bytes per block, accumulated from `block_chunk` events
+   * as a command streams. The map is rebuilt on every chunk so the reducer
+   * stays pure; entries for unchanged blocks keep their existing Uint8Array
+   * reference, so React.memo'd BlockRows that read this map skip re-render
+   * when an unrelated block streams.
+   *
+   * Capped on the backend at OUTPUT_CAP_BYTES, so the per-block size is
+   * bounded; total memory is bounded by the number of in-session blocks.
+   */
+  liveOutputs: Map<BlockId, Uint8Array>;
 }
 
 export type BlockAction =
@@ -36,11 +47,13 @@ export type BlockAction =
       cwd: string | null;
       git_branch: string | null;
     }
-  | { type: "alt_screen"; active: boolean };
+  | { type: "alt_screen"; active: boolean }
+  | { type: "block_chunk"; id: BlockId; bytes: Uint8Array };
 
 export const initialBlockState: BlockState = {
   blocks: [],
   altScreen: false,
+  liveOutputs: new Map(),
 };
 
 /**
@@ -106,5 +119,25 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
 
     case "alt_screen":
       return { ...state, altScreen: action.active };
+
+    case "block_chunk": {
+      // Append the new bytes to the existing buffer for this block, if any.
+      // The map is replaced (new reference), but only the changed slot gets a
+      // new Uint8Array; unchanged blocks' arrays keep the same reference, so
+      // a React.memo'd BlockRow that reads this map skips re-render unless
+      // its own block id was the one that changed.
+      const prev = state.liveOutputs.get(action.id);
+      let next: Uint8Array;
+      if (prev === undefined) {
+        next = action.bytes;
+      } else {
+        next = new Uint8Array(prev.length + action.bytes.length);
+        next.set(prev, 0);
+        next.set(action.bytes, prev.length);
+      }
+      const liveOutputs = new Map(state.liveOutputs);
+      liveOutputs.set(action.id, next);
+      return { ...state, liveOutputs };
+    }
   }
 }
