@@ -12,17 +12,17 @@
  * `titleBarStyle: "Overlay"` (see `src-tauri/tauri.conf.json`), so the
  * native traffic lights float over the webview's top-left corner.
  *
- * The layout follows Chrome's unified-title-bar pattern: the active tab
- * pill is anchored to the top-left of the window with its top-left corner
- * un-rounded, so the traffic-light cluster floats over the tab's left
- * edge. To keep the tab's text and accent dot legible past the cluster,
- * the tab itself carries extra left-padding on macOS. On Windows and Linux
- * the native title bar sits above this row and no inset is needed.
+ * On macOS the row carries an extra left gutter so the tab pill sits
+ * clearly to the right of the traffic-light cluster instead of being
+ * overlapped by it. On Windows and Linux the native title bar sits above
+ * this row and no inset is needed.
  *
- * The row background is marked `-webkit-app-region: drag` so the user can
- * still drag the window from any empty area of the title bar; the active
- * tab and the toolbar icons opt back out with `no-drag` so they remain
- * clickable when we wire their behaviours up in later milestones.
+ * The row carries the `data-tauri-drag-region` attribute so the user can
+ * still drag the window from any empty area of the title bar (this is the
+ * Tauri 2 drag mechanism; the CSS `-webkit-app-region` only sets the cursor
+ * and does not actually drive window dragging in Wry). The active tab and
+ * the toolbar opt back out with `data-tauri-drag-region="false"` so they
+ * remain clickable when we wire their behaviours up in later milestones.
  *
  * The active tab pill draws its label from the live PTY's cwd (passed in by
  * the parent). When no cwd is known yet, the pill renders a neutral fallback
@@ -34,14 +34,6 @@
 
 import type { CSSProperties } from "react";
 
-// `-webkit-app-region` is a Chromium-only CSS property that the React types
-// don't include. Extend CSSProperties locally so the title bar can claim
-// drag (and its children can opt out) without an `any` cast.
-type DragRegion = "drag" | "no-drag";
-interface DraggableStyle extends CSSProperties {
-  WebkitAppRegion?: DragRegion;
-}
-
 const IS_MAC = ((): boolean => {
   if (typeof navigator === "undefined") return false;
   // jsdom and CI Linux Chromium do not contain "Mac"; real macOS Tauri
@@ -50,11 +42,6 @@ const IS_MAC = ((): boolean => {
   return /Mac|iPhone|iPad/i.test(navigator.userAgent);
 })();
 
-// Reserve space for the native traffic lights on macOS overlay title bars.
-// Default macOS button cluster is ~70px wide once you include the right-side
-// breathing room.
-const MAC_TRAFFIC_LIGHT_INSET = 78;
-
 export interface TitleBarProps {
   /** The current working directory of the active pane, if known. */
   cwd: string | null;
@@ -62,26 +49,22 @@ export interface TitleBarProps {
   tabLabel?: string;
 }
 
-const ROW: DraggableStyle = {
+const ROW: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
   height: 46,
   paddingTop: 0,
   paddingBottom: 0,
-  // Small gutter on macOS so the tab sits a touch right of the traffic
-  // lights instead of flush against the corner.
-  paddingLeft: IS_MAC ? 12 : 14,
+  // Gutter on macOS so the tab sits clearly to the right of the
+  // traffic-light cluster instead of being overlapped by it.
+  paddingLeft: IS_MAC ? 40 : 14,
   paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
   flexShrink: 0,
   fontFamily: "var(--font-ui)",
-  // Without `user-select: none` Webkit grabs the cursor for text
-  // selection before the drag region takes effect, and the user ends up
-  // selecting the tab label instead of moving the window.
   userSelect: "none",
-  WebkitAppRegion: "drag",
 };
 
 const TABS_ROW: CSSProperties = {
@@ -93,36 +76,18 @@ const TABS_ROW: CSSProperties = {
   minWidth: 0,
 };
 
-const ACTIVE_TAB: DraggableStyle = {
+const ACTIVE_TAB: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 9,
   height: 34,
-  // Inside-the-tab padding: on macOS the left side has to clear the
-  // floating traffic-light cluster (~78px from the window edge) so the
-  // accent dot and tab label are visible. The right side keeps the
-  // design's 14px breathing room everywhere.
-  paddingTop: 0,
-  paddingBottom: 0,
-  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
-  paddingRight: 14,
+  padding: "0 14px",
   background: "var(--pane)",
   border: "1px solid var(--border)",
   borderBottom: "1px solid var(--pane)",
-  // Anchor flush to the top-left corner on macOS (no top-left rounding)
-  // so the tab visually extends behind the traffic lights — Chrome's
-  // unified-title-bar look. Other platforms keep the symmetric pill.
-  borderTopLeftRadius: IS_MAC ? 0 : 8,
-  borderTopRightRadius: 8,
-  borderBottomLeftRadius: 0,
-  borderBottomRightRadius: 0,
-  // On macOS strip the left border too — there is nothing to separate from.
-  borderLeftWidth: IS_MAC ? 0 : 1,
+  borderRadius: "8px 8px 0 0",
   marginBottom: -1,
-  // Account for the traffic-light width when capping the tab. Without
-  // this the path text would be truncated visibly earlier on macOS.
-  maxWidth: IS_MAC ? 320 + MAC_TRAFFIC_LIGHT_INSET : 320,
-  WebkitAppRegion: "no-drag",
+  maxWidth: 320,
 };
 
 const TAB_ACCENT_DOT: CSSProperties = {
@@ -151,13 +116,12 @@ const TAB_PATH: CSSProperties = {
   minWidth: 0,
 };
 
-const TOOLBAR: DraggableStyle = {
+const TOOLBAR: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 3,
   flexShrink: 0,
   color: "var(--fg-faint)",
-  WebkitAppRegion: "no-drag",
 };
 
 const ICON_BTN: CSSProperties = {
@@ -186,16 +150,16 @@ const SEARCH_PILL: CSSProperties = {
 
 export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.ReactElement {
   return (
-    <div data-testid="title-bar" style={ROW}>
+    <div data-testid="title-bar" data-tauri-drag-region="" style={ROW}>
       <div style={TABS_ROW}>
-        <div data-testid="active-tab" style={ACTIVE_TAB}>
+        <div data-testid="active-tab" data-tauri-drag-region="false" style={ACTIVE_TAB}>
           <span style={TAB_ACCENT_DOT} />
           <span style={TAB_NAME}>{tabLabel}</span>
           <span style={TAB_PATH}>{cwd ?? "—"}</span>
         </div>
       </div>
 
-      <div style={TOOLBAR} data-testid="title-toolbar">
+      <div style={TOOLBAR} data-testid="title-toolbar" data-tauri-drag-region="false">
         <span title="split vertical" style={ICON_BTN}>
           ⧉
         </span>
