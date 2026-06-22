@@ -3,7 +3,8 @@
  *
  * Renders running / ok / fail / aborted states and verifies the expand-on-click
  * behaviour: a completed block fetches its output exactly once, and a running
- * block is not expandable.
+ * block is not expandable. Also covers the M1.5 anatomy: status-coded left
+ * edge, hover action row presence, FMT/RAW pill scaffold, and copy-on-click.
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -36,13 +37,13 @@ describe("BlockRow / status rendering", () => {
     expect(screen.getByTestId("block-row")).toHaveAttribute("data-status", "ok");
   });
 
-  it("renders ✗ with the exit code for non-zero", () => {
+  it("renders ✗ exit N for a non-zero exit", () => {
     render(<BlockRow pty="pty-1" block={makeBlock({ exit_code: 127 })} />);
-    expect(screen.getByTestId("block-status")).toHaveTextContent("✗ 127");
+    expect(screen.getByTestId("block-status")).toHaveTextContent("✗ exit 127");
     expect(screen.getByTestId("block-row")).toHaveAttribute("data-status", "fail");
   });
 
-  it("renders running state when exit_code is null and not aborted", () => {
+  it("renders spinner + running text when exit_code is null and not aborted", () => {
     render(
       <BlockRow
         pty="pty-1"
@@ -50,6 +51,7 @@ describe("BlockRow / status rendering", () => {
       />,
     );
     expect(screen.getByTestId("block-status")).toHaveTextContent("running");
+    expect(screen.getByTestId("block-spinner")).toBeInTheDocument();
     expect(screen.getByTestId("block-row")).toHaveAttribute("data-status", "running");
   });
 
@@ -65,10 +67,61 @@ describe("BlockRow / status rendering", () => {
     render(<BlockRow pty="pty-1" block={makeBlock({ command: null })} />);
     expect(screen.getByTestId("block-command")).toHaveTextContent("(no command)");
   });
+});
 
-  it("renders the RAW pill scaffold", () => {
+describe("BlockRow / anatomy", () => {
+  it("renders the status-coded left edge for completed blocks", () => {
     render(<BlockRow pty="pty-1" block={makeBlock()} />);
+    expect(screen.getByTestId("block-edge")).toBeInTheDocument();
+  });
+
+  it("renders the FMT/RAW pill group for completed blocks", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock()} />);
+    expect(screen.getByTestId("block-fmt-raw")).toBeInTheDocument();
     expect(screen.getByTestId("block-raw-pill")).toHaveTextContent("RAW");
+    expect(screen.getByTestId("block-fmt-pill")).toHaveTextContent("FMT");
+  });
+
+  it("hides the FMT/RAW pill while the block is still running", () => {
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: null, ended_at_ms: null, duration_ms: null })}
+      />,
+    );
+    expect(screen.queryByTestId("block-fmt-raw")).toBeNull();
+  });
+
+  it("renders the hover action row", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock()} />);
+    expect(screen.getByTestId("block-actions")).toBeInTheDocument();
+  });
+});
+
+describe("BlockRow / copy action", () => {
+  it("writes the block's command to the clipboard when copy is clicked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: "echo hi" })} />);
+    const actions = screen.getByTestId("block-actions");
+    const copy = actions.querySelector('[title="copy"]') as HTMLElement;
+    fireEvent.click(copy);
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("echo hi");
+    });
+  });
+
+  it("does nothing if the command is unknown", () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: null })} />);
+    const actions = screen.getByTestId("block-actions");
+    const copy = actions.querySelector('[title="copy"]') as HTMLElement;
+    fireEvent.click(copy);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 
@@ -78,17 +131,17 @@ describe("BlockRow / expand", () => {
     render(<BlockRow pty="pty-1" block={makeBlock()} getOutput={getOutput} />);
 
     // First click expands and fetches.
-    fireEvent.click(screen.getByTestId("block-row").firstChild as Element);
+    fireEvent.click(screen.getByTestId("block-header"));
     await vi.waitFor(() => {
       expect(getOutput).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId("block-output")).toHaveTextContent("captured bytes");
     });
 
     // Collapse, then re-expand — must not refetch.
-    fireEvent.click(screen.getByTestId("block-row").firstChild as Element);
+    fireEvent.click(screen.getByTestId("block-header"));
     expect(screen.queryByTestId("block-output")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("block-row").firstChild as Element);
+    fireEvent.click(screen.getByTestId("block-header"));
     expect(getOutput).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("block-output")).toHaveTextContent("captured bytes");
   });
@@ -102,7 +155,7 @@ describe("BlockRow / expand", () => {
         getOutput={getOutput}
       />,
     );
-    fireEvent.click(screen.getByTestId("block-row").firstChild as Element);
+    fireEvent.click(screen.getByTestId("block-header"));
     expect(getOutput).not.toHaveBeenCalled();
     expect(screen.queryByTestId("block-output")).toBeNull();
   });
