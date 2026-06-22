@@ -139,10 +139,11 @@ describe("TerminalPane", () => {
     expect(screen.getByTestId("block-list-empty")).toBeInTheDocument();
   });
 
-  it("wraps the pane in the M1.5 chrome (title bar + pane area + statusline)", () => {
+  it("wraps the pane in the M1.5 chrome (title bar + pane area + prompt strip + statusline)", () => {
     render(<TerminalPane />);
     expect(screen.getByTestId("title-bar")).toBeInTheDocument();
     expect(screen.getByTestId("pane-area")).toBeInTheDocument();
+    expect(screen.getByTestId("prompt-strip")).toBeInTheDocument();
     expect(screen.getByTestId("statusline")).toBeInTheDocument();
   });
 

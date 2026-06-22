@@ -32,6 +32,7 @@ import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
 import { TitleBar } from "./TitleBar";
 import { Statusline } from "./Statusline";
+import { PromptStrip } from "./PromptStrip";
 
 const RESIZE_DEBOUNCE_MS = 50;
 
@@ -142,6 +143,13 @@ export function TerminalPane(): React.ReactElement {
           });
           break;
 
+        case "prompt_chunk":
+          dispatch({
+            type: "prompt_chunk",
+            bytes: base64Decode(event.data),
+          });
+          break;
+
         case "exit":
           // Handled by the shell's own output for now; block teardown in slice 4.
           break;
@@ -242,6 +250,7 @@ export function TerminalPane(): React.ReactElement {
         </div>
         <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
       </div>
+      <PromptStrip cwd={cwd} branch={branch} line={blockState.promptLine} />
       <Statusline cwd={cwd} branch={branch} />
     </div>
   );

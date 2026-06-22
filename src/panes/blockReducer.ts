@@ -7,6 +7,8 @@
  */
 
 import type { BlockId, BlockSummary } from "../lib/ipc";
+import type { PromptLine } from "./promptRenderer";
+import { emptyPromptLine, feed as feedPromptRenderer } from "./promptRenderer";
 
 export interface BlockState {
   /** Blocks in chronological order. */
@@ -24,6 +26,13 @@ export interface BlockState {
    * bounded; total memory is bounded by the number of in-session blocks.
    */
   liveOutputs: Map<BlockId, Uint8Array>;
+  /**
+   * The current shell prompt line as it last appeared. Updated by feeding
+   * `prompt_chunk` bytes through the tiny VT renderer. Cleared whenever a
+   * new block starts (the prompt's text becomes the command title from
+   * that point onward, not the strip).
+   */
+  promptLine: PromptLine;
 }
 
 export type BlockAction =
@@ -48,12 +57,14 @@ export type BlockAction =
       git_branch: string | null;
     }
   | { type: "alt_screen"; active: boolean }
-  | { type: "block_chunk"; id: BlockId; bytes: Uint8Array };
+  | { type: "block_chunk"; id: BlockId; bytes: Uint8Array }
+  | { type: "prompt_chunk"; bytes: Uint8Array };
 
 export const initialBlockState: BlockState = {
   blocks: [],
   altScreen: false,
   liveOutputs: new Map(),
+  promptLine: emptyPromptLine,
 };
 
 /**
@@ -72,8 +83,12 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       return { ...state, blocks: action.blocks };
 
     case "started":
+      // A new command just started — the prompt the user was typing into is
+      // no longer "current"; reset the strip so it doesn't show the last
+      // command after Enter has been pressed.
       return {
         ...state,
+        promptLine: emptyPromptLine,
         blocks: [
           ...state.blocks,
           {
@@ -139,5 +154,8 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       liveOutputs.set(action.id, next);
       return { ...state, liveOutputs };
     }
+
+    case "prompt_chunk":
+      return { ...state, promptLine: feedPromptRenderer(state.promptLine, action.bytes) };
   }
 }

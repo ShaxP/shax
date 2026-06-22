@@ -67,6 +67,18 @@ export type PtyEvent =
       block_id: BlockId;
       /** Base64-encoded bytes. */
       data: string;
+    }
+  | {
+      /**
+       * A chunk of raw bytes that arrived while the shell is at a prompt —
+       * between OSC 133 D (or session start) and the next OSC 133 C.
+       * These are the shell's PS1 rendering plus the local echo of the
+       * user's typing. The M1.9 PromptStrip feeds them through a tiny
+       * single-line VT renderer to mirror the shell's current prompt line.
+       */
+      kind: "prompt_chunk";
+      /** Base64-encoded bytes. */
+      data: string;
     };
 
 /**

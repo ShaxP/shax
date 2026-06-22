@@ -122,6 +122,16 @@ pub enum PtyEvent {
     /// by the BlockMachine; anything beyond is dropped on the backend, the
     /// same as the captured-output buffer.
     BlockChunk { block_id: BlockId, data: String },
+    /// A chunk of raw bytes that arrived while the shell is at a prompt —
+    /// between OSC 133 D (or session start) and the next OSC 133 C.
+    ///
+    /// These are the bytes the shell prints to render PS1, plus the local
+    /// echo of whatever the user is typing before they press Enter. The
+    /// M1.9 PromptStrip feeds them through a tiny single-line VT renderer
+    /// to mirror what the shell is rendering on its current prompt line.
+    /// The raw `Output` event continues to flow to xterm.js unchanged so
+    /// non-shell-integrated programs and alt-screen passthrough still work.
+    PromptChunk { data: String },
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────
@@ -472,18 +482,21 @@ fn spawn_reader_task(
                                 // row can render output as it streams, without
                                 // waiting for completion and an IPC fetch.
                                 machine.push_output(&bytes);
-                                if let Some(block_id) = machine.current_block_id() {
-                                    let encoded = B64.encode(&bytes);
-                                    if on_event
-                                        .send(PtyEvent::BlockChunk {
-                                            block_id,
-                                            data: encoded,
-                                        })
-                                        .is_err()
-                                    {
-                                        send_failed = true;
-                                        break;
+                                let encoded = B64.encode(&bytes);
+                                let scoped = if let Some(block_id) = machine.current_block_id() {
+                                    PtyEvent::BlockChunk {
+                                        block_id,
+                                        data: encoded,
                                     }
+                                } else {
+                                    // Bytes outside any block belong to the
+                                    // prompt area — the shell drawing PS1 and
+                                    // echoing the user's typing before C.
+                                    PtyEvent::PromptChunk { data: encoded }
+                                };
+                                if on_event.send(scoped).is_err() {
+                                    send_failed = true;
+                                    break;
                                 }
                             }
                             VtMessage::Event(ev) => {
@@ -1693,6 +1706,83 @@ mod tests {
             "expected concatenated BlockChunk bytes to contain CHUNKMARKER, got {s:?}"
         );
 
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// Bytes that arrive while the BlockMachine is Idle — between OSC 133
+    /// D and the next C — must be re-emitted as `PromptChunk` events, not
+    /// `BlockChunk`. This is the contract the M1.9 PromptStrip relies on
+    /// to mirror the shell's PS1 + the user's typing echo.
+    ///
+    /// We probe this by typing characters at the prompt *without* pressing
+    /// Enter: the shell echoes them locally during the Idle state, and
+    /// nothing kicks off a new C/D pair. The echoed bytes must arrive as
+    /// PromptChunks.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_chunks_carry_typing_echo_at_the_prompt() {
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        let opts = SpawnOpts {
+            rows: 24,
+            cols: 80,
+            cwd: None,
+            env: None,
+        };
+
+        let id = manager.spawn(opts, channel).await.expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        while rx.try_recv().is_ok() {}
+
+        // No newline — the shell will echo these locally but never run
+        // anything, so no OSC 133 C fires and the state stays Idle.
+        manager
+            .write(id, &B64.encode(b"PROMPTPROBE"))
+            .await
+            .expect("write");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut prompt_bytes: Vec<u8> = Vec::new();
+        let mut block_bytes: Vec<u8> = Vec::new();
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::PromptChunk { data })) => {
+                    prompt_bytes.extend(B64.decode(&data).unwrap_or_default());
+                    if String::from_utf8_lossy(&prompt_bytes).contains("PROMPTPROBE") {
+                        break;
+                    }
+                }
+                Ok(Some(PtyEvent::BlockChunk { data, .. })) => {
+                    block_bytes.extend(B64.decode(&data).unwrap_or_default());
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        let prompt_s = String::from_utf8_lossy(&prompt_bytes);
+        assert!(
+            prompt_s.contains("PROMPTPROBE"),
+            "expected PromptChunk bytes to carry the shell's echo of typed input, got {prompt_s:?}"
+        );
+        let block_s = String::from_utf8_lossy(&block_bytes);
+        assert!(
+            !block_s.contains("PROMPTPROBE"),
+            "typed echo must not leak into BlockChunk while no command is running, got {block_s:?}"
+        );
+
+        // Cancel the half-typed line so the shell goes back to a clean state
+        // before teardown (avoids the next test inheriting buffered input
+        // via the manager's process-global state).
+        manager
+            .write(id, &B64.encode(b"\x03"))
+            .await
+            .expect("write");
         manager.kill(id).await.expect("kill");
     }
 }
