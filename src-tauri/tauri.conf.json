@@ -10,15 +10,13 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Shax",
         "width": 800,
         "height": 600,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 13 }
+        "hiddenTitle": true
       }
     ],
     "security": {
