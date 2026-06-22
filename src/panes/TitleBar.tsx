@@ -6,10 +6,23 @@
  * M1.5; behaviour (real tabs, split panes, search overlay, assistant
  * invocation) lands in M2 / M3 / M6 as those milestones come up.
  *
- * Traffic lights from the design mock are intentionally NOT painted here:
- * Tauri uses native window decorations, so macOS and Windows already render
- * their own close/minimise/zoom controls in the window frame, and redrawing
- * them in the client area would be a confusing duplicate.
+ * Traffic lights are NOT painted here: Tauri uses native window decorations
+ * on every platform, so macOS and Windows already render their own
+ * close/minimise/zoom controls. On macOS the Tauri config opts into
+ * `titleBarStyle: "Overlay"` (see `src-tauri/tauri.conf.json`), so the
+ * native traffic lights float over the webview's top-left corner.
+ *
+ * On macOS the row carries an extra left gutter so the tab pill sits
+ * clearly to the right of the traffic-light cluster instead of being
+ * overlapped by it. On Windows and Linux the native title bar sits above
+ * this row and no inset is needed.
+ *
+ * Window dragging is wired via an explicit `onMouseDown` handler that calls
+ * `getCurrentWindow().startDragging()` from the Tauri API. We keep the
+ * `data-tauri-drag-region` attribute on the row and `="false"` on the
+ * active tab and toolbar so any Tauri-injected drag script also picks up
+ * the right targets, but the explicit handler is the load-bearing path and
+ * is what the user-visible drag-to-move behaviour relies on.
  *
  * The active tab pill draws its label from the live PTY's cwd (passed in by
  * the parent). When no cwd is known yet, the pill renders a neutral fallback
@@ -19,7 +32,21 @@
  * tokens from `src/theme/tokens.css`.
  */
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+const IS_MAC = ((): boolean => {
+  if (typeof navigator === "undefined") return false;
+  // jsdom and CI Linux Chromium do not contain "Mac"; real macOS Tauri
+  // webviews and Chromium-on-mac both do. This is enough to gate the
+  // overlay padding without pulling in a Tauri-only OS plugin.
+  return /Mac|iPhone|iPad/i.test(navigator.userAgent);
+})();
+
+// Reserve space for the native traffic lights on macOS overlay title bars.
+// Default macOS button cluster is ~70px wide; 78 gives a small extra gap
+// so the first tab does not crowd the close button.
+const MAC_TRAFFIC_LIGHT_INSET = 78;
 
 export interface TitleBarProps {
   /** The current working directory of the active pane, if known. */
@@ -32,12 +59,20 @@ const ROW: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
-  height: 46,
-  padding: "0 14px",
+  // Tighter than the design's 46px so the tab pill rides closer to the
+  // top of the window — leaves a small (~4px) gap above the tab.
+  height: 38,
+  paddingTop: 0,
+  paddingBottom: 0,
+  // Reserve the traffic-light area on macOS so the tab pill starts past
+  // the close/minimise/zoom cluster instead of being overlapped by it.
+  paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
+  paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
   flexShrink: 0,
   fontFamily: "var(--font-ui)",
+  userSelect: "none",
 };
 
 const TABS_ROW: CSSProperties = {
@@ -121,18 +156,40 @@ const SEARCH_PILL: CSSProperties = {
   cursor: "default",
 };
 
+function isInsideTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function handleTitleBarMouseDown(e: ReactMouseEvent<HTMLDivElement>): void {
+  // Only left-button drags should move the window. Right/middle clicks
+  // are reserved for context menus and pane actions we will wire later.
+  if (e.button !== 0) return;
+  // Children explicitly opt out by being inside an element with the
+  // no-drag marker. Lets the tab and toolbar take their own clicks.
+  if (e.target instanceof HTMLElement) {
+    if (e.target.closest('[data-tauri-drag-region="false"]') !== null) return;
+  }
+  if (!isInsideTauri()) return;
+  void getCurrentWindow().startDragging();
+}
+
 export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.ReactElement {
   return (
-    <div data-testid="title-bar" style={ROW}>
+    <div
+      data-testid="title-bar"
+      data-tauri-drag-region=""
+      style={ROW}
+      onMouseDown={handleTitleBarMouseDown}
+    >
       <div style={TABS_ROW}>
-        <div data-testid="active-tab" style={ACTIVE_TAB}>
+        <div data-testid="active-tab" data-tauri-drag-region="false" style={ACTIVE_TAB}>
           <span style={TAB_ACCENT_DOT} />
           <span style={TAB_NAME}>{tabLabel}</span>
           <span style={TAB_PATH}>{cwd ?? "—"}</span>
         </div>
       </div>
 
-      <div style={TOOLBAR} data-testid="title-toolbar">
+      <div style={TOOLBAR} data-testid="title-toolbar" data-tauri-drag-region="false">
         <span title="split vertical" style={ICON_BTN}>
           ⧉
         </span>
