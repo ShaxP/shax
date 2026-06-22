@@ -69,14 +69,18 @@ const ROW: DraggableStyle = {
   height: 46,
   paddingTop: 0,
   paddingBottom: 0,
-  // No left padding on macOS — the tab pill anchors to the window's
-  // top-left corner and the traffic lights float over its left edge.
-  paddingLeft: IS_MAC ? 0 : 14,
+  // Small gutter on macOS so the tab sits a touch right of the traffic
+  // lights instead of flush against the corner.
+  paddingLeft: IS_MAC ? 12 : 14,
   paddingRight: 14,
   background: "var(--titlebar)",
   borderBottom: "1px solid var(--border)",
   flexShrink: 0,
   fontFamily: "var(--font-ui)",
+  // Without `user-select: none` Webkit grabs the cursor for text
+  // selection before the drag region takes effect, and the user ends up
+  // selecting the tab label instead of moving the window.
+  userSelect: "none",
   WebkitAppRegion: "drag",
 };
 
