@@ -58,7 +58,9 @@ const ROW: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
-  height: 46,
+  // Tighter than the design's 46px so the tab pill rides closer to the
+  // top of the window — leaves a small (~4px) gap above the tab.
+  height: 38,
   paddingTop: 0,
   paddingBottom: 0,
   // Reserve the traffic-light area on macOS so the tab pill starts past
