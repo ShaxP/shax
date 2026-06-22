@@ -103,9 +103,22 @@ export function TerminalPane(): React.ReactElement {
     // future slice will handle clean teardown.
     const handleEvent = (event: PtyEvent): void => {
       switch (event.kind) {
-        case "output":
-          terminal.write(base64Decode(event.data));
+        case "output": {
+          const bytes = base64Decode(event.data);
+          // DIAG (M1.9 1.9a): trace Output events so we can confirm they
+          // reach the handler with non-empty payloads. Remove once the
+          // xterm-not-echoing issue is diagnosed.
+          // eslint-disable-next-line no-console
+          console.log(
+            "[diag] output event, bytes=%d, first=%s",
+            bytes.length,
+            Array.from(bytes.slice(0, 16))
+              .map((b) => b.toString(16).padStart(2, "0"))
+              .join(" "),
+          );
+          terminal.write(bytes);
           break;
+        }
 
         case "alt_screen_changed":
           dispatch({ type: "alt_screen", active: event.active });
