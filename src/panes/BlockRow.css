@@ -1,0 +1,57 @@
+/*
+ * BlockRow animations and hover-driven affordances.
+ *
+ * Most BlockRow styles live inline (the visual stays in lockstep with the
+ * block's status, which changes per render). What lives here is the
+ * pieces that can't be expressed cleanly with React state alone:
+ *
+ *  - `@keyframes shax-edge`: pulse the left-edge bar while a command is
+ *    streaming, so the user can see at a glance that the block is alive.
+ *  - `@keyframes shax-spin`: rotate the running-indicator spinner.
+ *  - `.block-row-actions`: hover-revealed action row (copy / rerun /
+ *    share / ask shax). Off by default; opacity fades to 1 when the
+ *    parent `.block-row` is hovered. Pure CSS so we don't re-render the
+ *    row on every mouseenter/leave.
+ */
+
+@keyframes shax-edge {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes shax-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.block-row-edge-running {
+  animation: shax-edge 1.1s ease-in-out infinite;
+}
+
+.block-row-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: shax-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.block-row-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.13s ease;
+}
+
+.block-row:hover .block-row-actions {
+  opacity: 1;
+}
