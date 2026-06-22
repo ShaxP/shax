@@ -147,12 +147,21 @@ export function TerminalPane(): React.ReactElement {
           });
           break;
 
-        case "prompt_chunk":
-          dispatch({
-            type: "prompt_chunk",
-            bytes: base64Decode(event.data),
-          });
+        case "prompt_chunk": {
+          const bytes = base64Decode(event.data);
+          // DIAG (M1.9 1.9b): trace prompt-chunk bytes so we can see what
+          // zsh emits for ↑/↓ history nav and arrow keys. Remove once
+          // the renderer is verified against real shell output.
+          console.log(
+            "[diag] prompt_chunk bytes=%d hex=%s",
+            bytes.length,
+            Array.from(bytes)
+              .map((b) => b.toString(16).padStart(2, "0"))
+              .join(" "),
+          );
+          dispatch({ type: "prompt_chunk", bytes });
           break;
+        }
 
         case "exit":
           // Handled by the shell's own output for now; block teardown in
