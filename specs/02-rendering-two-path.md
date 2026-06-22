@@ -8,9 +8,11 @@ A terminal is a byte stream with ANSI escapes that a terminal engine turns into 
 
 ## Path one: raw passthrough (live and interactive)
 
-While a command is running, and any time a program switches to the alternate screen buffer (detected from `?1049h` and cleared on `?1049l`), the pane is pure xterm.js passthrough. No formatting, no icons, no exceptions. This covers vim, less, top, ssh sessions, REPLs, and anything mid-execution. This is non-negotiable: breaking it breaks interactivity.
+Whenever a program switches to the alternate screen buffer (detected from `?1049h` and cleared on `?1049l`), or whenever shell integration is absent so the backend cannot bound commands, the pane is pure xterm.js passthrough. No formatting, no icons, no exceptions. This covers vim, less, top, ssh sessions, REPLs, and anything else that owns its own input loop or the alternate screen. This is non-negotiable: breaking it breaks interactivity.
 
 ## Path two: the completed block (rich)
+
+A shell-integrated, non-alt-screen command is bounded by OSC 133 C and D. Its output bytes are still raw — no formatting runs while it is running — but they stream into the block, not into xterm. The visible scrollback in the resting state is the block stack; the xterm canvas is hidden until path one applies. When the command finishes, the block carries its full byte stream and can be promoted up the ladder below.
 
 When a non-interactive command finishes, the backend has its captured stdout and stderr plus the argv, cwd, exit code, and timing from OSC 133. That, and only that, is where formatting runs.
 

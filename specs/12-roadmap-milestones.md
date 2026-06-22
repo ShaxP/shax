@@ -26,6 +26,21 @@ Each milestone ends only when its exit criteria hold and the definition of done 
 
 **Exit:** run a session of commands and see correctly bounded blocks with exit codes and timing; vim and less and top work untouched; blocks persist across restart; raw fidelity is exact.
 
+## M1.5 Design alignment
+
+**Goal:** the resting state of a window matches `/design`. **Lead:** frontend.
+
+A small bridge milestone between M1 and M2. M1 proved the data model (blocks, OSC 133, persistence, multiple shells) but rendered the result as `xterm canvas + sidebar`. The design is block-first: the visible scrollback IS the block stack, the xterm canvas is reserved for path-one passthrough, and input lives in a dedicated prompt strip. Doing this realignment before M2 means the multiplexing UI (tabs, splits, statusline) extends real chrome instead of a placeholder.
+
+- Theme tokens in `src/theme/tokens.css` matching the design's CSS variable palette (dark only; light deferred to M7 polish). Inline hex colors removed from components.
+- Three-row window chrome: title and tab bar on top, pane area in the middle, statusline on the bottom. Tabs, toolbar icons, and statusline are visual-only at this stage — M2 wires their behaviour.
+- Block anatomy redrawn to the design: coloured 3px left edge, inline `FMT`/`RAW` segmented pill (RAW default; FMT inert until M4), hover-revealed action row (copy works; rerun/share/ask-shax inert until M5/M6), status iconography (❯ + check / × / spinner / amber).
+- The prompt strip owns input. A single-row component at the bottom of the pane captures keystrokes and forwards them to the PTY using the standard xterm keymap, and renders cwd and branch from the latest OSC 133 `A`.
+- The xterm canvas is hidden in the resting state and revealed only when the alternate screen activates (vim, less, top) or shell integration is absent. Output from a running shell-integrated command streams into its block, not into xterm.
+- A new `PtyEvent::BlockChunk { block_id, bytes }` event carries output bytes scoped to the currently-running block alongside the existing raw output stream that xterm continues to consume.
+
+**Exit:** the resting window matches the design (chrome, block stack, prompt strip); running a command shows its output stream into the block; vim and less and top still work untouched (alt-screen reveals xterm); existing M1 behaviour is fully preserved.
+
 ## M2 Native multiplexing
 
 **Goal:** panes, splits, tabs, and layout restore. **Lead:** core, with frontend.
