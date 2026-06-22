@@ -41,6 +41,14 @@ const TEXT_DECODER = new TextDecoder();
 export interface BlockRowProps {
   pty: PtyId;
   block: BlockSummary;
+  /**
+   * Live-streamed output bytes for this block, accumulated from
+   * `block_chunk` events. Always rendered inline while the block is
+   * running; reused as the expand cache for blocks that completed in this
+   * session. Absent for blocks seeded from disk on boot — those still
+   * fetch via `getOutput` on expand.
+   */
+  liveOutput?: Uint8Array;
   /** Injected for tests; defaults to the real IPC client. */
   getOutput?: (pty: PtyId, blockId: string) => Promise<Uint8Array>;
   /** Injected for tests; defaults to Date.now. */
@@ -200,11 +208,12 @@ const ACTION_ICON: CSSProperties = {
 function BlockRowInner({
   pty,
   block,
+  liveOutput,
   getOutput,
   now = Date.now,
 }: BlockRowProps): React.ReactElement {
   const [expanded, setExpanded] = useState<boolean>(false);
-  const [output, setOutput] = useState<string | null>(null);
+  const [fetchedOutput, setFetchedOutput] = useState<string | null>(null);
   const [fetched, setFetched] = useState<boolean>(false);
 
   const status = statusFor(block);
@@ -216,14 +225,21 @@ function BlockRowInner({
     ? Math.max(0, nowMs - block.started_at_ms)
     : block.duration_ms;
 
+  // Prefer the live-streamed bytes from the reducer (always up to date for
+  // in-session blocks); fall back to a one-shot IPC fetch on first expand
+  // for historical blocks seeded from disk.
+  const liveText = liveOutput !== undefined ? TEXT_DECODER.decode(liveOutput) : null;
+  const outputText = liveText ?? fetchedOutput;
+
   const toggleExpand = (): void => {
     if (!isExpandable) return;
     const next = !expanded;
     setExpanded(next);
-    if (next && !fetched && getOutput !== undefined) {
+    // Only hit IPC when we don't already have the bytes from streaming.
+    if (next && !fetched && liveOutput === undefined && getOutput !== undefined) {
       setFetched(true);
       void getOutput(pty, block.id).then((bytes) => {
-        setOutput(TEXT_DECODER.decode(bytes));
+        setFetchedOutput(TEXT_DECODER.decode(bytes));
       });
     }
   };
@@ -375,7 +391,17 @@ function BlockRowInner({
           </div>
         )}
 
-        {expanded && (
+        {/*
+         * Output rendering:
+         *  - Running blocks always show their live byte buffer inline so the
+         *    user watches output stream in. No click required.
+         *  - Completed blocks stay expand-on-click; expansion reuses the live
+         *    bytes if available (zero IPC), otherwise pulls from the store
+         *    on first expand via getOutput.
+         * Tier-0 raw rendering: bytes UTF-8 decoded, ANSI escapes pass through
+         * untouched (the fidelity contract). M4 brings real formatters.
+         */}
+        {(isRunning || expanded) && (
           <pre
             data-testid="block-output"
             style={{
@@ -386,7 +412,7 @@ function BlockRowInner({
               color: "var(--fg-dim)",
             }}
           >
-            {output ?? "…"}
+            {outputText ?? "…"}
           </pre>
         )}
       </div>

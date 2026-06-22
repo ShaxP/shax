@@ -45,6 +45,7 @@ describe("blockReducer / seed", () => {
     const existing: BlockState = {
       blocks: [makeBlock({ id: "old" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const fresh = [makeBlock({ id: "new" })];
     const next = blockReducer(existing, { type: "seed", blocks: fresh });
@@ -52,7 +53,7 @@ describe("blockReducer / seed", () => {
   });
 
   it("does not mutate the previous state", () => {
-    const prev: BlockState = { blocks: [], altScreen: false };
+    const prev: BlockState = { blocks: [], altScreen: false, liveOutputs: new Map() };
     blockReducer(prev, { type: "seed", blocks: [makeBlock()] });
     expect(prev.blocks).toHaveLength(0);
   });
@@ -110,6 +111,7 @@ describe("blockReducer / started", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "first" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "started",
@@ -148,6 +150,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "target", command: "ls" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -179,6 +182,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "running" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -200,6 +204,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "known" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -219,6 +224,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "a" }), makeBlock({ id: "b" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -240,6 +246,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "x" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const blocksBefore = state.blocks;
     blockReducer(state, {
@@ -266,6 +273,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "cd-block", cwd: "/start", git_branch: "main" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -291,6 +299,7 @@ describe("blockReducer / completed", () => {
     const state: BlockState = {
       blocks: [makeBlock({ id: "cd-tmp", cwd: "/repo", git_branch: "main" })],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -318,7 +327,7 @@ describe("blockReducer / alt_screen", () => {
   });
 
   it("sets altScreen to false", () => {
-    const state: BlockState = { blocks: [], altScreen: true };
+    const state: BlockState = { blocks: [], altScreen: true, liveOutputs: new Map() };
     const next = blockReducer(state, { type: "alt_screen", active: false });
     expect(next.altScreen).toBe(false);
   });
@@ -327,8 +336,68 @@ describe("blockReducer / alt_screen", () => {
     const state: BlockState = {
       blocks: [makeBlock()],
       altScreen: false,
+      liveOutputs: new Map(),
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
     expect(next.blocks).toEqual(state.blocks);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// block_chunk
+// ---------------------------------------------------------------------------
+
+describe("blockReducer / block_chunk", () => {
+  it("creates a new buffer for a block that has none yet", () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const next = blockReducer(initialBlockState, { type: "block_chunk", id: "a", bytes });
+    expect(next.liveOutputs.get("a")).toEqual(bytes);
+  });
+
+  it("appends to the existing buffer for that block", () => {
+    const state: BlockState = {
+      blocks: [],
+      altScreen: false,
+      liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
+    };
+    const next = blockReducer(state, {
+      type: "block_chunk",
+      id: "a",
+      bytes: new Uint8Array([3, 4]),
+    });
+    expect(next.liveOutputs.get("a")).toEqual(new Uint8Array([1, 2, 3, 4]));
+  });
+
+  it("keeps the other blocks' references stable (memoization)", () => {
+    const otherBytes = new Uint8Array([9, 9, 9]);
+    const state: BlockState = {
+      blocks: [],
+      altScreen: false,
+      liveOutputs: new Map([
+        ["a", new Uint8Array([1])],
+        ["b", otherBytes],
+      ]),
+    };
+    const next = blockReducer(state, {
+      type: "block_chunk",
+      id: "a",
+      bytes: new Uint8Array([2]),
+    });
+    // The map reference must change (state changed) but the entry for the
+    // unchanged block must keep its original Uint8Array reference so
+    // React.memo'd BlockRows for that block skip re-render.
+    expect(next.liveOutputs).not.toBe(state.liveOutputs);
+    expect(next.liveOutputs.get("b")).toBe(otherBytes);
+  });
+
+  it("does not mutate the previous state's map", () => {
+    const state: BlockState = {
+      blocks: [],
+      altScreen: false,
+      liveOutputs: new Map([["a", new Uint8Array([1])]]),
+    };
+    blockReducer(state, { type: "block_chunk", id: "a", bytes: new Uint8Array([2]) });
+    expect(state.liveOutputs.get("a")).toEqual(new Uint8Array([1]));
+    expect(state.liveOutputs.size).toBe(1);
   });
 });

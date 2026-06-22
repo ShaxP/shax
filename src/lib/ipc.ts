@@ -55,6 +55,18 @@ export type PtyEvent =
        */
       cwd: string | null;
       git_branch: string | null;
+    }
+  | {
+      /**
+       * A chunk of raw output bytes scoped to the currently-running block.
+       * Emitted alongside `output` so xterm.js still gets the full byte
+       * stream (alt-screen passthrough stays exact) while the block stack
+       * can render the same bytes inline without an IPC fetch on expand.
+       */
+      kind: "block_chunk";
+      block_id: BlockId;
+      /** Base64-encoded bytes. */
+      data: string;
     };
 
 /**

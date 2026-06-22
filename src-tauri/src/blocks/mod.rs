@@ -224,6 +224,18 @@ impl BlockMachine {
         self.records.iter().map(|r| r.to_summary()).collect()
     }
 
+    /// The id of the block currently between OSC 133 C and OSC 133 D, if any.
+    ///
+    /// The reader thread uses this to scope `PtyEvent::BlockChunk` events to
+    /// the right block when streaming output is forwarded to the frontend.
+    /// `None` whenever no command is in flight (Idle state).
+    pub fn current_block_id(&self) -> Option<BlockId> {
+        match self.state {
+            BlockState::Running { id, .. } => Some(id),
+            BlockState::Idle => None,
+        }
+    }
+
     /// Drain finished blocks' captured output into the supplied map, leaving
     /// only the running block's bytes (if any) in the machine. Called by the
     /// reader thread after each round of VT events so the IPC side can fetch
@@ -851,5 +863,31 @@ mod tests {
         let s = &machine.block_summaries()[0];
         assert!(s.duration_ms.is_some());
         assert!(s.ended_at_ms.is_some());
+    }
+
+    #[test]
+    fn current_block_id_tracks_running_state() {
+        let mut machine = BlockMachine::new();
+        // Idle on startup.
+        assert!(machine.current_block_id().is_none());
+
+        // Open a block; current id is the started id.
+        let started = machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("sleep 1".into()),
+        });
+        let started_id = block_started_id(&started[0]).unwrap();
+        assert_eq!(machine.current_block_id(), Some(started_id));
+
+        // Output bytes arriving mid-command leave the id in place.
+        machine.push_output(b"partial");
+        assert_eq!(machine.current_block_id(), Some(started_id));
+
+        // After D, back to Idle.
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
+        assert!(machine.current_block_id().is_none());
     }
 }
