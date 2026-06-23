@@ -423,6 +423,27 @@ describe("blockReducer / block_chunk", () => {
     expect(state.liveOutputs.get("a")).toEqual(new Uint8Array([1]));
     expect(state.liveOutputs.size).toBe(1);
   });
+
+  it("skips chunks during alt-screen so vim / btop / htop don't drown the reducer", () => {
+    // The block list isn't visible in alt-screen mode (xterm overlays
+    // it), and a long btop session would otherwise grow liveOutputs by
+    // tens of MB while the user just watches the canvas. Skipping
+    // returns state-by-identity so React.memo'd subscribers see no
+    // change.
+    const state: BlockState = {
+      blocks: [],
+      altScreen: true,
+      liveOutputs: new Map(),
+      promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+    };
+    const next = blockReducer(state, {
+      type: "block_chunk",
+      id: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    expect(next).toBe(state);
+    expect(next.liveOutputs.size).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

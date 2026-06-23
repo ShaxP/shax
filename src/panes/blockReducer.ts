@@ -136,6 +136,11 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       return { ...state, altScreen: action.active };
 
     case "block_chunk": {
+      // Defence in depth: TerminalPane already short-circuits chunk
+      // events during alt-screen, but if anything ever dispatches
+      // directly we still avoid the O(N²) reallocation chain for bytes
+      // nobody will ever read (the block list is hidden in alt-screen).
+      if (state.altScreen) return state;
       // Append the new bytes to the existing buffer for this block, if any.
       // The map is replaced (new reference), but only the changed slot gets a
       // new Uint8Array; unchanged blocks' arrays keep the same reference, so

@@ -83,6 +83,20 @@ function TerminalPaneInner({
 
   const altScreen = blockState.altScreen;
 
+  // Mirror altScreen into a ref so the IPC event handler can read it
+  // without re-binding the channel listener. We use this to short-circuit
+  // `block_chunk` events during alt-screen mode (vim, htop, btop, …):
+  // the bytes are already streaming through xterm for display, and the
+  // block list is hidden, so accumulating them again into `liveOutputs`
+  // is wasted work — a wasted base64 decode, a wasted reducer dispatch,
+  // a wasted React render, and a Uint8Array copy that grows O(N²) with
+  // every byte the alt-screen app emits. A long btop session would
+  // otherwise pile up tens of megabytes of bytes nobody will ever read.
+  const altScreenRef = useRef(false);
+  useEffect(() => {
+    altScreenRef.current = altScreen;
+  }, [altScreen]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
@@ -171,6 +185,9 @@ function TerminalPaneInner({
           break;
 
         case "block_chunk":
+          // Skip the whole chunk pipeline when the alt-screen owns the
+          // pane — see the `altScreenRef` comment above for the why.
+          if (altScreenRef.current) break;
           dispatch({
             type: "block_chunk",
             id: event.block_id,
