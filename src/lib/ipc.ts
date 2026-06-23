@@ -255,3 +255,32 @@ export async function appStateSave(json: string): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke("app_state_save", { json });
 }
+
+/**
+ * Full-text search across persisted block summaries. `query` is the raw
+ * FTS5 MATCH expression — whitespace-separated words are AND'd implicitly,
+ * `*` is the prefix wildcard, `"…"` quotes a phrase. Empty / invalid
+ * queries resolve to an empty array (no error), so the search overlay
+ * can show "no results" while the user finishes typing.
+ */
+export async function searchBlocks(
+  query: string,
+  limit: number,
+  offset: number,
+): Promise<BlockSummary[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BlockSummary[]>("search_blocks", { query, limit, offset });
+}
+
+/**
+ * Fetch a block's captured bytes by id alone, straight from the store.
+ * Used by the search-results viewer: hits are scoped to history, not to
+ * any specific live pane, so we can't address the bytes by `(pty, block)`.
+ */
+export async function blockGetOutput(blockId: BlockId): Promise<Uint8Array> {
+  if (!isTauriContext()) return new Uint8Array();
+  const { invoke } = await import("@tauri-apps/api/core");
+  const b64 = await invoke<string>("block_get_output", { blockId });
+  return base64Decode(b64);
+}

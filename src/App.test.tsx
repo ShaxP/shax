@@ -57,6 +57,8 @@ const mockListBlocks = vi.fn().mockResolvedValue([]);
 
 const mockAppStateLoad = vi.fn().mockResolvedValue(null);
 const mockAppStateSave = vi.fn().mockResolvedValue(undefined);
+const mockSearchBlocks = vi.fn().mockResolvedValue([]);
+const mockBlockGetOutput = vi.fn().mockResolvedValue(new Uint8Array());
 
 vi.mock("./lib/ipc", () => ({
   spawnPty: (...args: unknown[]): Promise<string> => mockSpawnPty(...args) as Promise<string>,
@@ -65,6 +67,10 @@ vi.mock("./lib/ipc", () => ({
   killPty: (...args: unknown[]): Promise<void> => mockKillPty(...args) as Promise<void>,
   listBlocks: (...args: unknown[]): Promise<[]> => mockListBlocks(...args) as Promise<[]>,
   getBlockOutput: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
+  searchBlocks: (...args: unknown[]): Promise<unknown[]> =>
+    mockSearchBlocks(...args) as Promise<unknown[]>,
+  blockGetOutput: (...args: unknown[]): Promise<Uint8Array> =>
+    mockBlockGetOutput(...args) as Promise<Uint8Array>,
   appStateLoad: (...args: unknown[]): Promise<string | null> =>
     mockAppStateLoad(...args) as Promise<string | null>,
   appStateSave: (...args: unknown[]): Promise<void> => mockAppStateSave(...args) as Promise<void>,
@@ -461,5 +467,84 @@ describe("App / persistence", () => {
     const json = lastCall?.[0] as string;
     const parsed = JSON.parse(json) as { tabs: unknown[] };
     expect(parsed.tabs).toHaveLength(2);
+  });
+});
+
+describe("App / search overlay (M3 slice 3.1)", () => {
+  it("⌘K opens the search overlay; Esc closes it", () => {
+    render(<App />);
+    expect(screen.queryByTestId("search-overlay")).toBeNull();
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    expect(screen.getByTestId("search-overlay")).toBeInTheDocument();
+    expect(screen.getByTestId("search-input")).toBeInTheDocument();
+    act(() => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.queryByTestId("search-overlay")).toBeNull();
+  });
+
+  it("typing a query calls searchBlocks (debounced) and renders results", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([
+      {
+        id: "blk-1",
+        command: "kubectl get pods",
+        cwd: "/home/me",
+        git_branch: "main",
+        started_at_ms: 1000,
+        ended_at_ms: 1500,
+        exit_code: 0,
+        duration_ms: 500,
+        aborted: false,
+        interactive: false,
+      },
+    ]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    const input = screen.getByTestId("search-input");
+    fireEvent.change(input, { target: { value: "kubectl" } });
+    await vi.waitFor(() => {
+      expect(mockSearchBlocks).toHaveBeenCalled();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getAllByTestId("search-result")).toHaveLength(1);
+    });
+    expect(screen.getByTestId("search-result")).toHaveTextContent("kubectl get pods");
+  });
+
+  it("clicking a result closes the overlay and opens the block viewer", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([
+      {
+        id: "blk-2",
+        command: "echo hi",
+        cwd: null,
+        git_branch: null,
+        started_at_ms: 1,
+        ended_at_ms: 2,
+        exit_code: 0,
+        duration_ms: 1,
+        aborted: false,
+        interactive: false,
+      },
+    ]);
+    mockBlockGetOutput.mockResolvedValueOnce(new TextEncoder().encode("hi\n"));
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    const input = screen.getByTestId("search-input");
+    fireEvent.change(input, { target: { value: "echo" } });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("search-result")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("search-result"));
+    expect(screen.queryByTestId("search-overlay")).toBeNull();
+    expect(screen.getByTestId("block-viewer-modal")).toBeInTheDocument();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("block-viewer-output")).toHaveTextContent("hi");
+    });
   });
 });

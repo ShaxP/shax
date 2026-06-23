@@ -91,6 +91,26 @@ pub async fn pty_get_block_output(
     Ok(B64.encode(&bytes))
 }
 
+/// Return the captured bytes for one block by id alone, going straight to
+/// the persistent store. Used by the search-results viewer modal: search
+/// surfaces blocks from previous sessions whose owning pane no longer
+/// exists, so a `(pty_id, block_id)` lookup wouldn't have anywhere to go.
+/// Returns an empty base64 string for an unknown id.
+#[tauri::command]
+pub async fn block_get_output(
+    block_id: BlockId,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<String, String> {
+    let Some(store) = manager.store() else {
+        return Ok(String::new());
+    };
+    let bytes = store
+        .load_output(block_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    Ok(B64.encode(&bytes))
+}
+
 /// Load the persisted app-state JSON (tabs + layout tree + focused pane),
 /// or `null` if the user has no prior session yet. The frontend hydrates
 /// its tab reducer from this on mount; if the store isn't attached (rare,
@@ -120,5 +140,27 @@ pub async fn app_state_save(
         .unwrap_or(0);
     store
         .save_app_state(&json, now_ms)
+        .map_err(|e| e.to_string())
+}
+
+/// Full-text search across all persisted block summaries. `query` is the
+/// raw FTS5 MATCH expression — multiple whitespace-separated words are
+/// AND'd implicitly; users wanting fancier syntax (`OR`, `*`, quoted
+/// phrases) can spell it out. An empty / whitespace-only query returns
+/// no rows; invalid FTS5 syntax (a half-typed `"`, …) also returns no
+/// rows rather than surfacing an error so the search overlay can show
+/// "no results" cleanly while the user keeps typing.
+#[tauri::command]
+pub async fn search_blocks(
+    query: String,
+    limit: usize,
+    offset: usize,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<Vec<BlockSummary>, String> {
+    let Some(store) = manager.store() else {
+        return Ok(Vec::new());
+    };
+    store
+        .search(&query, limit, offset)
         .map_err(|e| e.to_string())
 }
