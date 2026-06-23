@@ -188,20 +188,33 @@ describe("promptRenderer / per-character styling", () => {
     expect(r.styled).toEqual([false, false, true, true, true, true]);
   });
 
-  it("standard palette fg SGR (e.g., red) also marks styled", () => {
+  it("syntax-highlighting colours (red, green, …) do NOT mark styled", () => {
+    // zsh-syntax-highlighting paints commands and errors in standard
+    // palette colours; we deliberately don't dim those — they're real
+    // semantic colour, not autosuggestion-style hints.
     const r = feed(emptyPromptLine, bytes("\x1b[31merr\x1b[0m"));
-    expect(r.styled).toEqual([true, true, true]);
+    expect(r.styled).toEqual([false, false, false]);
   });
 
   it("SGR 0 resets the styled flag", () => {
-    const r = feed(emptyPromptLine, bytes("\x1b[31ma\x1b[0mb"));
+    const r = feed(emptyPromptLine, bytes("\x1b[38;5;8ma\x1b[0mb"));
     expect(r.text).toBe("ab");
     expect(r.styled).toEqual([true, false]);
   });
 
-  it("SGR 39 resets just the foreground", () => {
-    const r = feed(emptyPromptLine, bytes("\x1b[33mab\x1b[39mcd"));
+  it("SGR 39 resets the styled flag", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[38;5;8mab\x1b[39mcd"));
     expect(r.styled).toEqual([true, true, false, false]);
+  });
+
+  it("dim greyscale-ramp palette indices (232-245) also mark styled", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[38;5;240mhi\x1b[39m"));
+    expect(r.styled).toEqual([true, true]);
+  });
+
+  it("brighter palette indices (e.g. 250, 255) do NOT mark styled", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[38;5;250mhi\x1b[39m"));
+    expect(r.styled).toEqual([false, false]);
   });
 
   it("attribute-only SGR (bold/italic) does not flip styled on its own", () => {

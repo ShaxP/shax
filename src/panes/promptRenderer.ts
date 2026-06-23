@@ -283,18 +283,27 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
 }
 
 /**
- * Parse a sequence of SGR parameters and return the new "is non-default
- * foreground" flag. We only care about whether the foreground is currently
- * default or not — the PromptStrip uses one faint colour for any styled
- * char, regardless of the specific shade.
+ * Parse a sequence of SGR parameters and return the new "is dim/hint
+ * foreground" flag.
  *
- *   SGR 0       → reset all → styled = false
- *   SGR 39      → reset fg  → styled = false
- *   SGR 30-37   → standard palette fg → styled = true
- *   SGR 90-97   → bright palette fg   → styled = true
- *   SGR 38;5;N  → 256-colour palette fg → styled = true (skip N)
- *   SGR 38;2;R;G;B → truecolor fg → styled = true (skip R;G;B)
- *   Other params (bold, italic, bg colours, …) leave styled unchanged.
+ * We deliberately narrow the detection to *dim* foreground colours so
+ * that real syntax highlighting (green for valid commands, red for
+ * errors, etc. — every common zsh-syntax-highlighting palette entry)
+ * does not get dimmed alongside the autosuggestion ghost text. The
+ * autosuggestion case uses palette 8 by default and is the primary hint
+ * we want the user to recognise visually.
+ *
+ *   SGR 0 / 39      → reset → styled = false
+ *   SGR 2           → dim attribute → styled = true
+ *   SGR 38;5;N      → styled iff N is a grey/dark index (8, 7, 232-245)
+ *   SGR 38;2;R;G;B  → styled iff RGB is dark-grey-ish
+ *   Anything else   → styled = false (syntax-highlighting colours, bold,
+ *                     italic, bg colours, …)
+ *
+ * The check is intentionally narrow — false negatives (a user with a
+ * custom autosuggestion colour outside this set) just see normal text;
+ * false positives would re-introduce the bug where commands appear
+ * faint, which is more disorienting.
  */
 function applySgr(currentStyled: boolean, args: number[]): boolean {
   if (args.length === 0) return false;
@@ -305,12 +314,32 @@ function applySgr(currentStyled: boolean, args: number[]): boolean {
     if (a === 0 || a === 39) {
       styled = false;
       i++;
-    } else if (a === 38) {
+    } else if (a === 2) {
+      // SGR 2 = dim attribute (standard CSI).
       styled = true;
+      i++;
+    } else if (a === 38) {
       const mode = args[i + 1];
-      if (mode === 5) i += 3;
-      else if (mode === 2) i += 5;
-      else i += 1;
+      if (mode === 5) {
+        const n = args[i + 2] ?? -1;
+        // Greyscale-like palette indices: standard light/dark grey + the
+        // 24-step greyscale ramp at 232..255. Cap at 245 so almost-white
+        // grey doesn't get caught (those are bright enough to be content).
+        styled = n === 7 || n === 8 || (n >= 232 && n <= 245);
+        i += 3;
+      } else if (mode === 2) {
+        const r = args[i + 2] ?? 0;
+        const g = args[i + 3] ?? 0;
+        const b = args[i + 4] ?? 0;
+        const maxC = Math.max(r, g, b);
+        const minC = Math.min(r, g, b);
+        // Dark and roughly-grey: low brightness, channels close together.
+        styled = maxC < 160 && maxC - minC < 32;
+        i += 5;
+      } else {
+        styled = false;
+        i++;
+      }
     } else if (a === 48) {
       // Background colour spec — same skip pattern, doesn't affect fg.
       const mode = args[i + 1];
@@ -318,7 +347,9 @@ function applySgr(currentStyled: boolean, args: number[]): boolean {
       else if (mode === 2) i += 5;
       else i += 1;
     } else if ((a >= 30 && a <= 37) || (a >= 90 && a <= 97)) {
-      styled = true;
+      // Standard / bright palette fg. These are the syntax-highlighting
+      // colours we explicitly do *not* dim.
+      styled = false;
       i++;
     } else {
       i++;
