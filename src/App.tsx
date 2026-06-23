@@ -420,15 +420,18 @@ export default function App(): React.ReactElement {
               }}
             >
               <LayoutRender
+                tabId={tab.id}
                 node={tab.layout}
                 focusedPaneId={tab.focusedPaneId}
                 tabActive={isActiveTab}
-                onPaneFocus={(paneId) => handlePaneFocus(tab.id, paneId)}
-                onPaneMeta={(paneId, cwd, branch) => handlePaneMeta(tab.id, paneId, cwd, branch)}
-                onPaneAltScreen={(paneId, altScreen) =>
-                  handlePaneAltScreen(tab.id, paneId, altScreen)
-                }
-                onSetRatio={(path, ratio) => handleSetRatio(tab.id, path, ratio)}
+                // The callbacks are kept reference-stable (useCallback
+                // with `[]`) so LayoutRender can hand stable handlers
+                // to every PaneLeaf — re-renders during a divider drag
+                // no longer cascade into the TerminalPane subtree.
+                onPaneFocus={handlePaneFocus}
+                onPaneMeta={handlePaneMeta}
+                onPaneAltScreen={handlePaneAltScreen}
+                onSetRatio={handleSetRatio}
               />
             </div>
           );

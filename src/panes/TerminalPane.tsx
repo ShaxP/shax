@@ -25,7 +25,7 @@
  *     don't see it.
  */
 
-import { startTransition, useEffect, useReducer, useRef, useState } from "react";
+import { memo, startTransition, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -63,7 +63,7 @@ export interface TerminalPaneProps {
   onAltScreenChange?: (active: boolean) => void;
 }
 
-export function TerminalPane({
+function TerminalPaneInner({
   active = true,
   onMetaChange,
   onAltScreenChange,
@@ -371,3 +371,13 @@ export function TerminalPane({
     </div>
   );
 }
+
+/**
+ * Memoised so the geometry-driven layout re-renders on every divider
+ * drag don't propagate into the (relatively heavy) TerminalPane
+ * subtree. Together with the stable callbacks LayoutRender now hands
+ * down, a pane only re-renders when its own `active` flag changes or
+ * its internal state advances — not when a sibling's divider is being
+ * dragged or a sibling's PTY emits output.
+ */
+export const TerminalPane = memo(TerminalPaneInner);

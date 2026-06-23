@@ -6,31 +6,39 @@
  * `<div>`'s style changes when the layout tree changes. Without this, a
  * split would change the parent element type (leaf wrapper → split
  * wrapper) and React would unmount + remount the surviving pane,
- * killing and re-spawning its PTY. Computing percentages from the tree
- * and pushing them in via CSS keeps the React tree stable.
+ * killing and re-spawning its PTY.
  *
- * Each pane sits in an `absolute`-positioned wrapper whose left / top /
- * width / height are percentages of the parent. Dividers (M2 slice 2.2b)
- * are thin lines wrapped in a wider hit-area for easier grabbing —
- * pointer-down on a divider captures the pointer and reports cursor
- * positions as new ratios via `onSetRatio` until pointer-up.
+ * Performance contract (slice 2.2b polish):
+ * - The callbacks LayoutRender receives are reference-stable across
+ *   parent re-renders (`useCallback([])` in App). LayoutRender wraps
+ *   them with `tabId` via `useCallback` to keep them stable per tab.
+ * - Each leaf is rendered through a memoised `PaneLeaf` that compares
+ *   its rect field-by-field. A divider drag updates the geometry of
+ *   exactly two leaves (the panes either side of the drag); every
+ *   other leaf's `rect` is structurally equal to the previous render's
+ *   and `PaneLeaf` skips it — the (relatively heavy) `TerminalPane`
+ *   subtree below it stays untouched.
  */
 
 import type { CSSProperties } from "react";
-import { useMemo, useRef } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import { TerminalPane } from "./TerminalPane";
-import type { DividerLine, LayoutNode, PaneId, Placement, SplitPath } from "./layout";
+import type { DividerLine, LayoutNode, PaneId, Rect, SplitPath } from "./layout";
 import { computeGeometry } from "./layout";
 
 export interface LayoutRenderProps {
+  tabId: string;
   node: LayoutNode;
   focusedPaneId: PaneId;
   tabActive: boolean;
-  onPaneFocus: (paneId: PaneId) => void;
-  onPaneMeta: (paneId: PaneId, cwd: string | null, branch: string | null) => void;
-  onPaneAltScreen: (paneId: PaneId, active: boolean) => void;
-  /** Drag-to-resize: caller updates the layout-tree Split at `path`. */
-  onSetRatio: (path: SplitPath, ratio: number) => void;
+  /** Click on a leaf → focus that pane in `tabId`. */
+  onPaneFocus: (tabId: string, paneId: PaneId) => void;
+  /** Per-pane cwd / branch updates from OSC 133 A. */
+  onPaneMeta: (tabId: string, paneId: PaneId, cwd: string | null, branch: string | null) => void;
+  /** Per-pane alt-screen toggle. */
+  onPaneAltScreen: (tabId: string, paneId: PaneId, active: boolean) => void;
+  /** Drag-to-resize: caller updates the layout-tree Split at `path` in `tabId`. */
+  onSetRatio: (tabId: string, path: SplitPath, ratio: number) => void;
 }
 
 /** Hit-area thickness around the 1px divider line so it's easy to grab. */
@@ -45,13 +53,13 @@ const HOST: CSSProperties = {
   height: "100%",
 };
 
-function paneWrapStyle(p: Placement, isFocused: boolean): CSSProperties {
+function paneWrapStyle(rect: Rect, isFocused: boolean): CSSProperties {
   return {
     position: "absolute",
-    left: `${p.rect.left}%`,
-    top: `${p.rect.top}%`,
-    width: `${p.rect.width}%`,
-    height: `${p.rect.height}%`,
+    left: `${rect.left}%`,
+    top: `${rect.top}%`,
+    width: `${rect.width}%`,
+    height: `${rect.height}%`,
     display: "flex",
     flexDirection: "column",
     background: "var(--bg)",
@@ -61,16 +69,10 @@ function paneWrapStyle(p: Placement, isFocused: boolean): CSSProperties {
   };
 }
 
-/**
- * Hit-area wrapper for a divider. The wrapper is the wide grab region
- * (so the user doesn't have to land on the 1px line); the visible line
- * is a child centred inside it.
- */
 function dividerHitStyle(d: DividerLine): CSSProperties {
   const centerLeft = d.splitRect.left + d.splitRect.width * d.ratio;
   const centerTop = d.splitRect.top + d.splitRect.height * d.ratio;
   if (d.direction === "row") {
-    // Vertical line: left at centerLeft (in %), width = hit-area px, full height.
     return {
       position: "absolute",
       left: `calc(${centerLeft}% - ${DIVIDER_HIT / 2}px)`,
@@ -79,12 +81,10 @@ function dividerHitStyle(d: DividerLine): CSSProperties {
       height: `${d.splitRect.height}%`,
       cursor: "ew-resize",
       zIndex: 6,
-      // Keep the hit-area transparent — only the inner line is visible.
       background: "transparent",
       touchAction: "none",
     };
   }
-  // Column split → horizontal line: top at centerTop, height = hit-area px.
   return {
     position: "absolute",
     left: `${d.splitRect.left}%`,
@@ -123,26 +123,95 @@ function dividerLineStyle(direction: DividerLine["direction"]): CSSProperties {
   };
 }
 
-export function LayoutRender({
-  node,
-  focusedPaneId,
-  tabActive,
-  onPaneFocus,
-  onPaneMeta,
-  onPaneAltScreen,
-  onSetRatio,
-}: LayoutRenderProps): React.ReactElement {
-  const geometry = useMemo(() => computeGeometry(node), [node]);
-  const hostRef = useRef<HTMLDivElement>(null);
+// ── PaneLeaf ─────────────────────────────────────────────────────────────────
 
-  const startDrag =
-    (divider: DividerLine) =>
+interface PaneLeafProps {
+  paneId: PaneId;
+  rect: Rect;
+  isFocused: boolean;
+  tabActive: boolean;
+  /** Stable; bound with `tabId` by the parent LayoutRender. */
+  onFocus: (paneId: PaneId) => void;
+  onMeta: (paneId: PaneId, cwd: string | null, branch: string | null) => void;
+  onAltScreen: (paneId: PaneId, active: boolean) => void;
+}
+
+function PaneLeafInner({
+  paneId,
+  rect,
+  isFocused,
+  tabActive,
+  onFocus,
+  onMeta,
+  onAltScreen,
+}: PaneLeafProps): React.ReactElement {
+  // Per-pane bound callbacks. Stable as long as the parent's
+  // (tabId-bound) callbacks are stable.
+  const handleFocus = useCallback(() => onFocus(paneId), [paneId, onFocus]);
+  const handleMeta = useCallback(
+    (cwd: string | null, branch: string | null) => onMeta(paneId, cwd, branch),
+    [paneId, onMeta],
+  );
+  const handleAltScreen = useCallback(
+    (active: boolean) => onAltScreen(paneId, active),
+    [paneId, onAltScreen],
+  );
+
+  return (
+    <div
+      data-testid="layout-leaf"
+      data-pane-id={paneId}
+      data-focused={isFocused ? "true" : "false"}
+      style={paneWrapStyle(rect, isFocused)}
+      onPointerDown={handleFocus}
+    >
+      <TerminalPane
+        active={tabActive && isFocused}
+        onMetaChange={handleMeta}
+        onAltScreenChange={handleAltScreen}
+      />
+    </div>
+  );
+}
+
+/**
+ * Field-by-field comparison on `rect`: the layout tree allocates a
+ * fresh Rect on every `computeGeometry` call (so identity always
+ * changes), but for panes that aren't adjacent to a dragged divider
+ * the *values* are identical and PaneLeaf can skip the render.
+ */
+function paneLeafEqual(prev: PaneLeafProps, next: PaneLeafProps): boolean {
+  return (
+    prev.paneId === next.paneId &&
+    prev.isFocused === next.isFocused &&
+    prev.tabActive === next.tabActive &&
+    prev.onFocus === next.onFocus &&
+    prev.onMeta === next.onMeta &&
+    prev.onAltScreen === next.onAltScreen &&
+    prev.rect.left === next.rect.left &&
+    prev.rect.top === next.rect.top &&
+    prev.rect.width === next.rect.width &&
+    prev.rect.height === next.rect.height
+  );
+}
+
+const PaneLeaf = memo(PaneLeafInner, paneLeafEqual);
+
+// ── Divider ──────────────────────────────────────────────────────────────────
+
+interface DividerProps {
+  divider: DividerLine;
+  hostRef: React.RefObject<HTMLDivElement | null>;
+  onSetRatio: (path: SplitPath, ratio: number) => void;
+}
+
+function DividerInner({ divider, hostRef, onSetRatio }: DividerProps): React.ReactElement {
+  const startDrag = useCallback(
     (e: React.PointerEvent<HTMLDivElement>): void => {
-      // Left-button only.
       if (e.button !== 0) return;
       e.preventDefault();
-      // Avoid the divider's pointerdown bubbling into a pane wrapper
-      // (which would steal focus from the user's actual pane).
+      // Don't let pointer-down on the divider bubble into a sibling
+      // pane wrapper and steal focus.
       e.stopPropagation();
       const host = hostRef.current;
       if (host === null) return;
@@ -154,7 +223,6 @@ export function LayoutRender({
 
       const computeRatio = (clientX: number, clientY: number): number => {
         if (direction === "row") {
-          // Cursor x as percent of the host, minus the split's left edge.
           const xPct = ((clientX - hostRect.left) / hostRect.width) * 100;
           return (xPct - splitRect.left) / splitRect.width;
         }
@@ -170,7 +238,7 @@ export function LayoutRender({
         try {
           target.releasePointerCapture(ev.pointerId);
         } catch {
-          // pointer was already released
+          // already released
         }
         target.removeEventListener("pointermove", handleMove);
         target.removeEventListener("pointerup", handleUp);
@@ -180,40 +248,76 @@ export function LayoutRender({
       target.addEventListener("pointermove", handleMove);
       target.addEventListener("pointerup", handleUp);
       target.addEventListener("pointercancel", handleUp);
-    };
+    },
+    [divider, hostRef, onSetRatio],
+  );
+
+  return (
+    <div
+      data-testid="layout-divider"
+      data-direction={divider.direction}
+      data-path={divider.path.join("")}
+      style={dividerHitStyle(divider)}
+      onPointerDown={startDrag}
+    >
+      <div style={dividerLineStyle(divider.direction)} />
+    </div>
+  );
+}
+
+const Divider = memo(DividerInner);
+
+// ── LayoutRender ─────────────────────────────────────────────────────────────
+
+export function LayoutRender({
+  tabId,
+  node,
+  focusedPaneId,
+  tabActive,
+  onPaneFocus,
+  onPaneMeta,
+  onPaneAltScreen,
+  onSetRatio,
+}: LayoutRenderProps): React.ReactElement {
+  const geometry = useMemo(() => computeGeometry(node), [node]);
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  // Bind `tabId` once per (tabId, base callback) — stable across every
+  // re-render that doesn't change tabId or the base callback.
+  const handleFocus = useCallback(
+    (paneId: PaneId) => onPaneFocus(tabId, paneId),
+    [tabId, onPaneFocus],
+  );
+  const handleMeta = useCallback(
+    (paneId: PaneId, cwd: string | null, branch: string | null) =>
+      onPaneMeta(tabId, paneId, cwd, branch),
+    [tabId, onPaneMeta],
+  );
+  const handleAltScreen = useCallback(
+    (paneId: PaneId, active: boolean) => onPaneAltScreen(tabId, paneId, active),
+    [tabId, onPaneAltScreen],
+  );
+  const handleSetRatio = useCallback(
+    (path: SplitPath, ratio: number) => onSetRatio(tabId, path, ratio),
+    [tabId, onSetRatio],
+  );
 
   return (
     <div data-testid="layout-host" ref={hostRef} style={HOST}>
-      {geometry.panes.map((p) => {
-        const isFocused = p.paneId === focusedPaneId;
-        return (
-          <div
-            key={p.paneId}
-            data-testid="layout-leaf"
-            data-pane-id={p.paneId}
-            data-focused={isFocused ? "true" : "false"}
-            style={paneWrapStyle(p, isFocused)}
-            onPointerDown={() => onPaneFocus(p.paneId)}
-          >
-            <TerminalPane
-              active={tabActive && isFocused}
-              onMetaChange={(cwd, branch) => onPaneMeta(p.paneId, cwd, branch)}
-              onAltScreenChange={(altScreen) => onPaneAltScreen(p.paneId, altScreen)}
-            />
-          </div>
-        );
-      })}
+      {geometry.panes.map((p) => (
+        <PaneLeaf
+          key={p.paneId}
+          paneId={p.paneId}
+          rect={p.rect}
+          isFocused={p.paneId === focusedPaneId}
+          tabActive={tabActive}
+          onFocus={handleFocus}
+          onMeta={handleMeta}
+          onAltScreen={handleAltScreen}
+        />
+      ))}
       {geometry.dividers.map((d, i) => (
-        <div
-          key={`d-${i}`}
-          data-testid="layout-divider"
-          data-direction={d.direction}
-          data-path={d.path.join("")}
-          style={dividerHitStyle(d)}
-          onPointerDown={startDrag(d)}
-        >
-          <div style={dividerLineStyle(d.direction)} />
-        </div>
+        <Divider key={`d-${i}`} divider={d} hostRef={hostRef} onSetRatio={handleSetRatio} />
       ))}
     </div>
   );
