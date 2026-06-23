@@ -10,7 +10,10 @@ mod vt;
 
 use std::sync::Arc;
 
-use ipc::{pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_spawn, pty_write};
+use ipc::{
+    app_state_load, app_state_save, pty_get_block_output, pty_kill, pty_list_blocks, pty_resize,
+    pty_spawn, pty_write,
+};
 use pty::PtyManager;
 use store::{default_db_path, Store};
 
@@ -50,6 +53,8 @@ pub fn run() {
             pty_kill,
             pty_list_blocks,
             pty_get_block_output,
+            app_state_load,
+            app_state_save,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")

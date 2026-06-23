@@ -108,6 +108,11 @@ pub enum PtyEvent {
         aborted: bool,
         cwd: Option<String>,
         git_branch: Option<String>,
+        /// True when the alt-screen was active at any point during this
+        /// block (vim, htop, less, ssh, REPLs). The frontend uses this to
+        /// hide the output preview — captured bytes are cursor / grid
+        /// manipulation, not flow text.
+        interactive: bool,
     },
     /// A chunk of raw output bytes scoped to the currently-running block.
     ///
@@ -200,6 +205,13 @@ impl PtyManager {
             blocks: Mutex::new(HashMap::new()),
             store: Some(store),
         }
+    }
+
+    /// Expose the underlying store to IPC commands that need it for non-PTY
+    /// state (currently the app-state save/load path used to persist the
+    /// tab + layout tree across restart).
+    pub fn store(&self) -> Option<Arc<Store>> {
+        self.store.clone()
     }
 
     /// Spawn a new PTY with a child shell and begin streaming its output to
@@ -649,6 +661,7 @@ fn persist_new_blocks(
             exit_code: summary.exit_code,
             duration_ms: summary.duration_ms,
             aborted: summary.aborted,
+            interactive: summary.interactive,
             output: outputs.get(&summary.id).cloned().unwrap_or_default(),
         };
         if let Err(e) = store.insert_block(&block) {
@@ -1487,6 +1500,7 @@ mod tests {
             exit_code: Some(0),
             duration_ms: Some(50),
             aborted: false,
+            interactive: false,
             output: b"a.txt b.txt".to_vec(),
         };
         store.insert_block(&historical).expect("seed historical");
@@ -1546,6 +1560,7 @@ mod tests {
             exit_code: Some(0),
             duration_ms: Some(10),
             aborted: false,
+            interactive: false,
             output: b"clean".to_vec(),
         };
         store.insert_block(&historical).expect("insert historical");

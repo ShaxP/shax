@@ -170,6 +170,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     expect(next.blocks[0]).toEqual({
       id: "target",
@@ -204,6 +205,7 @@ describe("blockReducer / completed", () => {
       aborted: true,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     const [b] = next.blocks;
     expect(b?.aborted).toBe(true);
@@ -227,6 +229,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     // Reference equality: no new state object because nothing changed.
     expect(next).toBe(state);
@@ -248,6 +251,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     const [blockA, blockB] = next.blocks;
     expect(blockA?.exit_code).toBeNull();
@@ -272,6 +276,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     expect(state.blocks).toBe(blocksBefore);
     const [firstBlock] = state.blocks;
@@ -299,6 +304,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: "/target",
       git_branch: "feat/x",
+      interactive: false,
     });
     expect(next.blocks[0]?.cwd).toBe("/target");
     expect(next.blocks[0]?.git_branch).toBe("feat/x");
@@ -326,6 +332,7 @@ describe("blockReducer / completed", () => {
       aborted: false,
       cwd: "/tmp",
       git_branch: null,
+      interactive: false,
     });
     expect(next.blocks[0]?.cwd).toBe("/tmp");
     expect(next.blocks[0]?.git_branch).toBeNull();

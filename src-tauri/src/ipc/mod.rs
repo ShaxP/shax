@@ -90,3 +90,35 @@ pub async fn pty_get_block_output(
     let bytes = manager.get_block_output(id, block_id).await;
     Ok(B64.encode(&bytes))
 }
+
+/// Load the persisted app-state JSON (tabs + layout tree + focused pane),
+/// or `null` if the user has no prior session yet. The frontend hydrates
+/// its tab reducer from this on mount; if the store isn't attached (rare,
+/// only in bare `cargo test`-style runs without a DB), returns `null` too.
+#[tauri::command]
+pub async fn app_state_load(manager: State<'_, Arc<PtyManager>>) -> Result<Option<String>, String> {
+    let Some(store) = manager.store() else {
+        return Ok(None);
+    };
+    store.load_app_state().map_err(|e| e.to_string())
+}
+
+/// Persist the app-state JSON (tabs + layout tree + focused pane) so the
+/// next launch can restore the user's layout. Called debounced by the
+/// frontend whenever a tab is opened, closed, or split.
+#[tauri::command]
+pub async fn app_state_save(
+    json: String,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<(), String> {
+    let Some(store) = manager.store() else {
+        return Ok(());
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    store
+        .save_app_state(&json, now_ms)
+        .map_err(|e| e.to_string())
+}

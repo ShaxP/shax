@@ -147,6 +147,7 @@ describe("BlockList", () => {
       aborted: false,
       cwd: null,
       git_branch: null,
+      interactive: false,
     });
     expect(state2.blocks[0]).toBe(state1.blocks[0]);
     expect(state2.blocks[1]).toBe(state1.blocks[1]);

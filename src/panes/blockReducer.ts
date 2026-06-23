@@ -68,6 +68,13 @@ export type BlockAction =
       /** End-of-command cwd from OSC 133 D; overrides the running block's. */
       cwd: string | null;
       git_branch: string | null;
+      /**
+       * Backend-authoritative interactive flag. Latches whatever the in-
+       * session alt-screen detection already set (they always agree under
+       * the OSC 133 contract), but means a block reopened later from disk
+       * still shows the interactive label even before any live event fires.
+       */
+      interactive: boolean;
     }
   | { type: "alt_screen"; active: boolean }
   | { type: "block_chunk"; id: BlockId; bytes: Uint8Array }
@@ -93,12 +100,13 @@ export const initialBlockState: BlockState = {
 export function blockReducer(state: BlockState, action: BlockAction): BlockState {
   switch (action.type) {
     case "seed":
-      // Persisted blocks don't carry the `interactive` flag yet (the
-      // backend doesn't track it). Default to false; future runs will
-      // mark live blocks correctly as they receive alt-screen events.
+      // Persisted blocks now carry the `interactive` flag from the backend
+      // (slice 2.3a), so vim / htop blocks from a previous session restore
+      // with the right "interactive session" label and no garbled output
+      // preview. The spread keeps any future BlockSummary fields working.
       return {
         ...state,
-        blocks: action.blocks.map((b) => ({ ...b, interactive: false })),
+        blocks: action.blocks.map((b) => ({ ...b })),
       };
 
     case "started":
@@ -146,6 +154,11 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
         aborted: action.aborted,
         cwd: action.cwd,
         git_branch: action.git_branch,
+        // OR with the existing flag: live alt-screen tracking and the
+        // backend completion event always agree under the OSC 133
+        // contract, but `||` is the safer reduction if either side
+        // detected an interactive session.
+        interactive: existing.interactive || action.interactive,
       };
       const blocks = [...state.blocks];
       blocks[index] = updated;

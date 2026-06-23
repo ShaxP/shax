@@ -55,6 +55,9 @@ const mockWritePty = vi.fn().mockResolvedValue(undefined);
 const mockResizePty = vi.fn().mockResolvedValue(undefined);
 const mockListBlocks = vi.fn().mockResolvedValue([]);
 
+const mockAppStateLoad = vi.fn().mockResolvedValue(null);
+const mockAppStateSave = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("./lib/ipc", () => ({
   spawnPty: (...args: unknown[]): Promise<string> => mockSpawnPty(...args) as Promise<string>,
   writePty: (...args: unknown[]): Promise<void> => mockWritePty(...args) as Promise<void>,
@@ -62,6 +65,9 @@ vi.mock("./lib/ipc", () => ({
   killPty: (...args: unknown[]): Promise<void> => mockKillPty(...args) as Promise<void>,
   listBlocks: (...args: unknown[]): Promise<[]> => mockListBlocks(...args) as Promise<[]>,
   getBlockOutput: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
+  appStateLoad: (...args: unknown[]): Promise<string | null> =>
+    mockAppStateLoad(...args) as Promise<string | null>,
+  appStateSave: (...args: unknown[]): Promise<void> => mockAppStateSave(...args) as Promise<void>,
   base64Decode: (b64: string): Uint8Array => new TextEncoder().encode(b64),
   base64Encode: (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)),
 }));
@@ -392,5 +398,68 @@ describe("App / pane splits", () => {
     await vi.waitFor(() => {
       expect(mockKillPty).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("App / persistence", () => {
+  it("hydrates two tabs from a saved app-state JSON on mount", async () => {
+    const saved = JSON.stringify({
+      tabs: [
+        {
+          id: "tab-saved-1",
+          label: "shax",
+          layout: { kind: "leaf", paneId: "pane-saved-1" },
+          focusedPaneId: "pane-saved-1",
+          panes: { "pane-saved-1": { cwd: "/Users/me", branch: "main" } },
+        },
+        {
+          id: "tab-saved-2",
+          label: "shax",
+          layout: { kind: "leaf", paneId: "pane-saved-2" },
+          focusedPaneId: "pane-saved-2",
+          panes: { "pane-saved-2": { cwd: null, branch: null } },
+        },
+      ],
+      activeId: "tab-saved-2",
+    });
+    mockAppStateLoad.mockResolvedValueOnce(saved);
+    render(<App />);
+    await vi.waitFor(() => {
+      const pills = screen.getAllByTestId("title-tab");
+      expect(pills).toHaveLength(2);
+      // The active one is the second tab, as saved.
+      const actives = pills.filter((p) => p.getAttribute("data-active") === "true");
+      expect(actives).toHaveLength(1);
+      expect(actives[0]).toBe(pills[1]);
+    });
+  });
+
+  it("falls back to a fresh tab when the saved JSON is malformed", () => {
+    mockAppStateLoad.mockResolvedValueOnce("not valid json {{{");
+    render(<App />);
+    // Initial render still shows one default tab; hydrate doesn't replace.
+    expect(screen.getAllByTestId("title-tab")).toHaveLength(1);
+  });
+
+  it("saves the app state after layout changes (debounced)", async () => {
+    render(<App />);
+    // Wait for the initial hydrate to settle so the save effect arms.
+    await vi.waitFor(() => {
+      expect(mockAppStateLoad).toHaveBeenCalled();
+    });
+    act(() => {
+      fireEvent.keyDown(window, { key: "t", metaKey: true });
+    });
+    await vi.waitFor(
+      () => {
+        expect(mockAppStateSave).toHaveBeenCalled();
+      },
+      { timeout: 1000 },
+    );
+    const calls = mockAppStateSave.mock.calls;
+    const lastCall = calls[calls.length - 1];
+    const json = lastCall?.[0] as string;
+    const parsed = JSON.parse(json) as { tabs: unknown[] };
+    expect(parsed.tabs).toHaveLength(2);
   });
 });

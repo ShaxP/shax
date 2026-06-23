@@ -55,6 +55,12 @@ export type PtyEvent =
        */
       cwd: string | null;
       git_branch: string | null;
+      /**
+       * True if the alt-screen was active at any point during this block —
+       * the user ran vim / htop / less / ssh / a REPL. Backend authoritative;
+       * the UI hides the output preview when set.
+       */
+      interactive: boolean;
     }
   | {
       /**
@@ -100,6 +106,13 @@ export interface BlockSummary {
   exit_code: number | null;
   duration_ms: number | null;
   aborted: boolean;
+  /**
+   * True when the alternate screen was active at any point during this
+   * block (vim, htop, less, …). The frontend hides the output preview
+   * for these blocks because the captured bytes are cursor / grid
+   * manipulation rather than flow text.
+   */
+  interactive: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,4 +233,25 @@ export async function getBlockOutput(id: PtyId, blockId: BlockId): Promise<Uint8
   const { invoke } = await import("@tauri-apps/api/core");
   const b64 = await invoke<string>("pty_get_block_output", { id, blockId });
   return base64Decode(b64);
+}
+
+/**
+ * Load the persisted app-state JSON (tabs + layout tree + focused pane id).
+ * Returns `null` when no prior session has been saved yet, or when running
+ * outside Tauri (the e2e/jsdom env).
+ */
+export async function appStateLoad(): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("app_state_load");
+}
+
+/**
+ * Persist the app-state JSON blob. The frontend debounces saves so a burst
+ * of layout edits (e.g. dragging a divider) doesn't hammer SQLite.
+ */
+export async function appStateSave(json: string): Promise<void> {
+  if (!isTauriContext()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("app_state_save", { json });
 }
