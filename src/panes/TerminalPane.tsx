@@ -310,15 +310,21 @@ function TerminalPaneInner({
   }, [altScreen]);
 
   // Focus management. Only the active pane claims focus, so background
-  // tabs don't pull keystrokes away from the user's currently-visible tab.
+  // tabs don't pull keystrokes away from the user's currently-visible
+  // tab. `exitedCode` is in the dep list so that clicking "Restart
+  // shell" — which clears the banner and re-renders the prompt strip
+  // — also re-fires this effect and lands focus back in the strip the
+  // user is about to type into. Without this, the user has to click
+  // the strip first.
   useEffect(() => {
     if (!active) return;
+    if (exitedCode !== null) return; // banner showing; the strip isn't even mounted
     if (altScreen) {
       terminalRef.current?.focus();
     } else {
       promptStripRef.current?.focus();
     }
-  }, [active, altScreen]);
+  }, [active, altScreen, exitedCode]);
 
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
   // local-echoes; the shell's own echo (via `prompt_chunk`) drives the
