@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 // ---------------------------------------------------------------------------
@@ -58,7 +58,16 @@ vi.mock("@xterm/addon-fit", () => {
 // Mock the IPC layer.
 // ---------------------------------------------------------------------------
 
-const mockSpawnPty = vi.fn().mockResolvedValue("non-tauri");
+// Captures the last `onEvent` handler so tests can fire IPC events into
+// the pane (e.g. simulating the shell exiting).
+let lastOnEvent: ((e: unknown) => void) | null = null;
+const mockSpawnPty = vi.fn().mockImplementation(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (_opts: unknown, onEvent: (e: any) => void): Promise<string> => {
+    lastOnEvent = onEvent;
+    return Promise.resolve("non-tauri");
+  },
+);
 const mockKillPty = vi.fn().mockResolvedValue(undefined);
 const mockWritePty = vi.fn().mockResolvedValue(undefined);
 const mockResizePty = vi.fn().mockResolvedValue(undefined);
@@ -148,5 +157,84 @@ describe("TerminalPane", () => {
     // rendering their own copy.
     expect(screen.queryByTestId("title-bar")).toBeNull();
     expect(screen.queryByTestId("statusline")).toBeNull();
+  });
+});
+
+describe("TerminalPane / dead-shell handling (M2 slice 2.3b)", () => {
+  it("shows a 'shell exited' banner when the PTY emits exit, and hides the prompt strip", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    expect(lastOnEvent).not.toBeNull();
+    act(() => {
+      lastOnEvent?.({ kind: "exit", code: 0 });
+    });
+    expect(screen.getByTestId("shell-exited-banner")).toHaveTextContent(
+      "Shell exited with code 0.",
+    );
+    // The strip goes away while the shell is dead — there's nothing to
+    // type into until the user restarts.
+    expect(screen.queryByTestId("prompt-strip")).toBeNull();
+  });
+
+  it("clicking 'Restart shell' spawns a new PTY and clears the banner", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      lastOnEvent?.({ kind: "exit", code: 1 });
+    });
+    expect(screen.getByTestId("shell-exited-banner")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("shell-restart"));
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId("shell-exited-banner")).toBeNull();
+    expect(screen.getByTestId("prompt-strip")).toBeInTheDocument();
+  });
+
+  it("⌘⇧R restarts the shell when the banner is showing", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      lastOnEvent?.({ kind: "exit", code: 0 });
+    });
+    expect(screen.getByTestId("shell-exited-banner")).toBeInTheDocument();
+    act(() => {
+      fireEvent.keyDown(window, { key: "R", metaKey: true, shiftKey: true });
+    });
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId("shell-exited-banner")).toBeNull();
+  });
+
+  it("⌘⇧R is a no-op while the shell is alive (no accidental kill)", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    // No exit event — shell is alive. ⌘⇧R should NOT spawn another.
+    act(() => {
+      fireEvent.keyDown(window, { key: "R", metaKey: true, shiftKey: true });
+    });
+    // Give the (non-)handler a microtask to settle.
+    await Promise.resolve();
+    expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders 'Shell exited.' without a code when the exit carries none", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      lastOnEvent?.({ kind: "exit", code: null });
+    });
+    expect(screen.getByTestId("shell-exited-banner")).toHaveTextContent("Shell exited.");
   });
 });

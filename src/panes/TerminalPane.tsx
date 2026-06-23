@@ -25,7 +25,7 @@
  *     don't see it.
  */
 
-import { memo, startTransition, useEffect, useReducer, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -80,6 +80,16 @@ function TerminalPaneInner({
   // Mirror the pty id into React state so the BlockList re-renders once the
   // backend assigns one. (The ref is for the effect; state is for the children.)
   const [ptyId, setPtyId] = useState<PtyId | null>(null);
+  // Set to the shell's exit code when the PTY exits while the pane is
+  // alive. The banner reads this to render a "shell exited / restart"
+  // overlay. `null` means the shell is alive; `-1` is the sentinel for
+  // "no numeric code reported" (signal-killed, etc.).
+  const [exitedCode, setExitedCode] = useState<number | null>(null);
+  // Bumped by `handleRestart` to retrigger the mount effect: the existing
+  // cleanup tears down xterm + the (already-dead) PTY entry, and setup
+  // spawns a fresh shell in the same React-tree position. No unmount,
+  // so the pane wrapper, focus state, and layout slot stay intact.
+  const [restartNonce, setRestartNonce] = useState(0);
 
   const altScreen = blockState.altScreen;
 
@@ -148,9 +158,25 @@ function TerminalPaneInner({
     });
     resizeObserver.observe(container);
 
+    // Race guard: if the pane is closed (or React StrictMode runs the
+    // double-mount dance) before spawn resolves, we still want to kill
+    // the freshly-minted PTY so it doesn't outlive its UI. We also flip
+    // this true early so the channel handler below ignores anything the
+    // now-doomed PTY emits — without that, the kill we issue triggers
+    // a `PtyEvent::Exit` that lands in the *surviving* mount's reducer
+    // and pops a spurious "Shell exited with code 1" banner on every
+    // freshly-opened tab or pane.
+    let cancelled = false;
+
     // Route IPC events: output bytes go to xterm; block-lifecycle and
     // alt-screen events go to the reducer.
     const handleEvent = (event: PtyEvent): void => {
+      // The cleanup of this effect (StrictMode rerun, restart, real
+      // unmount) flips `cancelled` true. The PTY tied to this handler
+      // is being torn down or has already been killed; ignore its
+      // trailing events instead of mutating state that belongs to the
+      // next mount.
+      if (cancelled) return;
       switch (event.kind) {
         case "output":
           terminal.write(base64Decode(event.data));
@@ -204,16 +230,19 @@ function TerminalPaneInner({
           break;
 
         case "exit":
-          // Handled by the shell's own output for now; block teardown in
-          // a future slice will clean up the PTY entry.
+          // The shell died (user typed `exit`, it crashed, or a
+          // `kill -9` from outside). The PTY entry is gone from the
+          // backend map; surface the fact in the UI so the user can
+          // restart instead of staring at an unresponsive prompt.
+          // Use -1 as the "no code" sentinel so the banner can
+          // distinguish "exited cleanly with no reported code" from
+          // a real exit code.
+          setExitedCode(event.code ?? -1);
+          ptyIdRef.current = null;
           break;
       }
     };
 
-    // Race guard: if the pane is closed (or React StrictMode runs the
-    // double-mount dance) before spawn resolves, we still want to kill
-    // the freshly-minted PTY so it doesn't outlive its UI.
-    let cancelled = false;
     void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
       if (cancelled) {
         void killPty(id);
@@ -248,7 +277,10 @@ function TerminalPaneInner({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, []); // intentionally empty: setup and teardown run once per mount
+    // `restartNonce` is the only intentional retrigger — everything else
+    // used inside is a ref or the dispatch/stable closures captured at
+    // mount, so excluding them from the dep array is deliberate.
+  }, [restartNonce]);
 
   // Derive the current cwd/branch from the most recently observed block.
   // OSC 133 A on every prompt updates the block's metadata, so the last
@@ -278,15 +310,21 @@ function TerminalPaneInner({
   }, [altScreen]);
 
   // Focus management. Only the active pane claims focus, so background
-  // tabs don't pull keystrokes away from the user's currently-visible tab.
+  // tabs don't pull keystrokes away from the user's currently-visible
+  // tab. `exitedCode` is in the dep list so that clicking "Restart
+  // shell" — which clears the banner and re-renders the prompt strip
+  // — also re-fires this effect and lands focus back in the strip the
+  // user is about to type into. Without this, the user has to click
+  // the strip first.
   useEffect(() => {
     if (!active) return;
+    if (exitedCode !== null) return; // banner showing; the strip isn't even mounted
     if (altScreen) {
       terminalRef.current?.focus();
     } else {
       promptStripRef.current?.focus();
     }
-  }, [active, altScreen]);
+  }, [active, altScreen, exitedCode]);
 
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
   // local-echoes; the shell's own echo (via `prompt_chunk`) drives the
@@ -296,6 +334,37 @@ function TerminalPaneInner({
     if (id === null) return;
     void writePty(id, bytes);
   };
+
+  // Restart the shell after it exited. Wipes the pane's runtime state
+  // (block list, live outputs, alt-screen flag, prompt strip) and bumps
+  // `restartNonce` so the mount effect re-runs: cleanup tears down the
+  // old xterm + the (already-dead) PTY entry, setup spawns a fresh shell.
+  // Stable identity (useCallback) so the ⌘⇧R keyboard effect below can
+  // depend on it without re-binding the listener on every render.
+  const handleRestart = useCallback((): void => {
+    dispatch({ type: "reset" });
+    setExitedCode(null);
+    setRestartNonce((n) => n + 1);
+  }, []);
+
+  // ⌘⇧R (Ctrl+Shift+R elsewhere) restarts the shell — same as clicking
+  // the banner button. Gated on `exitedCode !== null` so a stray
+  // keystroke can't kill a running shell; the active-pane guard keeps
+  // background panes from grabbing the shortcut. Listener stays mounted
+  // only while both conditions hold; cleanup ensures we don't leak
+  // handlers across pane transitions.
+  useEffect(() => {
+    if (!active || exitedCode === null) return;
+    const handler = (e: KeyboardEvent): void => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || !e.shiftKey) return;
+      if (e.key !== "R" && e.key !== "r") return;
+      e.preventDefault();
+      handleRestart();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [active, exitedCode, handleRestart]);
 
   const isInsideTauri = isTauriContext();
 
@@ -375,8 +444,59 @@ function TerminalPaneInner({
         >
           <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
         </div>
+        {exitedCode !== null && (
+          <div
+            data-testid="shell-exited-banner"
+            style={{
+              position: "absolute",
+              left: 12,
+              right: 12,
+              bottom: 12,
+              zIndex: 50,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "10px 14px",
+              borderRadius: "var(--radius)",
+              background: "var(--surface)",
+              border: "1px solid var(--border-strong)",
+              color: "var(--fg)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 13,
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.35)",
+            }}
+          >
+            <span style={{ flex: 1 }}>
+              Shell exited
+              {exitedCode >= 0 ? ` with code ${exitedCode}` : ""}.
+            </span>
+            <button
+              type="button"
+              data-testid="shell-restart"
+              onClick={handleRestart}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                background: "var(--accent)",
+                color: "var(--bg)",
+                border: "none",
+                borderRadius: "var(--radius-sm)",
+                padding: "5px 12px",
+                fontFamily: "var(--font-ui)",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+              title="Restart shell (⌘⇧R)"
+            >
+              Restart shell
+              <span style={{ opacity: 0.75, fontWeight: 500 }}>⌘⇧R</span>
+            </button>
+          </div>
+        )}
       </div>
-      {!altScreen && (
+      {!altScreen && exitedCode === null && (
         <PromptStrip
           ref={promptStripRef}
           cwd={cwd}

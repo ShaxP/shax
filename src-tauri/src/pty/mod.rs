@@ -374,6 +374,22 @@ impl PtyManager {
         tracing::debug!(%id, "PTY entry removed after natural exit");
     }
 
+    /// Kill every spawned PTY. Called from the Tauri exit hook so child
+    /// shells don't outlive the parent window — without this they keep
+    /// running detached until the OS reaps them on session logout (which
+    /// can be hours later on a desktop session).
+    pub async fn shutdown_all(&self) {
+        let ids: Vec<PtyId> = {
+            let guard = self.inner.lock().await;
+            guard.keys().copied().collect()
+        };
+        for id in ids {
+            if let Err(e) = self.kill(id).await {
+                tracing::debug!(%id, "shutdown_all: kill returned {e} (child may already be dead)");
+            }
+        }
+    }
+
     /// Return a snapshot of the block summary list for the given pane, oldest
     /// first.  Returns an empty vec if the pane id is unknown.
     pub async fn list_blocks(&self, id: PtyId) -> Vec<BlockSummary> {
@@ -1063,6 +1079,35 @@ mod tests {
             manager.active_count().await,
             0,
             "manager table should be empty after kill"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_all_kills_every_spawned_pty() {
+        // Spawn several PTYs, then verify shutdown_all reaps them all.
+        // Without this, an app quit leaves orphan shells alive.
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        for _ in 0..3 {
+            let (channel, _rx) = make_test_channel();
+            let opts = SpawnOpts {
+                rows: 24,
+                cols: 80,
+                cwd: None,
+                env: None,
+            };
+            manager.spawn(opts, channel).await.expect("spawn");
+        }
+        assert_eq!(manager.active_count().await, 3);
+
+        manager.shutdown_all().await;
+
+        assert_eq!(
+            manager.active_count().await,
+            0,
+            "shutdown_all should empty the manager",
         );
     }
 

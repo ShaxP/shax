@@ -541,3 +541,20 @@ describe("blockReducer / prompt_chunk", () => {
     expect(started.promptLine).toMatchObject({ text: "", cursor: 0 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// reset
+// ---------------------------------------------------------------------------
+
+describe("blockReducer / reset", () => {
+  it("returns to the initial state (used by the dead-shell restart path)", () => {
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "stale" })],
+      altScreen: true,
+      liveOutputs: new Map([["stale", new Uint8Array([1, 2, 3])]]),
+      promptLine: { text: "old", styled: [], cursor: 3, currentStyled: false },
+    };
+    const next = blockReducer(state, { type: "reset" });
+    expect(next).toBe(initialBlockState);
+  });
+});
