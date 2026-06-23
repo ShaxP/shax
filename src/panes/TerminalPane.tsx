@@ -158,9 +158,25 @@ function TerminalPaneInner({
     });
     resizeObserver.observe(container);
 
+    // Race guard: if the pane is closed (or React StrictMode runs the
+    // double-mount dance) before spawn resolves, we still want to kill
+    // the freshly-minted PTY so it doesn't outlive its UI. We also flip
+    // this true early so the channel handler below ignores anything the
+    // now-doomed PTY emits — without that, the kill we issue triggers
+    // a `PtyEvent::Exit` that lands in the *surviving* mount's reducer
+    // and pops a spurious "Shell exited with code 1" banner on every
+    // freshly-opened tab or pane.
+    let cancelled = false;
+
     // Route IPC events: output bytes go to xterm; block-lifecycle and
     // alt-screen events go to the reducer.
     const handleEvent = (event: PtyEvent): void => {
+      // The cleanup of this effect (StrictMode rerun, restart, real
+      // unmount) flips `cancelled` true. The PTY tied to this handler
+      // is being torn down or has already been killed; ignore its
+      // trailing events instead of mutating state that belongs to the
+      // next mount.
+      if (cancelled) return;
       switch (event.kind) {
         case "output":
           terminal.write(base64Decode(event.data));
@@ -227,10 +243,6 @@ function TerminalPaneInner({
       }
     };
 
-    // Race guard: if the pane is closed (or React StrictMode runs the
-    // double-mount dance) before spawn resolves, we still want to kill
-    // the freshly-minted PTY so it doesn't outlive its UI.
-    let cancelled = false;
     void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
       if (cancelled) {
         void killPty(id);
