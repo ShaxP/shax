@@ -79,7 +79,7 @@ function focusRingStyle(isFocused: boolean): CSSProperties {
     position: "absolute",
     inset: 0,
     pointerEvents: "none",
-    border: isFocused ? "2px solid var(--accent)" : "2px solid transparent",
+    border: isFocused ? "1px solid var(--accent)" : "1px solid transparent",
     boxSizing: "border-box",
     zIndex: 100,
   };
