@@ -1,30 +1,28 @@
 /**
- * TerminalPane — the host for a single PTY, structured around the
- * M1.9 prompt-strip-owns-input model.
+ * TerminalPane — one PTY's session, structured around the M1.9
+ * prompt-strip-owns-input model.
+ *
+ * One instance per tab as of M2 slice 2.1. The App-level shell owns the
+ * top chrome (TitleBar, Statusline) so multiple TerminalPanes can coexist
+ * in background-tab state without each rendering its own copy. Per-tab
+ * state changes (cwd, branch, alt-screen) bubble up through callback
+ * props so the chrome can reflect whichever tab is currently active.
  *
  * Resting state (no alt-screen):
  *   - Block stack is the visible scrollback.
- *   - PromptStrip is focused and captures keystrokes; xterm.js is hidden
- *     behind the block stack (kept alive so its byte stream stays in sync
- *     and so alt-screen handover doesn't need a re-fit).
- *   - Each keystroke from the strip is mapped to its PTY bytes via
- *     keyToBytes and sent through writePty. xterm's own `onData` is wired
- *     up but disabled in this state — xterm never has focus while the
- *     strip is active.
+ *   - PromptStrip is focused and captures keystrokes (only when `active`).
+ *     xterm.js is hidden behind the block stack (kept alive so its byte
+ *     stream stays in sync and alt-screen handover doesn't need a re-fit).
  *
  * Alt-screen state (vim, less, top, REPLs):
- *   - xterm.js is revealed and focused. The block stack and prompt strip
- *     are hidden — alt-screen programs own the full pane area.
- *   - Output continues to flow into xterm as before, and the host's
- *     fidelity contract (raw passthrough) is preserved.
+ *   - xterm.js is revealed and focused (only when `active`).
+ *   - Block stack and prompt strip step aside.
  *
- * Both states feed the same block/prompt reducer; the only thing the
- * alt-screen flag controls is *which* surface is visible and where focus
- * lives.
- *
- * When running outside Tauri (browser dev server, Playwright) the IPC
- * layer is a no-op; the page still mounts so e2e tests can assert on the
- * rendered chrome.
+ * Background-tab state (`active=false`):
+ *   - The PTY stays alive and events continue to flow into the reducer.
+ *   - Focus is never claimed.
+ *   - The pane is wrapped by the App in a hidden container, so users
+ *     don't see it.
  */
 
 import { startTransition, useEffect, useReducer, useRef, useState } from "react";
@@ -35,8 +33,6 @@ import { spawnPty, writePty, resizePty, killPty, listBlocks, base64Decode } from
 import type { PtyId, PtyEvent } from "../lib/ipc";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
-import { TitleBar } from "./TitleBar";
-import { Statusline } from "./Statusline";
 import { PromptStrip } from "./PromptStrip";
 
 const RESIZE_DEBOUNCE_MS = 50;
@@ -45,7 +41,33 @@ function isTauriContext(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-export function TerminalPane(): React.ReactElement {
+export interface TerminalPaneProps {
+  /**
+   * True when this pane is the currently-visible tab. The pane uses this
+   * to decide whether to claim focus on mount / on alt-screen toggle, and
+   * the parent uses the same flag to set the wrapper's visibility.
+   * Defaults to true so callers that render a single pane don't need to
+   * pass it.
+   */
+  active?: boolean;
+  /**
+   * Notify the parent when this pane's cwd / branch changes (sourced from
+   * the latest OSC 133 A). Used by the App-level TitleBar and Statusline
+   * to show the active tab's metadata.
+   */
+  onMetaChange?: (cwd: string | null, branch: string | null) => void;
+  /**
+   * Notify the parent when the alternate screen flips on or off so the
+   * App can route focus and adjust chrome accordingly.
+   */
+  onAltScreenChange?: (active: boolean) => void;
+}
+
+export function TerminalPane({
+  active = true,
+  onMetaChange,
+  onAltScreenChange,
+}: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   // Held as refs so the cleanup closure always sees the live values without
   // adding them to any effect dependency array.
@@ -65,9 +87,18 @@ export function TerminalPane(): React.ReactElement {
     const container = containerRef.current;
     if (container === null) return;
 
+    // Read the monospace font stack from the global theme so xterm's
+    // canvas renderer picks up the same Nerd-Font-first list used by
+    // the rest of the UI (prompt strip, block list). Falls back to a
+    // safe default if the CSS variable is missing for any reason.
+    const fontMono =
+      typeof window !== "undefined"
+        ? getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim()
+        : "";
     const terminal = new Terminal({
       // Let xterm fill the container; FitAddon will set the actual dimensions.
       allowProposedApi: true,
+      fontFamily: fontMono !== "" ? fontMono : "ui-monospace, monospace",
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -161,14 +192,17 @@ export function TerminalPane(): React.ReactElement {
       }
     };
 
+    // Race guard: if the pane is closed (or React StrictMode runs the
+    // double-mount dance) before spawn resolves, we still want to kill
+    // the freshly-minted PTY so it doesn't outlive its UI.
+    let cancelled = false;
     void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
+      if (cancelled) {
+        void killPty(id);
+        return;
+      }
       ptyIdRef.current = id;
       setPtyId(id);
-      // Seed block state from blocks already present before the frontend
-      // mounted — historical rows from the persistent store on boot.
-      // Wrapped in `startTransition` so the bounded but non-trivial render
-      // work yields to the event loop and lets xterm's scheduler keep up
-      // with the initial shell prompt.
       void listBlocks(id).then((blocks) => {
         if (blocks.length > 0) {
           startTransition(() => {
@@ -179,7 +213,8 @@ export function TerminalPane(): React.ReactElement {
     });
 
     return () => {
-      // Stop observing before anything else to prevent stray fit() calls.
+      cancelled = true;
+
       resizeObserver.disconnect();
       if (resizeTimer !== null) clearTimeout(resizeTimer);
 
@@ -197,18 +232,43 @@ export function TerminalPane(): React.ReactElement {
     };
   }, []); // intentionally empty: setup and teardown run once per mount
 
-  // Focus management. Whichever surface is "current" should hold focus so
-  // keystrokes flow correctly: xterm under alt-screen, PromptStrip in the
-  // resting state. Triggered whenever altScreen toggles.
+  // Derive the current cwd/branch from the most recently observed block.
+  // OSC 133 A on every prompt updates the block's metadata, so the last
+  // entry always reflects where the shell is now.
+  const latestBlock = blockState.blocks[blockState.blocks.length - 1];
+  const cwd = latestBlock?.cwd ?? null;
+  const branch = latestBlock?.git_branch ?? null;
+
+  // Tell the parent whenever cwd / branch / alt-screen changes so the
+  // App-level chrome can mirror the active tab's state. We stash the
+  // callbacks in refs and depend only on the value, otherwise an inline
+  // arrow-in-parent (the common case for App) would change identity on
+  // every parent render and cause an effect → setState → render loop.
+  const onMetaChangeRef = useRef(onMetaChange);
+  const onAltScreenChangeRef = useRef(onAltScreenChange);
   useEffect(() => {
+    onMetaChangeRef.current = onMetaChange;
+  }, [onMetaChange]);
+  useEffect(() => {
+    onAltScreenChangeRef.current = onAltScreenChange;
+  }, [onAltScreenChange]);
+  useEffect(() => {
+    onMetaChangeRef.current?.(cwd, branch);
+  }, [cwd, branch]);
+  useEffect(() => {
+    onAltScreenChangeRef.current?.(altScreen);
+  }, [altScreen]);
+
+  // Focus management. Only the active pane claims focus, so background
+  // tabs don't pull keystrokes away from the user's currently-visible tab.
+  useEffect(() => {
+    if (!active) return;
     if (altScreen) {
       terminalRef.current?.focus();
     } else {
       promptStripRef.current?.focus();
-      // Re-fit nothing changed in the resting layout, but the strip just
-      // took focus — no work required.
     }
-  }, [altScreen]);
+  }, [active, altScreen]);
 
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
   // local-echoes; the shell's own echo (via `prompt_chunk`) drives the
@@ -220,13 +280,6 @@ export function TerminalPane(): React.ReactElement {
   };
 
   const isInsideTauri = isTauriContext();
-
-  // Derive the current cwd/branch from the most recently observed block.
-  // OSC 133 A on every prompt updates the block's metadata, so the last
-  // entry always reflects where the shell is now.
-  const latestBlock = blockState.blocks[blockState.blocks.length - 1];
-  const cwd = latestBlock?.cwd ?? null;
-  const branch = latestBlock?.git_branch ?? null;
 
   return (
     <div
@@ -241,7 +294,6 @@ export function TerminalPane(): React.ReactElement {
         fontFamily: "var(--font-ui)",
       }}
     >
-      <TitleBar cwd={cwd} />
       <div
         data-testid="pane-area"
         style={{
@@ -253,21 +305,22 @@ export function TerminalPane(): React.ReactElement {
           background: "var(--bg)",
         }}
       >
-        {/*
-         * xterm canvas is always present in the DOM so its byte stream
-         * stays in sync with the PTY. It's positioned absolutely over the
-         * pane area; the block stack + prompt strip render on top of it
-         * in the resting state. Visibility is toggled per alt-screen
-         * state — `display: none` would break ResizeObserver and the
-         * fit addon's measurements.
-         */}
         <div
           data-testid="xterm-wrapper"
           style={{
             position: "absolute",
             inset: 0,
             background: "var(--pane)",
-            visibility: altScreen ? "visible" : "hidden",
+            // Stack instead of visibility-toggle. The App-level tab
+            // wrapper uses `visibility: hidden` to hide background tabs;
+            // if we also used `visibility: visible` here it would
+            // override the parent's hide (visibility:visible on a child
+            // overrides visibility:hidden on the parent) and the
+            // alt-screen xterm of a background tab would render on top
+            // of the active tab. Z-index keeps xterm on top of the
+            // block list only when its own tab is in alt-screen mode,
+            // and the App's visibility:hidden remains effective for
+            // every layer inside an inactive tab.
             pointerEvents: altScreen ? "auto" : "none",
             zIndex: altScreen ? 2 : 0,
           }}
@@ -293,12 +346,6 @@ export function TerminalPane(): React.ReactElement {
           )}
         </div>
 
-        {/*
-         * Block stack — the visible scrollback in the resting state.
-         * Hidden under alt-screen so vim and friends get the full pane.
-         * Kept in the DOM so its scroll position survives the trip
-         * through alt-screen.
-         */}
         <div
           style={{
             display: altScreen ? "none" : "flex",
@@ -311,10 +358,6 @@ export function TerminalPane(): React.ReactElement {
           <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
         </div>
       </div>
-      {/*
-       * PromptStrip owns input in the resting state. Hidden under
-       * alt-screen so it doesn't capture keys meant for vim / less / top.
-       */}
       {!altScreen && (
         <PromptStrip
           ref={promptStripRef}
@@ -325,7 +368,6 @@ export function TerminalPane(): React.ReactElement {
           altScreen={altScreen}
         />
       )}
-      <Statusline cwd={cwd} branch={branch} />
     </div>
   );
 }

@@ -1,35 +1,25 @@
 /**
  * TitleBar — the top chrome row of the Shax window.
  *
- * Renders the active tab pill and the right-side toolbar icons (split,
- * search, assistant, settings). All interactivity here is visual-only at
- * M1.5; behaviour (real tabs, split panes, search overlay, assistant
- * invocation) lands in M2 / M3 / M6 as those milestones come up.
+ * As of M2 slice 2.1 the tab bar is real: the host passes in the live
+ * list of tabs plus the active id, and the bar renders them with click-
+ * to-switch, hover-to-show-close, and a `+` button on the right of the
+ * row to spawn a new tab. The split-screen and search/assistant icons
+ * are still visual-only — they light up in later slices.
  *
  * Traffic lights are NOT painted here: Tauri uses native window decorations
- * on every platform, so macOS and Windows already render their own
- * close/minimise/zoom controls. On macOS the Tauri config opts into
- * `titleBarStyle: "Overlay"` (see `src-tauri/tauri.conf.json`), so the
- * native traffic lights float over the webview's top-left corner.
+ * on every platform. On macOS the Tauri config opts into
+ * `titleBarStyle: "Overlay"` so the native traffic lights float over the
+ * webview's top-left corner; we keep an extra left gutter on macOS so the
+ * first tab does not crowd the close button.
  *
- * On macOS the row carries an extra left gutter so the tab pill sits
- * clearly to the right of the traffic-light cluster instead of being
- * overlapped by it. On Windows and Linux the native title bar sits above
- * this row and no inset is needed.
+ * Window dragging is wired via an explicit `onMouseDown` handler that
+ * calls `getCurrentWindow().startDragging()` from the Tauri API. Tabs and
+ * the toolbar opt out of the drag region so clicks on them act as
+ * buttons, not window drags.
  *
- * Window dragging is wired via an explicit `onMouseDown` handler that calls
- * `getCurrentWindow().startDragging()` from the Tauri API. We keep the
- * `data-tauri-drag-region` attribute on the row and `="false"` on the
- * active tab and toolbar so any Tauri-injected drag script also picks up
- * the right targets, but the explicit handler is the load-bearing path and
- * is what the user-visible drag-to-move behaviour relies on.
- *
- * The active tab pill draws its label from the live PTY's cwd (passed in by
- * the parent). When no cwd is known yet, the pill renders a neutral fallback
- * so the layout doesn't reflow on first prompt.
- *
- * Visuals follow the design at `/design/Shax Main Shell.dc.html` and consume
- * tokens from `src/theme/tokens.css`.
+ * Visuals follow the design at `/design/Shax Main Shell.dc.html` and
+ * consume tokens from `src/theme/tokens.css`.
  */
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
@@ -37,35 +27,36 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const IS_MAC = ((): boolean => {
   if (typeof navigator === "undefined") return false;
-  // jsdom and CI Linux Chromium do not contain "Mac"; real macOS Tauri
-  // webviews and Chromium-on-mac both do. This is enough to gate the
-  // overlay padding without pulling in a Tauri-only OS plugin.
   return /Mac|iPhone|iPad/i.test(navigator.userAgent);
 })();
 
 // Reserve space for the native traffic lights on macOS overlay title bars.
-// Default macOS button cluster is ~70px wide; 78 gives a small extra gap
-// so the first tab does not crowd the close button.
 const MAC_TRAFFIC_LIGHT_INSET = 78;
 
-export interface TitleBarProps {
-  /** The current working directory of the active pane, if known. */
+export interface TabDescriptor {
+  /** Stable id; the host uses this for switch / close callbacks. */
+  id: string;
+  /** Short display name shown on the tab (e.g., the shell binary). */
+  label: string;
+  /** Working directory shown after the label, ellipsised on overflow. */
   cwd: string | null;
-  /** A short display name for the active tab (e.g., the shell binary). */
-  tabLabel?: string;
+}
+
+export interface TitleBarProps {
+  tabs: TabDescriptor[];
+  activeId: string | null;
+  onSwitch: (id: string) => void;
+  onNew: () => void;
+  onClose: (id: string) => void;
 }
 
 const ROW: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 14,
-  // Tighter than the design's 46px so the tab pill rides closer to the
-  // top of the window — leaves a small (~4px) gap above the tab.
   height: 38,
   paddingTop: 0,
   paddingBottom: 0,
-  // Reserve the traffic-light area on macOS so the tab pill starts past
-  // the close/minimise/zoom cluster instead of being overlapped by it.
   paddingLeft: IS_MAC ? MAC_TRAFFIC_LIGHT_INSET : 14,
   paddingRight: 14,
   background: "var(--titlebar)",
@@ -84,18 +75,30 @@ const TABS_ROW: CSSProperties = {
   minWidth: 0,
 };
 
-const ACTIVE_TAB: CSSProperties = {
+const TAB_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 9,
   height: 34,
-  padding: "0 14px",
-  background: "var(--pane)",
-  border: "1px solid var(--border)",
-  borderBottom: "1px solid var(--pane)",
+  padding: "0 10px 0 14px",
   borderRadius: "8px 8px 0 0",
   marginBottom: -1,
   maxWidth: 320,
+  cursor: "pointer",
+};
+
+const TAB_ACTIVE: CSSProperties = {
+  ...TAB_BASE,
+  background: "var(--pane)",
+  border: "1px solid var(--border)",
+  borderBottom: "1px solid var(--pane)",
+};
+
+const TAB_INACTIVE: CSSProperties = {
+  ...TAB_BASE,
+  background: "transparent",
+  border: "1px solid transparent",
+  opacity: 0.7,
 };
 
 const TAB_ACCENT_DOT: CSSProperties = {
@@ -122,6 +125,36 @@ const TAB_PATH: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   minWidth: 0,
+  flex: 1,
+};
+
+const TAB_CLOSE: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 18,
+  height: 18,
+  borderRadius: "var(--radius-sm)",
+  fontSize: 14,
+  color: "var(--fg-faint)",
+  cursor: "pointer",
+  flexShrink: 0,
+};
+
+const NEW_TAB_BTN: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: 24,
+  marginLeft: 2,
+  marginBottom: 4,
+  borderRadius: "var(--radius-sm)",
+  color: "var(--fg-faint)",
+  fontSize: 16,
+  cursor: "pointer",
+  alignSelf: "flex-end",
+  flexShrink: 0,
 };
 
 const TOOLBAR: CSSProperties = {
@@ -161,11 +194,7 @@ function isInsideTauri(): boolean {
 }
 
 function handleTitleBarMouseDown(e: ReactMouseEvent<HTMLDivElement>): void {
-  // Only left-button drags should move the window. Right/middle clicks
-  // are reserved for context menus and pane actions we will wire later.
   if (e.button !== 0) return;
-  // Children explicitly opt out by being inside an element with the
-  // no-drag marker. Lets the tab and toolbar take their own clicks.
   if (e.target instanceof HTMLElement) {
     if (e.target.closest('[data-tauri-drag-region="false"]') !== null) return;
   }
@@ -173,7 +202,13 @@ function handleTitleBarMouseDown(e: ReactMouseEvent<HTMLDivElement>): void {
   void getCurrentWindow().startDragging();
 }
 
-export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.ReactElement {
+export function TitleBar({
+  tabs,
+  activeId,
+  onSwitch,
+  onNew,
+  onClose,
+}: TitleBarProps): React.ReactElement {
   return (
     <div
       data-testid="title-bar"
@@ -181,12 +216,50 @@ export function TitleBar({ cwd, tabLabel = "shax" }: TitleBarProps): React.React
       style={ROW}
       onMouseDown={handleTitleBarMouseDown}
     >
-      <div style={TABS_ROW}>
-        <div data-testid="active-tab" data-tauri-drag-region="false" style={ACTIVE_TAB}>
-          <span style={TAB_ACCENT_DOT} />
-          <span style={TAB_NAME}>{tabLabel}</span>
-          <span style={TAB_PATH}>{cwd ?? "—"}</span>
-        </div>
+      <div style={TABS_ROW} data-testid="title-tabs">
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeId;
+          const allowClose = tabs.length > 1;
+          return (
+            <div
+              key={tab.id}
+              data-testid="title-tab"
+              data-tab-id={tab.id}
+              data-active={isActive ? "true" : "false"}
+              data-tauri-drag-region="false"
+              style={isActive ? TAB_ACTIVE : TAB_INACTIVE}
+              onClick={() => onSwitch(tab.id)}
+            >
+              <span style={TAB_ACCENT_DOT} />
+              <span style={TAB_NAME}>{tab.label}</span>
+              <span style={TAB_PATH}>{tab.cwd ?? "—"}</span>
+              {allowClose && (
+                <span
+                  data-testid="title-tab-close"
+                  style={TAB_CLOSE}
+                  onClick={(e) => {
+                    // Don't let the click bubble into the tab and switch
+                    // focus to the just-closed tab.
+                    e.stopPropagation();
+                    onClose(tab.id);
+                  }}
+                  title="Close tab"
+                >
+                  ×
+                </span>
+              )}
+            </div>
+          );
+        })}
+        <span
+          data-testid="title-new-tab"
+          data-tauri-drag-region="false"
+          style={NEW_TAB_BTN}
+          onClick={onNew}
+          title="New tab"
+        >
+          +
+        </span>
       </div>
 
       <div style={TOOLBAR} data-testid="title-toolbar" data-tauri-drag-region="false">
