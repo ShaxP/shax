@@ -119,13 +119,43 @@ const CURSOR_BAR: CSSProperties = {
   marginLeft: 1,
 };
 
+const STYLED_TEXT: CSSProperties = {
+  color: "var(--fg-faint)",
+};
+
+interface StyledRun {
+  text: string;
+  styled: boolean;
+}
+
+/**
+ * Group consecutive same-styled characters into runs. Empty input → empty
+ * array. `text` and `styled` are assumed to be the same length; mismatches
+ * fall back to treating extra chars as unstyled.
+ */
+function styledRuns(text: string, styled: boolean[]): StyledRun[] {
+  if (text.length === 0) return [];
+  const runs: StyledRun[] = [];
+  let runText = "";
+  let runStyled = styled[0] ?? false;
+  for (let i = 0; i < text.length; i++) {
+    const s = styled[i] ?? false;
+    if (s !== runStyled) {
+      runs.push({ text: runText, styled: runStyled });
+      runText = "";
+      runStyled = s;
+    }
+    runText += text.charAt(i);
+  }
+  if (runText.length > 0) runs.push({ text: runText, styled: runStyled });
+  return runs;
+}
+
 function PromptStripInner(
   { cwd, branch, line, onInput }: PromptStripProps,
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
   const hasTyping = line.text.length > 0;
-  const before = line.text.slice(0, line.cursor);
-  const after = line.text.slice(line.cursor);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     const bytes = keyToBytes(event);
@@ -136,6 +166,15 @@ function PromptStripInner(
     event.stopPropagation();
     onInput(bytes);
   };
+
+  // Group consecutive same-styled chars into runs so the strip can render
+  // styled chunks (zsh-autosuggestions ghost text, syntax-highlighted
+  // command parts) in a faint colour while the user's committed input
+  // stays at full contrast. Defensive against callers (mostly tests) that
+  // pass a partial PromptLine without the styled field.
+  const lineStyled = line.styled ?? [];
+  const beforeRuns = styledRuns(line.text.slice(0, line.cursor), lineStyled.slice(0, line.cursor));
+  const afterRuns = styledRuns(line.text.slice(line.cursor), lineStyled.slice(line.cursor));
 
   return (
     <div
@@ -162,11 +201,26 @@ function PromptStripInner(
          * Cursor is always rendered so the user has a visible insertion
          * point from the moment the strip mounts. In the empty state it
          * sits at column 0 with the placeholder hint trailing after.
+         * Styled chars (any non-default-fg SGR — e.g., zsh-autosuggestions
+         * ghost text) render in `--fg-faint` so the user can tell what
+         * the shell suggested vs. what they actually typed.
          */}
-        <span data-testid="prompt-line-text">{before}</span>
+        <span data-testid="prompt-line-text">
+          {beforeRuns.map((run, idx) => (
+            <span key={`before-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+              {run.text}
+            </span>
+          ))}
+        </span>
         <span style={CURSOR_BAR} data-testid="prompt-cursor" />
         {hasTyping ? (
-          <span>{after}</span>
+          <span>
+            {afterRuns.map((run, idx) => (
+              <span key={`after-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+                {run.text}
+              </span>
+            ))}
+          </span>
         ) : (
           <span style={LINE_TEXT_PLACEHOLDER}>
             {" "}

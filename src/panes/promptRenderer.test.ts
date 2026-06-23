@@ -17,7 +17,7 @@ function bytes(s: string): Uint8Array {
 describe("promptRenderer / printable text", () => {
   it("appends printable ASCII characters", () => {
     const r = feed(emptyPromptLine, bytes("hello"));
-    expect(r).toEqual({ text: "hello", cursor: 5 });
+    expect(r).toMatchObject({ text: "hello", cursor: 5 });
   });
 
   it("handles UTF-8 multi-byte characters", () => {
@@ -29,28 +29,28 @@ describe("promptRenderer / printable text", () => {
   it("REPLACE semantics: writing at a mid-line cursor overwrites existing chars", () => {
     let r = feed(emptyPromptLine, bytes("abcdef"));
     r = feed(r, new Uint8Array([0x08, 0x08, 0x08])); // BS BS BS
-    expect(r).toEqual({ text: "abcdef", cursor: 3 });
+    expect(r).toMatchObject({ text: "abcdef", cursor: 3 });
     r = feed(r, bytes("XYZ"));
-    expect(r).toEqual({ text: "abcXYZ", cursor: 6 });
+    expect(r).toMatchObject({ text: "abcXYZ", cursor: 6 });
   });
 
   it("extends the line when overwrite runs past the end", () => {
     let r = feed(emptyPromptLine, bytes("abc"));
     r = feed(r, new Uint8Array([0x08])); // BS
     r = feed(r, bytes("XY")); // cursor was 2, write XY → "abXY"
-    expect(r).toEqual({ text: "abXY", cursor: 4 });
+    expect(r).toMatchObject({ text: "abXY", cursor: 4 });
   });
 });
 
 describe("promptRenderer / cursor controls", () => {
   it("CR resets cursor to column 0 without clearing text", () => {
     const r = feed(emptyPromptLine, bytes("hello\r"));
-    expect(r).toEqual({ text: "hello", cursor: 0 });
+    expect(r).toMatchObject({ text: "hello", cursor: 0 });
   });
 
   it("LF clears the line and resets the cursor (single-line)", () => {
     const r = feed(emptyPromptLine, bytes("hello\n"));
-    expect(r).toEqual({ text: "", cursor: 0 });
+    expect(r).toMatchObject({ text: "", cursor: 0 });
   });
 
   it("BS moves the cursor left; clamps at 0", () => {
@@ -67,7 +67,7 @@ describe("promptRenderer / cursor controls", () => {
 
   it("BEL is ignored", () => {
     const r = feed(emptyPromptLine, new Uint8Array([0x07]));
-    expect(r).toEqual({ text: "", cursor: 0 });
+    expect(r).toMatchObject({ text: "", cursor: 0 });
   });
 });
 
@@ -101,7 +101,7 @@ describe("promptRenderer / erase line", () => {
     let r = feed(emptyPromptLine, bytes("hello world"));
     r = feed(r, bytes("\r\x1b[5C")); // cursor=5 (between "hello" and " world")
     r = feed(r, bytes("\x1b[K"));
-    expect(r).toEqual({ text: "hello", cursor: 5 });
+    expect(r).toMatchObject({ text: "hello", cursor: 5 });
   });
 
   it("CSI 1 K erases from start of line to cursor (replacing with spaces)", () => {
@@ -115,7 +115,7 @@ describe("promptRenderer / erase line", () => {
   it("CSI 2 K erases the entire line, leaving the cursor in place", () => {
     let r = feed(emptyPromptLine, bytes("hello"));
     r = feed(r, bytes("\x1b[2K"));
-    expect(r).toEqual({ text: "", cursor: 5 });
+    expect(r).toMatchObject({ text: "", cursor: 5 });
   });
 });
 
@@ -130,24 +130,24 @@ describe("promptRenderer / insert/delete", () => {
   it("CSI P deletes N characters at cursor", () => {
     let r = feed(emptyPromptLine, bytes("abcdef"));
     r = feed(r, bytes("\r\x1b[2C\x1b[2P")); // cursor=2, delete 2
-    expect(r).toEqual({ text: "abef", cursor: 2 });
+    expect(r).toMatchObject({ text: "abef", cursor: 2 });
   });
 });
 
 describe("promptRenderer / ignored sequences", () => {
   it("SGR (color) sequences are consumed without affecting text", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[31mred\x1b[0m"));
-    expect(r).toEqual({ text: "red", cursor: 3 });
+    expect(r).toMatchObject({ text: "red", cursor: 3 });
   });
 
   it("OSC sequences (title, hyperlinks) are ignored", () => {
     const r = feed(emptyPromptLine, bytes("\x1b]0;window title\x07after"));
-    expect(r).toEqual({ text: "after", cursor: 5 });
+    expect(r).toMatchObject({ text: "after", cursor: 5 });
   });
 
   it("unknown CSI finals are consumed but do not crash or corrupt text", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[5Sabc"));
-    expect(r).toEqual({ text: "abc", cursor: 3 });
+    expect(r).toMatchObject({ text: "abc", cursor: 3 });
   });
 });
 
@@ -157,7 +157,7 @@ describe("promptRenderer / shell-typing flows", () => {
     // moves the cursor left, then erases to end of line.
     let r = feed(emptyPromptLine, bytes("ls -la"));
     r = feed(r, bytes("\x1b[1D\x1b[K"));
-    expect(r).toEqual({ text: "ls -l", cursor: 5 });
+    expect(r).toMatchObject({ text: "ls -l", cursor: 5 });
   });
 
   it("history navigation: CR + new text + CSI K reshapes the line", () => {
@@ -165,12 +165,56 @@ describe("promptRenderer / shell-typing flows", () => {
     // previous command "ls -la" using CR + write + erase-to-end.
     let r = feed(emptyPromptLine, bytes("echo hi"));
     r = feed(r, bytes("\rls -la\x1b[K"));
-    expect(r).toEqual({ text: "ls -la", cursor: 6 });
+    expect(r).toMatchObject({ text: "ls -la", cursor: 6 });
   });
 
   it("Tab completion: writing more chars at the end extends the line", () => {
     let r = feed(emptyPromptLine, bytes("cd src/"));
     r = feed(r, bytes("panes/"));
-    expect(r).toEqual({ text: "cd src/panes/", cursor: 13 });
+    expect(r).toMatchObject({ text: "cd src/panes/", cursor: 13 });
+  });
+});
+
+describe("promptRenderer / per-character styling", () => {
+  it("plain text has all styled=false", () => {
+    const r = feed(emptyPromptLine, bytes("ls"));
+    expect(r.styled).toEqual([false, false]);
+  });
+
+  it("marks chars emitted under a non-default fg SGR as styled (autosuggestions)", () => {
+    // zsh-autosuggestions ghost text: ESC[38;5;8m<hint>ESC[39m
+    const r = feed(emptyPromptLine, bytes("ls\x1b[38;5;8m -la\x1b[39m"));
+    expect(r.text).toBe("ls -la");
+    expect(r.styled).toEqual([false, false, true, true, true, true]);
+  });
+
+  it("standard palette fg SGR (e.g., red) also marks styled", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[31merr\x1b[0m"));
+    expect(r.styled).toEqual([true, true, true]);
+  });
+
+  it("SGR 0 resets the styled flag", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[31ma\x1b[0mb"));
+    expect(r.text).toBe("ab");
+    expect(r.styled).toEqual([true, false]);
+  });
+
+  it("SGR 39 resets just the foreground", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[33mab\x1b[39mcd"));
+    expect(r.styled).toEqual([true, true, false, false]);
+  });
+
+  it("attribute-only SGR (bold/italic) does not flip styled on its own", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[1mab\x1b[0m"));
+    expect(r.styled).toEqual([false, false]);
+  });
+
+  it("currentStyled state persists across feed calls", () => {
+    let r = feed(emptyPromptLine, bytes("\x1b[38;5;8m"));
+    expect(r.currentStyled).toBe(true);
+    r = feed(r, bytes("more"));
+    expect(r.styled).toEqual([true, true, true, true]);
+    r = feed(r, bytes("\x1b[39m"));
+    expect(r.currentStyled).toBe(false);
   });
 });
