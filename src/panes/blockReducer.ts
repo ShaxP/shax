@@ -78,7 +78,14 @@ export type BlockAction =
     }
   | { type: "alt_screen"; active: boolean }
   | { type: "block_chunk"; id: BlockId; bytes: Uint8Array }
-  | { type: "prompt_chunk"; bytes: Uint8Array };
+  | { type: "prompt_chunk"; bytes: Uint8Array }
+  /**
+   * Wipe the pane's runtime state. Used by the dead-shell "Restart"
+   * path: the new PTY starts fresh, so the visible block list, live
+   * outputs, alt-screen flag, and prompt strip all need to go back to
+   * their initial empty values before the new shell's events arrive.
+   */
+  | { type: "reset" };
 
 export const initialBlockState: BlockState = {
   blocks: [],
@@ -214,5 +221,8 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
 
     case "prompt_chunk":
       return { ...state, promptLine: feedPromptRenderer(state.promptLine, action.bytes) };
+
+    case "reset":
+      return initialBlockState;
   }
 }

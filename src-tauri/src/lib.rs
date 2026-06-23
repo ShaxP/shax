@@ -39,7 +39,11 @@ pub fn run() {
     // a process-global Arc.
     pty::set_global_manager(Arc::clone(&manager));
 
-    tauri::Builder::default()
+    // Cloned for the exit-hook callback below — the original is moved
+    // into `.manage()` for the command-state slot.
+    let manager_for_exit = Arc::clone(&manager);
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Persists window size + position to a JSON file under the app data
         // dir so relaunches restore what the user last had. The plugin
@@ -56,6 +60,16 @@ pub fn run() {
             app_state_load,
             app_state_save,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application")
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // RunEvent::Exit fires after the last window has closed and the event
+    // loop is about to terminate. We use it to reap every PTY child so no
+    // shell outlives the parent — without this, `tauri:dev` quits leave
+    // orphan zsh / bash processes still bound to the old PTY masters.
+    app.run(move |_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            tauri::async_runtime::block_on(manager_for_exit.shutdown_all());
+        }
+    });
 }

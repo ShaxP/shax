@@ -80,6 +80,16 @@ function TerminalPaneInner({
   // Mirror the pty id into React state so the BlockList re-renders once the
   // backend assigns one. (The ref is for the effect; state is for the children.)
   const [ptyId, setPtyId] = useState<PtyId | null>(null);
+  // Set to the shell's exit code when the PTY exits while the pane is
+  // alive. The banner reads this to render a "shell exited / restart"
+  // overlay. `null` means the shell is alive; `-1` is the sentinel for
+  // "no numeric code reported" (signal-killed, etc.).
+  const [exitedCode, setExitedCode] = useState<number | null>(null);
+  // Bumped by `handleRestart` to retrigger the mount effect: the existing
+  // cleanup tears down xterm + the (already-dead) PTY entry, and setup
+  // spawns a fresh shell in the same React-tree position. No unmount,
+  // so the pane wrapper, focus state, and layout slot stay intact.
+  const [restartNonce, setRestartNonce] = useState(0);
 
   const altScreen = blockState.altScreen;
 
@@ -204,8 +214,15 @@ function TerminalPaneInner({
           break;
 
         case "exit":
-          // Handled by the shell's own output for now; block teardown in
-          // a future slice will clean up the PTY entry.
+          // The shell died (user typed `exit`, it crashed, or a
+          // `kill -9` from outside). The PTY entry is gone from the
+          // backend map; surface the fact in the UI so the user can
+          // restart instead of staring at an unresponsive prompt.
+          // Use -1 as the "no code" sentinel so the banner can
+          // distinguish "exited cleanly with no reported code" from
+          // a real exit code.
+          setExitedCode(event.code ?? -1);
+          ptyIdRef.current = null;
           break;
       }
     };
@@ -248,7 +265,10 @@ function TerminalPaneInner({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, []); // intentionally empty: setup and teardown run once per mount
+    // `restartNonce` is the only intentional retrigger — everything else
+    // used inside is a ref or the dispatch/stable closures captured at
+    // mount, so excluding them from the dep array is deliberate.
+  }, [restartNonce]);
 
   // Derive the current cwd/branch from the most recently observed block.
   // OSC 133 A on every prompt updates the block's metadata, so the last
@@ -295,6 +315,16 @@ function TerminalPaneInner({
     const id = ptyIdRef.current;
     if (id === null) return;
     void writePty(id, bytes);
+  };
+
+  // Restart the shell after it exited. Wipes the pane's runtime state
+  // (block list, live outputs, alt-screen flag, prompt strip) and bumps
+  // `restartNonce` so the mount effect re-runs: cleanup tears down the
+  // old xterm + the (already-dead) PTY entry, setup spawns a fresh shell.
+  const handleRestart = (): void => {
+    dispatch({ type: "reset" });
+    setExitedCode(null);
+    setRestartNonce((n) => n + 1);
   };
 
   const isInsideTauri = isTauriContext();
@@ -375,8 +405,54 @@ function TerminalPaneInner({
         >
           <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
         </div>
+        {exitedCode !== null && (
+          <div
+            data-testid="shell-exited-banner"
+            style={{
+              position: "absolute",
+              left: 12,
+              right: 12,
+              bottom: 12,
+              zIndex: 50,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "10px 14px",
+              borderRadius: "var(--radius)",
+              background: "var(--surface)",
+              border: "1px solid var(--border-strong)",
+              color: "var(--fg)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 13,
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.35)",
+            }}
+          >
+            <span style={{ flex: 1 }}>
+              Shell exited
+              {exitedCode >= 0 ? ` with code ${exitedCode}` : ""}.
+            </span>
+            <button
+              type="button"
+              data-testid="shell-restart"
+              onClick={handleRestart}
+              style={{
+                background: "var(--accent)",
+                color: "var(--bg)",
+                border: "none",
+                borderRadius: "var(--radius-sm)",
+                padding: "5px 12px",
+                fontFamily: "var(--font-ui)",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Restart shell
+            </button>
+          </div>
+        )}
       </div>
-      {!altScreen && (
+      {!altScreen && exitedCode === null && (
         <PromptStrip
           ref={promptStripRef}
           cwd={cwd}
