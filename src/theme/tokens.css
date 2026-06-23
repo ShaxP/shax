@@ -6,6 +6,23 @@
  * See `specs/13-design.md`. Light variants are reserved for M7 polish.
  */
 
+/*
+ * Bundled JetBrainsMono Nerd Font Mono. Tauri's WebKit on macOS does
+ * not always pick up user-installed fonts in `~/Library/Fonts/`, so the
+ * "icons render as tofu" bug surfaces even when the font is on the
+ * system. Loading the TTF as an in-app @font-face fixes the path for
+ * every install (and keeps shipped users from having to install
+ * anything themselves). SIL Open Font License — see the Nerd Fonts
+ * repo for the license file.
+ */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("../assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Surfaces */
   --bg: #0c0d10;

@@ -38,6 +38,65 @@ import "./BlockRow.css";
 
 const TEXT_DECODER = new TextDecoder();
 
+/**
+ * Strip CSI and OSC escape sequences from a decoded byte stream so the
+ * block output renders cleanly until M4 brings the real formatter
+ * system. CSI = `ESC [ params final`; OSC = `ESC ] payload (BEL | ST)`.
+ * Anything that survives this is plain text (or a stray ESC, which we
+ * also drop along with the byte that follows).
+ *
+ * This is the same "tier 0, raw bytes" promise from `specs/02-rendering-
+ * two-path.md` — the bytes are still available via the live buffer,
+ * we just don't render the escape codes as literal text.
+ */
+function stripAnsi(input: string): string {
+  let out = "";
+  let i = 0;
+  while (i < input.length) {
+    const ch = input.charCodeAt(i);
+    if (ch !== 0x1b) {
+      out += input[i];
+      i++;
+      continue;
+    }
+    const next = input.charCodeAt(i + 1);
+    if (next === 0x5b /* [ */) {
+      let j = i + 2;
+      while (j < input.length) {
+        const c = input.charCodeAt(j);
+        if (c >= 0x40 && c <= 0x7e) {
+          j++;
+          break;
+        }
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    if (next === 0x5d /* ] */) {
+      let j = i + 2;
+      while (j < input.length) {
+        const c = input.charCodeAt(j);
+        if (c === 0x07) {
+          j++;
+          break;
+        }
+        if (c === 0x1b && input.charCodeAt(j + 1) === 0x5c /* \ */) {
+          j += 2;
+          break;
+        }
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    // Other two-byte ESC sequences (charset selects, save/restore
+    // cursor, …): drop ESC + its follow byte.
+    i += 2;
+  }
+  return out;
+}
+
 export interface BlockRowProps {
   pty: PtyId;
   block: BlockSummary;
@@ -231,8 +290,12 @@ function BlockRowInner({
   // Prefer the live-streamed bytes from the reducer (always up to date for
   // in-session blocks); fall back to a one-shot IPC fetch on first expand
   // for historical blocks seeded from disk.
+  // Decode and strip ANSI before displaying. Raw bytes still live in
+  // `liveOutput` / the persistent store; what we show in the block is
+  // the human-readable text. Coloured rendering is M4 formatter work.
   const liveText = liveOutput !== undefined ? TEXT_DECODER.decode(liveOutput) : null;
-  const outputText = liveText ?? fetchedOutput;
+  const rawText = liveText ?? fetchedOutput;
+  const outputText = rawText !== null ? stripAnsi(rawText) : null;
 
   // Natural default: open whenever we already have the bytes in memory, OR
   // the block is still running (always-open is the rule for running). For
