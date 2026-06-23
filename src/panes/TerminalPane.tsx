@@ -25,7 +25,7 @@
  *     don't see it.
  */
 
-import { memo, startTransition, useEffect, useReducer, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -339,11 +339,32 @@ function TerminalPaneInner({
   // (block list, live outputs, alt-screen flag, prompt strip) and bumps
   // `restartNonce` so the mount effect re-runs: cleanup tears down the
   // old xterm + the (already-dead) PTY entry, setup spawns a fresh shell.
-  const handleRestart = (): void => {
+  // Stable identity (useCallback) so the ⌘⇧R keyboard effect below can
+  // depend on it without re-binding the listener on every render.
+  const handleRestart = useCallback((): void => {
     dispatch({ type: "reset" });
     setExitedCode(null);
     setRestartNonce((n) => n + 1);
-  };
+  }, []);
+
+  // ⌘⇧R (Ctrl+Shift+R elsewhere) restarts the shell — same as clicking
+  // the banner button. Gated on `exitedCode !== null` so a stray
+  // keystroke can't kill a running shell; the active-pane guard keeps
+  // background panes from grabbing the shortcut. Listener stays mounted
+  // only while both conditions hold; cleanup ensures we don't leak
+  // handlers across pane transitions.
+  useEffect(() => {
+    if (!active || exitedCode === null) return;
+    const handler = (e: KeyboardEvent): void => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || !e.shiftKey) return;
+      if (e.key !== "R" && e.key !== "r") return;
+      e.preventDefault();
+      handleRestart();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [active, exitedCode, handleRestart]);
 
   const isInsideTauri = isTauriContext();
 
@@ -454,6 +475,9 @@ function TerminalPaneInner({
               data-testid="shell-restart"
               onClick={handleRestart}
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
                 background: "var(--accent)",
                 color: "var(--bg)",
                 border: "none",
@@ -464,8 +488,10 @@ function TerminalPaneInner({
                 fontWeight: 600,
                 cursor: "pointer",
               }}
+              title="Restart shell (⌘⇧R)"
             >
               Restart shell
+              <span style={{ opacity: 0.75, fontWeight: 500 }}>⌘⇧R</span>
             </button>
           </div>
         )}

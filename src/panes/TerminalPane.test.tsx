@@ -195,6 +195,38 @@ describe("TerminalPane / dead-shell handling (M2 slice 2.3b)", () => {
     expect(screen.getByTestId("prompt-strip")).toBeInTheDocument();
   });
 
+  it("⌘⇧R restarts the shell when the banner is showing", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      lastOnEvent?.({ kind: "exit", code: 0 });
+    });
+    expect(screen.getByTestId("shell-exited-banner")).toBeInTheDocument();
+    act(() => {
+      fireEvent.keyDown(window, { key: "R", metaKey: true, shiftKey: true });
+    });
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId("shell-exited-banner")).toBeNull();
+  });
+
+  it("⌘⇧R is a no-op while the shell is alive (no accidental kill)", async () => {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    // No exit event — shell is alive. ⌘⇧R should NOT spawn another.
+    act(() => {
+      fireEvent.keyDown(window, { key: "R", metaKey: true, shiftKey: true });
+    });
+    // Give the (non-)handler a microtask to settle.
+    await Promise.resolve();
+    expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+  });
+
   it("renders 'Shell exited.' without a code when the exit carries none", async () => {
     render(<TerminalPane />);
     await vi.waitFor(() => {
