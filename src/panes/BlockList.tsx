@@ -11,13 +11,14 @@
  */
 
 import { useLayoutEffect, useRef } from "react";
-import type { BlockId, BlockSummary, PtyId } from "../lib/ipc";
+import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
+import type { UiBlock } from "./blockReducer";
 
 export interface BlockListProps {
   pty: PtyId | null;
-  blocks: BlockSummary[];
+  blocks: UiBlock[];
   /**
    * Live-streamed output bytes per block, accumulated from `block_chunk`
    * events. The block row uses this for inline rendering of running and
@@ -38,11 +39,15 @@ export function BlockList({
   getOutput = getBlockOutput,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
-  // visible. We re-scroll on three signals:
-  //  - the block count changes (new BlockStarted appended a row, or the
-  //    history seed bumped length from 0 to N on mount),
-  //  - the live-output map reference changes (a chunk just streamed into
-  //    the currently running block, growing its rendered height).
+  // visible. We re-scroll on any block-state change:
+  //  - new block appended (length grows),
+  //  - running block completes (status / duration / "interactive session"
+  //    label appears → row height changes),
+  //  - chunk streamed into a block (liveOutputs identity bumped).
+  // Watching the `blocks` reference (not just `length`) catches the
+  // completion case — including the one where an interactive block
+  // finishes and the `liveOutputs` map didn't change during alt-screen,
+  // so the old `[length, liveOutputs]` deps would have missed it.
   // `useLayoutEffect` runs after the DOM update but before paint, so the
   // user never sees the list at the wrong scroll position.
   // Known limitation: this always scrolls, so a user who has scrolled up
@@ -53,7 +58,7 @@ export function BlockList({
     const el = scrollRef.current;
     if (el === null) return;
     el.scrollTop = el.scrollHeight;
-  }, [blocks.length, liveOutputs]);
+  }, [blocks, liveOutputs]);
 
   return (
     <aside

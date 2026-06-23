@@ -260,6 +260,123 @@ describe("App / pane splits", () => {
     expect(leaves[0]).toHaveAttribute("data-focused", "true");
   });
 
+  it("the divider carries a resize cursor and the right hit-area direction", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    const divider = screen.getByTestId("layout-divider");
+    expect(divider).toHaveAttribute("data-direction", "row");
+    // ew-resize for row splits, ns-resize for column splits.
+    expect(divider.style.cursor).toBe("ew-resize");
+  });
+
+  it("dragging the divider updates the split ratio (winsize follows)", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    const host = screen.getByTestId("layout-host");
+    // jsdom never lays anything out, so `getBoundingClientRect` would
+    // otherwise return zeros and the drag math would divide by zero.
+    // Pretend the host is 1000 × 800.
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+        width: 1000,
+        height: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+      configurable: true,
+    });
+    const divider = screen.getByTestId("layout-divider");
+    // setPointerCapture is unimplemented in jsdom; no-op it so the
+    // handler doesn't throw mid-drag.
+    Object.defineProperty(divider, "setPointerCapture", {
+      value: () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(divider, "releasePointerCapture", {
+      value: () => undefined,
+      configurable: true,
+    });
+
+    // Default ratio is 0.5 → both leaves are 50%.
+    let leaves = screen.getAllByTestId("layout-leaf");
+    expect((leaves[0] as HTMLElement).style.width).toBe("50%");
+    expect((leaves[1] as HTMLElement).style.width).toBe("50%");
+
+    // Drag the divider to x=700 (700px / 1000px = 70%).
+    act(() => {
+      fireEvent.pointerDown(divider, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    });
+    act(() => {
+      divider.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 1, clientX: 700, clientY: 400 }),
+      );
+    });
+    act(() => {
+      divider.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1 }));
+    });
+
+    leaves = screen.getAllByTestId("layout-leaf");
+    expect((leaves[0] as HTMLElement).style.width).toBe("70%");
+    expect((leaves[1] as HTMLElement).style.width).toBe("30%");
+  });
+
+  it("the divider ratio is clamped at the edges (no pane can fully collapse)", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    const host = screen.getByTestId("layout-host");
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+        width: 1000,
+        height: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+      configurable: true,
+    });
+    const divider = screen.getByTestId("layout-divider");
+    Object.defineProperty(divider, "setPointerCapture", {
+      value: () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(divider, "releasePointerCapture", {
+      value: () => undefined,
+      configurable: true,
+    });
+
+    // Drag way past the right edge → should clamp to 95 %.
+    act(() => {
+      fireEvent.pointerDown(divider, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    });
+    act(() => {
+      divider.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 1, clientX: 9999, clientY: 400 }),
+      );
+    });
+    act(() => {
+      divider.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1 }));
+    });
+
+    const leaves = screen.getAllByTestId("layout-leaf");
+    expect((leaves[0] as HTMLElement).style.width).toBe("95%");
+    expect((leaves[1] as HTMLElement).style.width).toBe("5%");
+  });
+
   it("⌘W on a multi-pane tab closes only the focused pane (tab survives)", async () => {
     render(<App />);
     act(() => {

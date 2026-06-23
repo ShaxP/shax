@@ -35,13 +35,14 @@ import { TitleBar } from "./panes/TitleBar";
 import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
-import type { LayoutNode, PaneId, SplitDirection } from "./panes/layout";
+import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
   leaf,
   leafIds,
   neighborAfterClose,
   removeLeaf,
+  setRatio,
   splitLeaf,
 } from "./panes/layout";
 
@@ -81,7 +82,8 @@ type TabsAction =
       cwd: string | null;
       branch: string | null;
     }
-  | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean };
+  | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean }
+  | { type: "set_ratio"; tabId: string; path: SplitPath; ratio: number };
 
 function freshId(prefix: string): string {
   return prefix + Math.random().toString(36).slice(2, 10);
@@ -257,6 +259,14 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         };
       });
     }
+
+    case "set_ratio": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const layout = setRatio(tab.layout, action.path, action.ratio);
+        if (layout === tab.layout) return tab;
+        return { ...tab, layout };
+      });
+    }
   }
 }
 
@@ -294,6 +304,10 @@ export default function App(): React.ReactElement {
     },
     [],
   );
+
+  const handleSetRatio = useCallback((tabId: string, path: SplitPath, ratio: number): void => {
+    dispatch({ type: "set_ratio", tabId, path, ratio });
+  }, []);
 
   const handlePaneAltScreen = useCallback(
     (tabId: string, paneId: PaneId, altScreen: boolean): void => {
@@ -406,14 +420,18 @@ export default function App(): React.ReactElement {
               }}
             >
               <LayoutRender
+                tabId={tab.id}
                 node={tab.layout}
                 focusedPaneId={tab.focusedPaneId}
                 tabActive={isActiveTab}
-                onPaneFocus={(paneId) => handlePaneFocus(tab.id, paneId)}
-                onPaneMeta={(paneId, cwd, branch) => handlePaneMeta(tab.id, paneId, cwd, branch)}
-                onPaneAltScreen={(paneId, altScreen) =>
-                  handlePaneAltScreen(tab.id, paneId, altScreen)
-                }
+                // The callbacks are kept reference-stable (useCallback
+                // with `[]`) so LayoutRender can hand stable handlers
+                // to every PaneLeaf — re-renders during a divider drag
+                // no longer cascade into the TerminalPane subtree.
+                onPaneFocus={handlePaneFocus}
+                onPaneMeta={handlePaneMeta}
+                onPaneAltScreen={handlePaneAltScreen}
+                onSetRatio={handleSetRatio}
               />
             </div>
           );
