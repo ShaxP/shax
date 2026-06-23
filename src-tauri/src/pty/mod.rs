@@ -1754,6 +1754,52 @@ mod tests {
             .await
             .expect("write");
 
+        // Real shells interleave SGR (color), cursor-style, and other CSI
+        // sequences with the echoed text — zsh in particular wraps each
+        // typed char in attribute toggles. Compare on a copy with those
+        // ANSI escapes stripped so the assertion is about *which letters
+        // arrived*, not *how they were styled*.
+        fn strip_ansi(b: &[u8]) -> Vec<u8> {
+            let mut out = Vec::with_capacity(b.len());
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == 0x1b && i + 1 < b.len() {
+                    if b[i + 1] == b'[' {
+                        // CSI: ESC [ <params> <final 0x40..=0x7e>
+                        i += 2;
+                        while i < b.len() && !(0x40..=0x7e).contains(&b[i]) {
+                            i += 1;
+                        }
+                        if i < b.len() {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    if b[i + 1] == b']' {
+                        // OSC: ESC ] ... (BEL | ESC \\)
+                        i += 2;
+                        while i < b.len() && b[i] != 0x07 {
+                            if b[i] == 0x1b && i + 1 < b.len() && b[i + 1] == b'\\' {
+                                i += 2;
+                                continue;
+                            }
+                            i += 1;
+                        }
+                        if i < b.len() {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    // Other two-byte ESC: drop both.
+                    i += 2;
+                    continue;
+                }
+                out.push(b[i]);
+                i += 1;
+            }
+            out
+        }
+
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut prompt_bytes: Vec<u8> = Vec::new();
         let mut block_bytes: Vec<u8> = Vec::new();
@@ -1761,7 +1807,8 @@ mod tests {
             match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
                 Ok(Some(PtyEvent::PromptChunk { data })) => {
                     prompt_bytes.extend(B64.decode(&data).unwrap_or_default());
-                    if String::from_utf8_lossy(&prompt_bytes).contains("PROMPTPROBE") {
+                    let stripped = strip_ansi(&prompt_bytes);
+                    if String::from_utf8_lossy(&stripped).contains("PROMPTPROBE") {
                         break;
                     }
                 }
@@ -1774,12 +1821,14 @@ mod tests {
             }
         }
 
-        let prompt_s = String::from_utf8_lossy(&prompt_bytes);
+        let stripped_prompt = strip_ansi(&prompt_bytes);
+        let prompt_s = String::from_utf8_lossy(&stripped_prompt);
         assert!(
             prompt_s.contains("PROMPTPROBE"),
-            "expected PromptChunk bytes to carry the shell's echo of typed input, got {prompt_s:?}"
+            "expected stripped PromptChunk bytes to carry the shell's echo of typed input, got {prompt_s:?}"
         );
-        let block_s = String::from_utf8_lossy(&block_bytes);
+        let stripped_block = strip_ansi(&block_bytes);
+        let block_s = String::from_utf8_lossy(&stripped_block);
         assert!(
             !block_s.contains("PROMPTPROBE"),
             "typed echo must not leak into BlockChunk while no command is running, got {block_s:?}"
