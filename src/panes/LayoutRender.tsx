@@ -73,13 +73,18 @@ function paneWrapStyle(rect: Rect): CSSProperties {
  * paints over a pane-wrapper outline — but a sibling div at a higher
  * z-index reliably stays visible on top of xterm. `pointerEvents: none`
  * keeps it from intercepting clicks meant for the pane content.
+ *
+ * Width is sub-pixel (0.5px) so the ring renders as a true hairline on
+ * retina displays; non-retina browsers round to 1 px which is fine as
+ * a fallback. We only draw the ring when there are multiple panes —
+ * with one pane there's nothing to focus *among*, so no indicator.
  */
 function focusRingStyle(isFocused: boolean): CSSProperties {
   return {
     position: "absolute",
     inset: 0,
     pointerEvents: "none",
-    border: isFocused ? "1px solid var(--accent)" : "1px solid transparent",
+    border: isFocused ? "0.5px solid var(--accent)" : "0.5px solid transparent",
     boxSizing: "border-box",
     zIndex: 100,
   };
@@ -146,6 +151,8 @@ interface PaneLeafProps {
   rect: Rect;
   isFocused: boolean;
   tabActive: boolean;
+  /** True when the tab has more than one pane (i.e. the ring matters). */
+  showFocusRing: boolean;
   /** Stable; bound with `tabId` by the parent LayoutRender. */
   onFocus: (paneId: PaneId) => void;
   onMeta: (paneId: PaneId, cwd: string | null, branch: string | null) => void;
@@ -157,6 +164,7 @@ function PaneLeafInner({
   rect,
   isFocused,
   tabActive,
+  showFocusRing,
   onFocus,
   onMeta,
   onAltScreen,
@@ -186,7 +194,7 @@ function PaneLeafInner({
         onMetaChange={handleMeta}
         onAltScreenChange={handleAltScreen}
       />
-      <div data-testid="layout-focus-ring" style={focusRingStyle(isFocused)} />
+      {showFocusRing && <div data-testid="layout-focus-ring" style={focusRingStyle(isFocused)} />}
     </div>
   );
 }
@@ -202,6 +210,7 @@ function paneLeafEqual(prev: PaneLeafProps, next: PaneLeafProps): boolean {
     prev.paneId === next.paneId &&
     prev.isFocused === next.isFocused &&
     prev.tabActive === next.tabActive &&
+    prev.showFocusRing === next.showFocusRing &&
     prev.onFocus === next.onFocus &&
     prev.onMeta === next.onMeta &&
     prev.onAltScreen === next.onAltScreen &&
@@ -328,6 +337,7 @@ export function LayoutRender({
           rect={p.rect}
           isFocused={p.paneId === focusedPaneId}
           tabActive={tabActive}
+          showFocusRing={geometry.panes.length > 1}
           onFocus={handleFocus}
           onMeta={handleMeta}
           onAltScreen={handleAltScreen}
