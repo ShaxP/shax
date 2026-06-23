@@ -53,7 +53,7 @@ const HOST: CSSProperties = {
   height: "100%",
 };
 
-function paneWrapStyle(rect: Rect, isFocused: boolean): CSSProperties {
+function paneWrapStyle(rect: Rect): CSSProperties {
   return {
     position: "absolute",
     left: `${rect.left}%`,
@@ -63,9 +63,25 @@ function paneWrapStyle(rect: Rect, isFocused: boolean): CSSProperties {
     display: "flex",
     flexDirection: "column",
     background: "var(--bg)",
-    outline: isFocused ? "1px solid var(--accent)" : "1px solid transparent",
-    outlineOffset: "-1px",
     overflow: "hidden",
+  };
+}
+
+/**
+ * Focus indicator. Drawn as a dedicated overlay rather than the wrapper's
+ * `outline` because in alt-screen the xterm canvas sits at z-index 2 and
+ * paints over a pane-wrapper outline — but a sibling div at a higher
+ * z-index reliably stays visible on top of xterm. `pointerEvents: none`
+ * keeps it from intercepting clicks meant for the pane content.
+ */
+function focusRingStyle(isFocused: boolean): CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    border: isFocused ? "2px solid var(--accent)" : "2px solid transparent",
+    boxSizing: "border-box",
+    zIndex: 100,
   };
 }
 
@@ -162,7 +178,7 @@ function PaneLeafInner({
       data-testid="layout-leaf"
       data-pane-id={paneId}
       data-focused={isFocused ? "true" : "false"}
-      style={paneWrapStyle(rect, isFocused)}
+      style={paneWrapStyle(rect)}
       onPointerDown={handleFocus}
     >
       <TerminalPane
@@ -170,6 +186,7 @@ function PaneLeafInner({
         onMetaChange={handleMeta}
         onAltScreenChange={handleAltScreen}
       />
+      <div data-testid="layout-focus-ring" style={focusRingStyle(isFocused)} />
     </div>
   );
 }
