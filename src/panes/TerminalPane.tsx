@@ -1,25 +1,30 @@
 /**
- * TerminalPane — a single xterm.js instance wired to the backend PTY, with
- * the BlockList rendered alongside it and the M1.5 chrome (title bar +
- * statusline) wrapped around the whole pane.
+ * TerminalPane — the host for a single PTY, structured around the
+ * M1.9 prompt-strip-owns-input model.
  *
- * Responsibilities:
- * - Mount an xterm Terminal into the main canvas via a ref.
- * - Attach FitAddon and call fit() on mount and on ResizeObserver events
- *   (debounced to avoid thrashing the backend during resize drags).
- * - Subscribe to the backend PTY via spawnPty; pipe Output events into the
- *   terminal and keystrokes out via writePty.
- * - Route block-lifecycle and alt-screen IPC events into the blockReducer.
- * - Render the BlockList beside the xterm so captured commands surface as
- *   real, structured rows.
- * - Wrap the pane area in TitleBar + Statusline so the window matches the
- *   /design layout. cwd and branch piped to the chrome from the latest
- *   block summary (the OSC 133 A on every prompt is the source of truth).
- * - On unmount: killPty, dispose the Terminal, disconnect the observer.
+ * Resting state (no alt-screen):
+ *   - Block stack is the visible scrollback.
+ *   - PromptStrip is focused and captures keystrokes; xterm.js is hidden
+ *     behind the block stack (kept alive so its byte stream stays in sync
+ *     and so alt-screen handover doesn't need a re-fit).
+ *   - Each keystroke from the strip is mapped to its PTY bytes via
+ *     keyToBytes and sent through writePty. xterm's own `onData` is wired
+ *     up but disabled in this state — xterm never has focus while the
+ *     strip is active.
  *
- * When running outside Tauri (browser dev server, Playwright) the IPC layer
- * returns a no-op handle and the component renders a static notice so the
- * page still mounts and tests can assert on the DOM.
+ * Alt-screen state (vim, less, top, REPLs):
+ *   - xterm.js is revealed and focused. The block stack and prompt strip
+ *     are hidden — alt-screen programs own the full pane area.
+ *   - Output continues to flow into xterm as before, and the host's
+ *     fidelity contract (raw passthrough) is preserved.
+ *
+ * Both states feed the same block/prompt reducer; the only thing the
+ * alt-screen flag controls is *which* surface is visible and where focus
+ * lives.
+ *
+ * When running outside Tauri (browser dev server, Playwright) the IPC
+ * layer is a no-op; the page still mounts so e2e tests can assert on the
+ * rendered chrome.
  */
 
 import { startTransition, useEffect, useReducer, useRef, useState } from "react";
@@ -47,11 +52,14 @@ export function TerminalPane(): React.ReactElement {
   const terminalRef = useRef<Terminal | null>(null);
   const ptyIdRef = useRef<PtyId | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const promptStripRef = useRef<HTMLDivElement | null>(null);
 
   const [blockState, dispatch] = useReducer(blockReducer, initialBlockState);
   // Mirror the pty id into React state so the BlockList re-renders once the
   // backend assigns one. (The ref is for the effect; state is for the children.)
   const [ptyId, setPtyId] = useState<PtyId | null>(null);
+
+  const altScreen = blockState.altScreen;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -65,20 +73,18 @@ export function TerminalPane(): React.ReactElement {
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     fitAddon.fit();
-    // Without this, the xterm canvas does not receive keystrokes until the
-    // user clicks on it. Auto-focus on mount so the pane is interactive
-    // immediately (matches the behavior of every native terminal app).
-    terminal.focus();
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    // Encode keystrokes and send them to the PTY.
-    const encoder = new TextEncoder();
+    // xterm still has `onData` for the alt-screen path: when the alternate
+    // screen is active (vim, less, top), xterm takes focus and the prompt
+    // strip steps aside. Keystrokes captured here are forwarded straight
+    // to the PTY, same as before.
     const dataDisposable = terminal.onData((data: string) => {
       const id = ptyIdRef.current;
       if (id === null) return;
-      void writePty(id, encoder.encode(data));
+      void writePty(id, new TextEncoder().encode(data));
     });
 
     // ResizeObserver drives fit() and a resizePty call whenever the container
@@ -98,9 +104,7 @@ export function TerminalPane(): React.ReactElement {
     resizeObserver.observe(container);
 
     // Route IPC events: output bytes go to xterm; block-lifecycle and
-    // alt-screen events go to the reducer. The "exit" event is intentionally
-    // left as a no-op for now — the shell will print its own message and a
-    // future slice will handle clean teardown.
+    // alt-screen events go to the reducer.
     const handleEvent = (event: PtyEvent): void => {
       switch (event.kind) {
         case "output":
@@ -151,7 +155,8 @@ export function TerminalPane(): React.ReactElement {
           break;
 
         case "exit":
-          // Handled by the shell's own output for now; block teardown in slice 4.
+          // Handled by the shell's own output for now; block teardown in
+          // a future slice will clean up the PTY entry.
           break;
       }
     };
@@ -160,11 +165,10 @@ export function TerminalPane(): React.ReactElement {
       ptyIdRef.current = id;
       setPtyId(id);
       // Seed block state from blocks already present before the frontend
-      // mounted — historical rows from the persistent store on boot, and
-      // (defensively) any in-flight blocks of this PTY. Wrapped in
-      // `startTransition` so the bounded but non-trivial render work yields
-      // to the event loop and lets xterm's scheduler keep up with the
-      // initial shell prompt and any keystrokes the user is already typing.
+      // mounted — historical rows from the persistent store on boot.
+      // Wrapped in `startTransition` so the bounded but non-trivial render
+      // work yields to the event loop and lets xterm's scheduler keep up
+      // with the initial shell prompt.
       void listBlocks(id).then((blocks) => {
         if (blocks.length > 0) {
           startTransition(() => {
@@ -193,12 +197,33 @@ export function TerminalPane(): React.ReactElement {
     };
   }, []); // intentionally empty: setup and teardown run once per mount
 
+  // Focus management. Whichever surface is "current" should hold focus so
+  // keystrokes flow correctly: xterm under alt-screen, PromptStrip in the
+  // resting state. Triggered whenever altScreen toggles.
+  useEffect(() => {
+    if (altScreen) {
+      terminalRef.current?.focus();
+    } else {
+      promptStripRef.current?.focus();
+      // Re-fit nothing changed in the resting layout, but the strip just
+      // took focus — no work required.
+    }
+  }, [altScreen]);
+
+  // Forward typed bytes from the PromptStrip to the PTY. The strip never
+  // local-echoes; the shell's own echo (via `prompt_chunk`) drives the
+  // visible line through the renderer.
+  const handlePromptInput = (bytes: Uint8Array): void => {
+    const id = ptyIdRef.current;
+    if (id === null) return;
+    void writePty(id, bytes);
+  };
+
   const isInsideTauri = isTauriContext();
 
-  // Derive the current cwd/branch from the most recently observed block. The
-  // OSC 133 A on every prompt updates the block's metadata, so the last entry
-  // always reflects where the shell is now. Null until the first prompt has
-  // run, which the chrome renders as a neutral fallback.
+  // Derive the current cwd/branch from the most recently observed block.
+  // OSC 133 A on every prompt updates the block's metadata, so the last
+  // entry always reflects where the shell is now.
   const latestBlock = blockState.blocks[blockState.blocks.length - 1];
   const cwd = latestBlock?.cwd ?? null;
   const branch = latestBlock?.git_branch ?? null;
@@ -223,11 +248,30 @@ export function TerminalPane(): React.ReactElement {
           flex: 1,
           minHeight: 0,
           display: "flex",
-          flexDirection: "row",
+          flexDirection: "column",
+          position: "relative",
           background: "var(--bg)",
         }}
       >
-        <div style={{ flex: 1, minWidth: 0, position: "relative", background: "var(--pane)" }}>
+        {/*
+         * xterm canvas is always present in the DOM so its byte stream
+         * stays in sync with the PTY. It's positioned absolutely over the
+         * pane area; the block stack + prompt strip render on top of it
+         * in the resting state. Visibility is toggled per alt-screen
+         * state — `display: none` would break ResizeObserver and the
+         * fit addon's measurements.
+         */}
+        <div
+          data-testid="xterm-wrapper"
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "var(--pane)",
+            visibility: altScreen ? "visible" : "hidden",
+            pointerEvents: altScreen ? "auto" : "none",
+            zIndex: altScreen ? 2 : 0,
+          }}
+        >
           <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
           {!isInsideTauri && (
             <div
@@ -248,9 +292,39 @@ export function TerminalPane(): React.ReactElement {
             </div>
           )}
         </div>
-        <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
+
+        {/*
+         * Block stack — the visible scrollback in the resting state.
+         * Hidden under alt-screen so vim and friends get the full pane.
+         * Kept in the DOM so its scroll position survives the trip
+         * through alt-screen.
+         */}
+        <div
+          style={{
+            display: altScreen ? "none" : "flex",
+            flex: 1,
+            minHeight: 0,
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
+        </div>
       </div>
-      <PromptStrip cwd={cwd} branch={branch} line={blockState.promptLine} />
+      {/*
+       * PromptStrip owns input in the resting state. Hidden under
+       * alt-screen so it doesn't capture keys meant for vim / less / top.
+       */}
+      {!altScreen && (
+        <PromptStrip
+          ref={promptStripRef}
+          cwd={cwd}
+          branch={branch}
+          line={blockState.promptLine}
+          onInput={handlePromptInput}
+          altScreen={altScreen}
+        />
+      )}
       <Statusline cwd={cwd} branch={branch} />
     </div>
   );

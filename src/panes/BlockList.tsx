@@ -38,25 +38,30 @@ export function BlockList({
   getOutput = getBlockOutput,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
-  // visible — both when the app starts (the history seed bumps length from
-  // 0 to N) and when a new command runs (a new BlockStarted appends a row).
+  // visible. We re-scroll on three signals:
+  //  - the block count changes (new BlockStarted appended a row, or the
+  //    history seed bumped length from 0 to N on mount),
+  //  - the live-output map reference changes (a chunk just streamed into
+  //    the currently running block, growing its rendered height).
   // `useLayoutEffect` runs after the DOM update but before paint, so the
   // user never sees the list at the wrong scroll position.
+  // Known limitation: this always scrolls, so a user who has scrolled up
+  // mid-stream to read earlier output will be pulled back to the bottom on
+  // the next chunk. A "scroll-lock" affordance is a polish item for later.
   const scrollRef = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
     el.scrollTop = el.scrollHeight;
-  }, [blocks.length]);
+  }, [blocks.length, liveOutputs]);
 
   return (
     <aside
       ref={scrollRef}
       data-testid="block-list"
       style={{
-        width: 360,
-        flexShrink: 0,
-        borderLeft: "1px solid var(--border)",
+        flex: 1,
+        minWidth: 0,
         background: "var(--pane2)",
         overflowY: "auto",
         color: "var(--fg)",

@@ -1,27 +1,30 @@
 /**
  * PromptStrip — the single-row prompt area at the bottom of the pane.
  *
- * M1.9 slice 1.9a (this slice): the strip is a *read-only mirror* of the
- * shell's current prompt line. It consumes `prompt_chunk` events through
- * the tiny VT renderer (see `promptRenderer.ts`) and renders the resulting
- * line + cursor position. xterm.js still owns input; the strip is purely
- * visual at this stage and exists so we can verify the renderer faithfully
- * tracks what the shell is drawing before we hand it the input hose in
- * 1.9b.
+ * M1.9 slice 1.9b: the strip now *owns input*. A focusable container
+ * captures keydown events, maps them to PTY bytes via the keyToBytes
+ * helper, and forwards them through the `onInput` callback. xterm.js no
+ * longer captures keystrokes in the resting state (only when the
+ * alternate screen is active and xterm is revealed).
+ *
+ * The visible cursor + line text are still driven by the renderer fed
+ * with `prompt_chunk` events from the shell's echo. We deliberately do
+ * not render local echo here: the line the user sees is what the shell
+ * has actually committed, which keeps history navigation, completion,
+ * and readline shortcuts in lockstep with the strip.
  *
  * Layout follows the design at `/design/Shax Main Shell.dc.html`:
  *
  *   [ cwd ]  [ ⎇ branch ]  ❯  <prompt text + blinking cursor>
  *
- * cwd and branch come from the parent (same source the title bar and
- * statusline use). The blinking cursor is a thin accent bar positioned by
- * column count using the line's rendered text width — close enough for
- * monospaced output. Real glyph-position cursoring lands in 1.9b when the
- * strip actually owns input.
+ * The wrapper is exposed via a forwarded ref so the parent can move
+ * focus into / out of the strip when alt-screen mode toggles.
  */
 
-import type { CSSProperties } from "react";
+import { forwardRef } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, Ref } from "react";
 import type { PromptLine } from "./promptRenderer";
+import { keyToBytes } from "./keyToBytes";
 
 export interface PromptStripProps {
   /** The current working directory, sourced from OSC 133 A. */
@@ -30,6 +33,18 @@ export interface PromptStripProps {
   branch: string | null;
   /** The mirror of the shell's current prompt line. */
   line: PromptLine;
+  /**
+   * Forward typed bytes to the PTY. Receives the bytes produced by
+   * `keyToBytes(event)`; never called for ignored events (modifier-only,
+   * Cmd shortcuts, unmapped keys).
+   */
+  onInput: (bytes: Uint8Array) => void;
+  /**
+   * True while the host is in alt-screen mode. The strip is hidden by
+   * the parent in that case and never captures input — this is just for
+   * its own internal styling (e.g., the focus ring).
+   */
+  altScreen?: boolean;
 }
 
 const ROW: CSSProperties = {
@@ -44,6 +59,7 @@ const ROW: CSSProperties = {
   color: "var(--fg)",
   flexShrink: 0,
   minHeight: 40,
+  outline: "none",
 };
 
 const META_GROUP: CSSProperties = {
@@ -84,8 +100,6 @@ const LINE_AREA: CSSProperties = {
   minWidth: 0,
   whiteSpace: "pre",
   overflow: "hidden",
-  // Reserve enough vertical space for the line + cursor bar; the line is
-  // 13px font on a 1.4 line-height so ~18px is a safe minimum.
   minHeight: 18,
 };
 
@@ -105,17 +119,73 @@ const CURSOR_BAR: CSSProperties = {
   marginLeft: 1,
 };
 
-export function PromptStrip({ cwd, branch, line }: PromptStripProps): React.ReactElement {
+const STYLED_TEXT: CSSProperties = {
+  color: "var(--fg-faint)",
+};
+
+interface StyledRun {
+  text: string;
+  styled: boolean;
+}
+
+/**
+ * Group consecutive same-styled characters into runs. Empty input → empty
+ * array. `text` and `styled` are assumed to be the same length; mismatches
+ * fall back to treating extra chars as unstyled.
+ */
+function styledRuns(text: string, styled: boolean[]): StyledRun[] {
+  if (text.length === 0) return [];
+  const runs: StyledRun[] = [];
+  let runText = "";
+  let runStyled = styled[0] ?? false;
+  for (let i = 0; i < text.length; i++) {
+    const s = styled[i] ?? false;
+    if (s !== runStyled) {
+      runs.push({ text: runText, styled: runStyled });
+      runText = "";
+      runStyled = s;
+    }
+    runText += text.charAt(i);
+  }
+  if (runText.length > 0) runs.push({ text: runText, styled: runStyled });
+  return runs;
+}
+
+function PromptStripInner(
+  { cwd, branch, line, onInput }: PromptStripProps,
+  ref: Ref<HTMLDivElement>,
+): React.ReactElement {
   const hasTyping = line.text.length > 0;
 
-  // Render the line as two spans + cursor so the cursor appears at the
-  // mid-line position when the user has moved it left from the end. With
-  // a monospaced font and pure text content, this is visually accurate.
-  const before = line.text.slice(0, line.cursor);
-  const after = line.text.slice(line.cursor);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const bytes = keyToBytes(event);
+    if (bytes === null) return;
+    // Any key we map is one the browser shouldn't also handle (Tab moving
+    // focus, Backspace navigating, arrows scrolling the page). Suppress.
+    event.preventDefault();
+    event.stopPropagation();
+    onInput(bytes);
+  };
+
+  // Group consecutive same-styled chars into runs so the strip can render
+  // styled chunks (zsh-autosuggestions ghost text, syntax-highlighted
+  // command parts) in a faint colour while the user's committed input
+  // stays at full contrast. Defensive against callers (mostly tests) that
+  // pass a partial PromptLine without the styled field.
+  const lineStyled = line.styled ?? [];
+  const beforeRuns = styledRuns(line.text.slice(0, line.cursor), lineStyled.slice(0, line.cursor));
+  const afterRuns = styledRuns(line.text.slice(line.cursor), lineStyled.slice(line.cursor));
 
   return (
-    <div data-testid="prompt-strip" style={ROW}>
+    <div
+      data-testid="prompt-strip"
+      ref={ref}
+      tabIndex={0}
+      role="textbox"
+      aria-label="Shell prompt"
+      onKeyDown={handleKeyDown}
+      style={ROW}
+    >
       <span style={META_GROUP}>
         <span style={CWD_LABEL} data-testid="prompt-cwd">
           {cwd ?? "—"}
@@ -127,14 +197,33 @@ export function PromptStrip({ cwd, branch, line }: PromptStripProps): React.Reac
       </span>
       <span style={PROMPT_GLYPH}>❯</span>
       <span style={LINE_AREA} data-testid="prompt-line">
+        {/*
+         * Cursor is always rendered so the user has a visible insertion
+         * point from the moment the strip mounts. In the empty state it
+         * sits at column 0 with the placeholder hint trailing after.
+         * Styled chars (any non-default-fg SGR — e.g., zsh-autosuggestions
+         * ghost text) render in `--fg-faint` so the user can tell what
+         * the shell suggested vs. what they actually typed.
+         */}
+        <span data-testid="prompt-line-text">
+          {beforeRuns.map((run, idx) => (
+            <span key={`before-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+              {run.text}
+            </span>
+          ))}
+        </span>
+        <span style={CURSOR_BAR} data-testid="prompt-cursor" />
         {hasTyping ? (
-          <>
-            <span data-testid="prompt-line-text">{before}</span>
-            <span style={CURSOR_BAR} data-testid="prompt-cursor" />
-            <span>{after}</span>
-          </>
+          <span>
+            {afterRuns.map((run, idx) => (
+              <span key={`after-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+                {run.text}
+              </span>
+            ))}
+          </span>
         ) : (
           <span style={LINE_TEXT_PLACEHOLDER}>
+            {" "}
             type a command, or <span style={{ fontFamily: "var(--font-mono)" }}>?</span> to ask Shax
           </span>
         )}
@@ -142,3 +231,6 @@ export function PromptStrip({ cwd, branch, line }: PromptStripProps): React.Reac
     </div>
   );
 }
+
+export const PromptStrip = forwardRef<HTMLDivElement, PromptStripProps>(PromptStripInner);
+PromptStrip.displayName = "PromptStrip";

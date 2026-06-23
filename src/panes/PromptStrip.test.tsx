@@ -1,52 +1,168 @@
 /**
  * PromptStrip unit tests (jsdom / Vitest).
  *
- * Visual-only mirror at slice 1.9a: assertions cover the cwd / branch
- * fallbacks, the placeholder rendering when nothing has been typed, and
- * the split-around-cursor rendering when there is text to show.
+ * Covers the M1.9 1.9b input-ownership behaviour: keydown events map to
+ * PTY bytes via keyToBytes and flow through the onInput callback. Visual
+ * mirror assertions from 1.9a continue to apply (cwd / branch fallbacks,
+ * placeholder, split-around-cursor).
  */
 
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { PromptStrip } from "./PromptStrip";
 
+const noop = (): void => {};
+
 afterEach(() => cleanup());
 
-describe("PromptStrip", () => {
+describe("PromptStrip / layout", () => {
   it("renders the wrapper and neutral fallbacks for cwd/branch", () => {
-    render(<PromptStrip cwd={null} branch={null} line={{ text: "", cursor: 0 }} />);
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={noop}
+      />,
+    );
     expect(screen.getByTestId("prompt-strip")).toBeInTheDocument();
     expect(screen.getByTestId("prompt-cwd")).toHaveTextContent("—");
     expect(screen.getByTestId("prompt-branch")).toHaveTextContent("—");
   });
 
-  it("shows the placeholder hint when the line is empty", () => {
-    render(<PromptStrip cwd="/tmp" branch="main" line={{ text: "", cursor: 0 }} />);
+  it("shows the placeholder hint AND a visible cursor when the line is empty", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={noop}
+      />,
+    );
     expect(screen.getByTestId("prompt-line")).toHaveTextContent("type a command");
-    expect(screen.queryByTestId("prompt-cursor")).toBeNull();
+    // The cursor must be visible from the start so the user sees a clear
+    // insertion point even before typing.
+    expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
   });
 
   it("renders the typed line with the cursor at the end by default", () => {
-    render(<PromptStrip cwd="/tmp" branch="main" line={{ text: "ls -la", cursor: 6 }} />);
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={{
+          text: "ls -la",
+          styled: [false, false, false, false, false, false],
+          cursor: 6,
+          currentStyled: false,
+        }}
+        onInput={noop}
+      />,
+    );
     expect(screen.getByTestId("prompt-line-text")).toHaveTextContent("ls -la");
     expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
   });
 
   it("splits the line around a mid-line cursor", () => {
-    render(<PromptStrip cwd={null} branch={null} line={{ text: "abcdef", cursor: 3 }} />);
-    const line = screen.getByTestId("prompt-line");
-    // before-cursor: "abc"
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{
+          text: "abcdef",
+          styled: [false, false, false, false, false, false],
+          cursor: 3,
+          currentStyled: false,
+        }}
+        onInput={noop}
+      />,
+    );
     expect(screen.getByTestId("prompt-line-text")).toHaveTextContent("abc");
-    // The whole line still reads "abcdef" — before + cursor + after.
-    expect(line).toHaveTextContent("abcdef");
+    expect(screen.getByTestId("prompt-line")).toHaveTextContent("abcdef");
   });
 
   it("renders the supplied cwd and branch", () => {
     render(
-      <PromptStrip cwd="/Users/ada/dev/shax" branch="feat/x" line={{ text: "", cursor: 0 }} />,
+      <PromptStrip
+        cwd="/Users/ada/dev/shax"
+        branch="feat/x"
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={noop}
+      />,
     );
     expect(screen.getByTestId("prompt-cwd")).toHaveTextContent("/Users/ada/dev/shax");
     expect(screen.getByTestId("prompt-branch")).toHaveTextContent("feat/x");
+  });
+});
+
+describe("PromptStrip / input ownership", () => {
+  it("forwards typed bytes through onInput for a printable key", () => {
+    const onInput = vi.fn();
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "a" });
+    expect(onInput).toHaveBeenCalledTimes(1);
+    expect(onInput).toHaveBeenCalledWith(new TextEncoder().encode("a"));
+  });
+
+  it("maps Enter to CR for the shell", () => {
+    const onInput = vi.fn();
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "Enter" });
+    expect(onInput).toHaveBeenCalledWith(new Uint8Array([0x0d]));
+  });
+
+  it("maps arrow keys to CSI sequences", () => {
+    const onInput = vi.fn();
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "ArrowUp" });
+    expect(onInput).toHaveBeenCalledWith(new TextEncoder().encode("\x1b[A"));
+  });
+
+  it("ignores modifier-only events (no onInput call)", () => {
+    const onInput = vi.fn();
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "Shift", shiftKey: true });
+    expect(onInput).not.toHaveBeenCalled();
+  });
+
+  it("is focusable (tabIndex=0) so it can claim focus when no input has happened yet", () => {
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={noop}
+      />,
+    );
+    expect(screen.getByTestId("prompt-strip")).toHaveAttribute("tabindex", "0");
   });
 });

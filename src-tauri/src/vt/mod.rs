@@ -141,6 +141,12 @@ impl vte::Perform for Performer {
     }
 
     // `csi_dispatch` handles CSI sequences like `ESC [ ? 1049 h`.
+    //
+    // We *consume* the alt-screen toggle (its bytes become an event, not raw
+    // output), but every other CSI sequence is rebuilt and appended to the
+    // pending byte stream so downstream consumers — the M1.9 PromptStrip
+    // renderer in particular — can interpret cursor moves, line erases, and
+    // similar redraw sequences emitted by the shell.
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
@@ -148,19 +154,52 @@ impl vte::Perform for Performer {
         _ignore: bool,
         action: char,
     ) {
-        // We only care about the DEC private mode `?` sequences `h` and `l`.
-        if intermediates != [b'?'] {
-            return;
+        if intermediates == [b'?'] {
+            let param_1049 = params.iter().any(|sub| sub.first().copied() == Some(1049));
+            if param_1049 {
+                match action {
+                    'h' => {
+                        self.emit_event(VtEvent::AltScreenEntered);
+                        return;
+                    }
+                    'l' => {
+                        self.emit_event(VtEvent::AltScreenLeft);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
-        let param_1049 = params.iter().any(|sub| sub.first().copied() == Some(1049));
-        if !param_1049 {
-            return;
+        // Pass through: ESC + [ + intermediates + params + action.
+        // `vte::Params` reports `is_empty()` even when iterating yields a
+        // single defaulted [0] subparam (which is what no-param input like
+        // `\x1b[C` parses to). Detect that case and emit the canonical
+        // no-param form so the downstream byte stream matches what the
+        // shell actually sent.
+        self.pending.push(0x1b);
+        self.pending.push(b'[');
+        self.pending.extend_from_slice(intermediates);
+        let subs: Vec<&[u16]> = params.iter().collect();
+        let only_default = subs.len() == 1 && subs[0] == [0];
+        if !only_default {
+            let mut first = true;
+            for sub in &subs {
+                if !first {
+                    self.pending.push(b';');
+                }
+                let mut sub_first = true;
+                for v in *sub {
+                    if !sub_first {
+                        self.pending.push(b':');
+                    }
+                    self.pending.extend_from_slice(v.to_string().as_bytes());
+                    sub_first = false;
+                }
+                first = false;
+            }
         }
-        match action {
-            'h' => self.emit_event(VtEvent::AltScreenEntered),
-            'l' => self.emit_event(VtEvent::AltScreenLeft),
-            _ => {}
-        }
+        // CSI finals are always single ASCII bytes in 0x40..=0x7e.
+        self.pending.push(action as u8);
     }
 
     // `osc_dispatch` handles OSC sequences like `OSC 133 ; C ST`.
@@ -196,13 +235,21 @@ impl vte::Perform for Performer {
         }
     }
 
-    // Required by the trait; no-ops for everything else. These are escape
-    // sequences that are not part of the visible output, so we intentionally
-    // do not add their bytes to `pending`.
+    // DCS sequences (Device Control Strings) are not used by anything we
+    // currently render in the prompt strip; drop them.
     fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _c: char) {}
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+
+    // Two-byte ESC sequences (ESC 7 save cursor, ESC 8 restore, ESC c reset,
+    // ESC ( B charset, etc.). The shell emits these during prompt redraws,
+    // so we pass them through to the downstream renderer rather than
+    // silently dropping them.
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        self.pending.push(0x1b);
+        self.pending.extend_from_slice(intermediates);
+        self.pending.push(byte);
+    }
 }
 
 /// Parse `cwd=<base64>` and `branch=<base64>` from the trailing params of
@@ -477,12 +524,13 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_osc_and_csi_are_ignored_but_text_between_is_output() {
-        // OSC 8 (hyperlinks) and a non-1049 CSI must not emit any event, but
-        // the plain text between them is real output and must be reported.
-        let bytes = b"\x1b]8;;http://example.com\x07text\x1b[?2004h";
+    fn unrelated_osc_emits_no_event_and_drops_its_bytes() {
+        // OSC 8 (hyperlinks) and other non-133 OSC sequences are still
+        // consumed silently — the prompt strip's renderer doesn't need
+        // them and the alt-screen / xterm passthrough path gets the raw
+        // bytes separately.
+        let bytes = b"\x1b]8;;http://example.com\x07text";
         let messages = collect_messages(bytes);
-        // No events.
         let events: Vec<_> = messages
             .iter()
             .filter_map(|m| match m {
@@ -491,16 +539,45 @@ mod tests {
             })
             .collect();
         assert!(events.is_empty(), "unexpected events: {events:?}");
-        // But "text" must appear as Output.
-        let outputs: Vec<_> = messages
+        let concat: Vec<u8> = messages
             .iter()
             .filter_map(|m| match m {
                 VtMessage::Output(b) => Some(b.clone()),
                 VtMessage::Event(_) => None,
             })
+            .flatten()
             .collect();
-        let concat: Vec<u8> = outputs.into_iter().flatten().collect();
         assert_eq!(concat, b"text");
+    }
+
+    #[test]
+    fn unhandled_csi_passes_through_as_output_bytes() {
+        // CSI sequences other than the `?1049h/l` alt-screen toggle are
+        // forwarded to the downstream consumer — the M1.9 PromptStrip
+        // renderer relies on getting cursor-move / erase / SGR sequences
+        // intact so it can mirror the shell's prompt redraws.
+        let bytes = b"hi\x1b[Cthere\x1b[?2004h";
+        let messages = collect_messages(bytes);
+        let events: Vec<_> = messages
+            .iter()
+            .filter_map(|m| match m {
+                VtMessage::Event(e) => Some(e.clone()),
+                VtMessage::Output(_) => None,
+            })
+            .collect();
+        assert!(events.is_empty(), "unexpected events: {events:?}");
+        let concat: Vec<u8> = messages
+            .iter()
+            .filter_map(|m| match m {
+                VtMessage::Output(b) => Some(b.clone()),
+                VtMessage::Event(_) => None,
+            })
+            .flatten()
+            .collect();
+        // Both the `\x1b[C` (cursor-forward) and the bracketed-paste-mode
+        // toggle `\x1b[?2004h` must pass through verbatim alongside the
+        // plain text.
+        assert_eq!(concat, b"hi\x1b[Cthere\x1b[?2004h");
     }
 
     #[test]
