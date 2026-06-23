@@ -10,9 +10,22 @@ import type { BlockId, BlockSummary } from "../lib/ipc";
 import type { PromptLine } from "./promptRenderer";
 import { emptyPromptLine, feed as feedPromptRenderer } from "./promptRenderer";
 
+/**
+ * UI-side block summary. Extends the IPC `BlockSummary` with a flag that
+ * records whether the alt-screen was ever active during this block —
+ * i.e. whether the user ran an interactive program (vim, htop, btop,
+ * less, ssh, …) inside it. Output bytes from alt-screen are unusable as
+ * a block-list preview (raw cursor + grid manipulation, not flow text),
+ * so the UI hides the output expandable for interactive blocks and just
+ * shows the command + duration. Frontend-only; not persisted yet.
+ */
+export interface UiBlock extends BlockSummary {
+  interactive: boolean;
+}
+
 export interface BlockState {
   /** Blocks in chronological order. */
-  blocks: BlockSummary[];
+  blocks: UiBlock[];
   /** True while a program holds the alternate screen buffer. */
   altScreen: boolean;
   /**
@@ -80,7 +93,13 @@ export const initialBlockState: BlockState = {
 export function blockReducer(state: BlockState, action: BlockAction): BlockState {
   switch (action.type) {
     case "seed":
-      return { ...state, blocks: action.blocks };
+      // Persisted blocks don't carry the `interactive` flag yet (the
+      // backend doesn't track it). Default to false; future runs will
+      // mark live blocks correctly as they receive alt-screen events.
+      return {
+        ...state,
+        blocks: action.blocks.map((b) => ({ ...b, interactive: false })),
+      };
 
     case "started":
       // A new command just started — the prompt the user was typing into is
@@ -101,6 +120,7 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
             exit_code: null,
             duration_ms: null,
             aborted: false,
+            interactive: false,
           },
         ],
       };
@@ -118,7 +138,7 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       // (carry the start-time values forward). Don't second-guess it with
       // a fallback or `cd /tmp` from a git repo leaves the stale branch
       // attached.
-      const updated: BlockSummary = {
+      const updated: UiBlock = {
         ...existing,
         ended_at_ms: action.ended_at_ms,
         exit_code: action.exit_code,
@@ -132,8 +152,27 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
       return { ...state, blocks };
     }
 
-    case "alt_screen":
-      return { ...state, altScreen: action.active };
+    case "alt_screen": {
+      if (!action.active) {
+        return { ...state, altScreen: false };
+      }
+      // Alt-screen just turned on. If there's a block in flight (ended_at_ms
+      // === null), mark it as an interactive session so the UI knows not to
+      // render its output bytes as flow text. The flag is sticky for the
+      // life of the block — even after the user quits vim and alt-screen
+      // flips off, we still don't want to surface the (now garbled) bytes.
+      const runningIdx = state.blocks.findIndex((b) => b.ended_at_ms === null);
+      if (runningIdx === -1) {
+        return { ...state, altScreen: true };
+      }
+      const running = state.blocks[runningIdx];
+      if (running === undefined || running.interactive) {
+        return { ...state, altScreen: true };
+      }
+      const blocks = [...state.blocks];
+      blocks[runningIdx] = { ...running, interactive: true };
+      return { ...state, altScreen: true, blocks };
+    }
 
     case "block_chunk": {
       // Defence in depth: TerminalPane already short-circuits chunk

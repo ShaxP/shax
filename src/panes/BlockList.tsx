@@ -11,13 +11,14 @@
  */
 
 import { useLayoutEffect, useRef } from "react";
-import type { BlockId, BlockSummary, PtyId } from "../lib/ipc";
+import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
+import type { UiBlock } from "./blockReducer";
 
 export interface BlockListProps {
   pty: PtyId | null;
-  blocks: BlockSummary[];
+  blocks: UiBlock[];
   /**
    * Live-streamed output bytes per block, accumulated from `block_chunk`
    * events. The block row uses this for inline rendering of running and

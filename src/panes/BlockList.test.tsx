@@ -7,9 +7,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import type { BlockSummary } from "../lib/ipc";
 import { BlockList } from "./BlockList";
 import { blockReducer, initialBlockState } from "./blockReducer";
+import type { UiBlock } from "./blockReducer";
 
 /**
  * jsdom doesn't run layout, so `scrollHeight` is always 0 by default.
@@ -33,7 +33,7 @@ function withFakeScrollHeight(value: number): () => void {
 
 afterEach(() => cleanup());
 
-function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
+function makeBlock(overrides: Partial<UiBlock> = {}): UiBlock {
   return {
     id: "block-1",
     command: "ls",
@@ -44,6 +44,7 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
     exit_code: 0,
     duration_ms: 1,
     aborted: false,
+    interactive: false,
     ...overrides,
   };
 }
@@ -116,7 +117,7 @@ describe("BlockList", () => {
    * blocks are seeded on app boot. (Regression coverage for #6 follow-up.)
    */
   it("preserves identity of untouched blocks across reducer updates", () => {
-    const seed: BlockSummary[] = [
+    const seed: UiBlock[] = [
       makeBlock({ id: "h1", command: "old-1" }),
       makeBlock({ id: "h2", command: "old-2" }),
       makeBlock({ id: "h3", command: "old-3" }),

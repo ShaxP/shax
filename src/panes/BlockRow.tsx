@@ -32,8 +32,9 @@
 
 import { memo, useEffect, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import type { BlockSummary, PtyId } from "../lib/ipc";
+import type { PtyId } from "../lib/ipc";
 import { formatDuration } from "./blockFormat";
+import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
 
 const TEXT_DECODER = new TextDecoder();
@@ -99,7 +100,7 @@ function stripAnsi(input: string): string {
 
 export interface BlockRowProps {
   pty: PtyId;
-  block: BlockSummary;
+  block: UiBlock;
   /**
    * Live-streamed output bytes for this block, accumulated from
    * `block_chunk` events. Always rendered inline while the block is
@@ -116,7 +117,7 @@ export interface BlockRowProps {
 
 type Status = "running" | "ok" | "fail" | "aborted";
 
-function statusFor(block: BlockSummary): Status {
+function statusFor(block: UiBlock): Status {
   if (block.aborted) return "aborted";
   if (block.exit_code === null) return "running";
   return block.exit_code === 0 ? "ok" : "fail";
@@ -140,7 +141,7 @@ function statusGlyphColor(status: Status): string {
   return statusEdgeColor(status);
 }
 
-function statusBadge(block: BlockSummary, status: Status): React.ReactNode {
+function statusBadge(block: UiBlock, status: Status): React.ReactNode {
   switch (status) {
     case "ok":
       return (
@@ -297,16 +298,23 @@ function BlockRowInner({
   const rawText = liveText ?? fetchedOutput;
   const outputText = rawText !== null ? stripAnsi(rawText) : null;
 
+  // Interactive blocks (vim, htop, less, …) never expand into an output
+  // view — their bytes are cursor / grid manipulation, not flow text,
+  // and rendering them produces nonsense. We also skip the historical
+  // IPC fetch for the same reason. The user still sees the command,
+  // duration, and the small "interactive session" label below.
+  const interactive = block.interactive;
+
   // Natural default: open whenever we already have the bytes in memory, OR
   // the block is still running (always-open is the rule for running). For
   // historical blocks the natural default is closed — we don't want to fire
   // 50 concurrent IPC fetches on boot to populate seeded rows that the user
   // may never look at.
   const naturalOpen = isRunning || liveOutput !== undefined;
-  const open = isRunning ? true : (userOpen ?? naturalOpen);
+  const open = interactive ? false : isRunning ? true : (userOpen ?? naturalOpen);
 
   const toggleOpen = (): void => {
-    if (isRunning) return;
+    if (isRunning || interactive) return;
     const next = !open;
     setUserOpen(next);
     // Opening a historical block for the first time: fire the IPC fetch.
@@ -479,6 +487,19 @@ function BlockRowInner({
          * Tier-0 raw rendering: bytes UTF-8 decoded, ANSI escapes pass through
          * untouched (the fidelity contract). M4 brings real formatters.
          */}
+        {interactive && !isRunning && (
+          <div
+            data-testid="block-interactive-label"
+            style={{
+              margin: "4px 0 0 0",
+              fontSize: 11,
+              color: "var(--fg-faint)",
+              fontStyle: "italic",
+            }}
+          >
+            interactive session
+          </div>
+        )}
         {open && (
           <pre
             data-testid="block-output"

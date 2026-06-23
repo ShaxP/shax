@@ -10,12 +10,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import type { BlockSummary } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
+import type { UiBlock } from "./blockReducer";
 
 afterEach(() => cleanup());
 
-function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
+function makeBlock(overrides: Partial<UiBlock> = {}): UiBlock {
   return {
     id: "block-1",
     command: "echo hi",
@@ -26,6 +26,7 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
     exit_code: 0,
     duration_ms: 500,
     aborted: false,
+    interactive: false,
     ...overrides,
   };
 }
@@ -236,5 +237,35 @@ describe("BlockRow / duration", () => {
     });
     render(<BlockRow pty="pty-1" block={block} now={() => 1000} />);
     expect(screen.getByTestId("block-duration")).toHaveTextContent("12ms");
+  });
+});
+
+describe("BlockRow / interactive sessions", () => {
+  it("hides the output `<pre>` and shows an 'interactive session' label", () => {
+    // vim / htop / btop / less — alt-screen bytes are unusable as flow
+    // text. The row stays compact: command + status, plus a small label.
+    const block = makeBlock({
+      command: "vim foo.txt",
+      interactive: true,
+    });
+    render(<BlockRow pty="pty-1" block={block} liveOutput={new Uint8Array([1, 2, 3])} />);
+    expect(screen.queryByTestId("block-output")).toBeNull();
+    expect(screen.getByTestId("block-interactive-label")).toHaveTextContent("interactive session");
+  });
+
+  it("non-interactive blocks still show output", () => {
+    const block = makeBlock({
+      command: "ls",
+      interactive: false,
+    });
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={block}
+        liveOutput={new TextEncoder().encode("file1\nfile2\n")}
+      />,
+    );
+    expect(screen.getByTestId("block-output")).toHaveTextContent("file1");
+    expect(screen.queryByTestId("block-interactive-label")).toBeNull();
   });
 });

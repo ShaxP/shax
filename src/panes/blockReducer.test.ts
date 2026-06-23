@@ -8,14 +8,13 @@
 
 import { describe, it, expect } from "vitest";
 import { blockReducer, initialBlockState } from "./blockReducer";
-import type { BlockState } from "./blockReducer";
-import type { BlockSummary } from "../lib/ipc";
+import type { BlockState, UiBlock } from "./blockReducer";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
+function makeBlock(overrides: Partial<UiBlock> = {}): UiBlock {
   return {
     id: "block-1",
     command: null,
@@ -26,6 +25,7 @@ function makeBlock(overrides: Partial<BlockSummary> = {}): BlockSummary {
     exit_code: null,
     duration_ms: null,
     aborted: false,
+    interactive: false,
     ...overrides,
   };
 }
@@ -96,6 +96,7 @@ describe("blockReducer / started", () => {
       exit_code: null,
       duration_ms: null,
       aborted: false,
+      interactive: false,
     });
   });
 
@@ -180,6 +181,7 @@ describe("blockReducer / completed", () => {
       exit_code: 0,
       duration_ms: 8999,
       aborted: false,
+      interactive: false,
     });
   });
 
@@ -351,7 +353,7 @@ describe("blockReducer / alt_screen", () => {
     expect(next.altScreen).toBe(false);
   });
 
-  it("preserves block list when toggling alt screen", () => {
+  it("preserves the block count when toggling alt screen", () => {
     const state: BlockState = {
       blocks: [makeBlock()],
       altScreen: false,
@@ -359,7 +361,50 @@ describe("blockReducer / alt_screen", () => {
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
-    expect(next.blocks).toEqual(state.blocks);
+    expect(next.blocks).toHaveLength(1);
+  });
+
+  it("marks the currently-running block as interactive when alt-screen turns on", () => {
+    // Models `vim foo` — OSC 133 C arrives first (block opens), then vim
+    // grabs the alt screen. The block should be tagged so the UI hides
+    // its (garbled) output bytes after completion.
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "vim-block" })],
+      altScreen: false,
+      liveOutputs: new Map(),
+      promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+    };
+    const next = blockReducer(state, { type: "alt_screen", active: true });
+    expect(next.blocks[0]?.interactive).toBe(true);
+  });
+
+  it("only marks the running block — already-completed blocks stay untouched", () => {
+    const state: BlockState = {
+      blocks: [
+        makeBlock({ id: "done", ended_at_ms: 500, exit_code: 0, duration_ms: 100 }),
+        makeBlock({ id: "running" }),
+      ],
+      altScreen: false,
+      liveOutputs: new Map(),
+      promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+    };
+    const next = blockReducer(state, { type: "alt_screen", active: true });
+    expect(next.blocks[0]?.interactive).toBe(false);
+    expect(next.blocks[1]?.interactive).toBe(true);
+  });
+
+  it("the interactive flag is sticky after alt-screen turns off", () => {
+    // User quits vim → alt-screen deactivates, but we still don't want to
+    // surface the (now-garbled) bytes for that block.
+    const state: BlockState = {
+      blocks: [makeBlock({ interactive: true })],
+      altScreen: true,
+      liveOutputs: new Map(),
+      promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+    };
+    const next = blockReducer(state, { type: "alt_screen", active: false });
+    expect(next.altScreen).toBe(false);
+    expect(next.blocks[0]?.interactive).toBe(true);
   });
 });
 
