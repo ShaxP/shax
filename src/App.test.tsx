@@ -193,3 +193,87 @@ describe("App / closing tabs", () => {
     });
   });
 });
+
+describe("App / pane splits", () => {
+  it("⌘D splits the focused pane side-by-side (vertical divider)", async () => {
+    render(<App />);
+    expect(screen.getAllByTestId("layout-leaf")).toHaveLength(1);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    expect(screen.getAllByTestId("layout-leaf")).toHaveLength(2);
+    const divider = screen.getByTestId("layout-divider");
+    expect(divider).toHaveAttribute("data-direction", "row");
+    // Original pane keeps its PTY; the new pane spawns a second one.
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(2);
+    });
+    // And importantly: no pane was killed in the process (the
+    // geometry-driven renderer keeps every TerminalPane instance
+    // stable across layout changes).
+    expect(mockKillPty).not.toHaveBeenCalled();
+  });
+
+  it("⌘⇧D splits the focused pane stacked (horizontal divider)", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "D", metaKey: true, shiftKey: true });
+    });
+    const divider = screen.getByTestId("layout-divider");
+    expect(divider).toHaveAttribute("data-direction", "column");
+  });
+
+  it("the new pane takes focus after a split", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    const leaves = screen.getAllByTestId("layout-leaf");
+    expect(leaves).toHaveLength(2);
+    // Second leaf is the freshly-spawned one; it should be focused.
+    expect(leaves[0]).toHaveAttribute("data-focused", "false");
+    expect(leaves[1]).toHaveAttribute("data-focused", "true");
+  });
+
+  it("clicking a leaf focuses it", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    const leaves = screen.getAllByTestId("layout-leaf");
+    fireEvent.pointerDown(leaves[0] as Element);
+    const after = screen.getAllByTestId("layout-leaf");
+    expect(after[0]).toHaveAttribute("data-focused", "true");
+    expect(after[1]).toHaveAttribute("data-focused", "false");
+  });
+
+  it("⌘] cycles focus forward across panes within the active tab", () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    // Second leaf currently focused. ⌘] should wrap to the first.
+    act(() => {
+      fireEvent.keyDown(window, { key: "]", metaKey: true });
+    });
+    const leaves = screen.getAllByTestId("layout-leaf");
+    expect(leaves[0]).toHaveAttribute("data-focused", "true");
+  });
+
+  it("⌘W on a multi-pane tab closes only the focused pane (tab survives)", async () => {
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "d", metaKey: true });
+    });
+    expect(screen.getAllByTestId("layout-leaf")).toHaveLength(2);
+    act(() => {
+      fireEvent.keyDown(window, { key: "w", metaKey: true });
+    });
+    // One leaf left, tab still open.
+    expect(screen.getAllByTestId("layout-leaf")).toHaveLength(1);
+    expect(screen.getAllByTestId("title-tab")).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(mockKillPty).toHaveBeenCalledTimes(1);
+    });
+  });
+});
