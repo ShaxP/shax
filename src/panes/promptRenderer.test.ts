@@ -217,6 +217,18 @@ describe("promptRenderer / per-character styling", () => {
     expect(r.styled).toEqual([false, false]);
   });
 
+  it("SGR 90 (bright black / dark grey) marks styled — the 16-color form of fg=8", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[90mhint\x1b[39m"));
+    expect(r.styled).toEqual([true, true, true, true]);
+  });
+
+  it("other bright-palette colours (91-97) do NOT mark styled", () => {
+    // Bright red — a common syntax-highlighting "error" colour. Must
+    // stay at full contrast.
+    const r = feed(emptyPromptLine, bytes("\x1b[91merr\x1b[39m"));
+    expect(r.styled).toEqual([false, false, false]);
+  });
+
   it("attribute-only SGR (bold/italic) does not flip styled on its own", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[1mab\x1b[0m"));
     expect(r.styled).toEqual([false, false]);

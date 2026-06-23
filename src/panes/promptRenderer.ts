@@ -346,9 +346,17 @@ function applySgr(currentStyled: boolean, args: number[]): boolean {
       if (mode === 5) i += 3;
       else if (mode === 2) i += 5;
       else i += 1;
-    } else if ((a >= 30 && a <= 37) || (a >= 90 && a <= 97)) {
-      // Standard / bright palette fg. These are the syntax-highlighting
-      // colours we explicitly do *not* dim.
+    } else if (a === 90) {
+      // SGR 90 = bright black = the standard "dark grey" channel many
+      // terminals use when the user / theme sets `fg=8`. This is the
+      // most common autosuggestion colour on terminals that don't
+      // expose the 256-palette form (`\e[38;5;8m`), so we treat it as
+      // a hint.
+      styled = true;
+      i++;
+    } else if ((a >= 30 && a <= 37) || (a >= 91 && a <= 97)) {
+      // Standard / bright palette fg (red, green, blue, cyan, …).
+      // These are syntax-highlighting colours; do not dim them.
       styled = false;
       i++;
     } else {

@@ -149,15 +149,17 @@ export function TerminalPane(): React.ReactElement {
 
         case "prompt_chunk": {
           const bytes = base64Decode(event.data);
-          // DIAG (M1.9 1.9b): trace prompt-chunk bytes so we can see what
-          // zsh emits for ↑/↓ history nav and arrow keys. Remove once
-          // the renderer is verified against real shell output.
+          // DIAG (M1.9 1.9b): trace prompt-chunk bytes + the printable
+          // text so we can see exactly what SGR the shell uses for
+          // autosuggestion hints. Remove once the styled detection
+          // covers all shells of interest.
           console.log(
-            "[diag] prompt_chunk bytes=%d hex=%s",
+            "[diag] prompt_chunk bytes=%d hex=%s text=%o",
             bytes.length,
             Array.from(bytes)
               .map((b) => b.toString(16).padStart(2, "0"))
               .join(" "),
+            new TextDecoder("utf-8", { fatal: false }).decode(bytes),
           );
           dispatch({ type: "prompt_chunk", bytes });
           break;
