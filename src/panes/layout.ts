@@ -153,11 +153,26 @@ export interface Placement {
   rect: Rect;
 }
 
+export type SplitPath = ("a" | "b")[];
+
 export interface DividerLine {
   /** `row` splits emit a vertical divider, `column` splits a horizontal one. */
   direction: SplitDirection;
-  /** Centre-line of the divider in percentages. */
-  rect: Rect;
+  /**
+   * Path through the tree to the Split this divider belongs to.
+   * `[]` is the root Split; subsequent entries pick the `a` or `b` child
+   * at each level. Used by drag-to-resize to address the Split when the
+   * user moves the divider.
+   */
+  path: SplitPath;
+  /**
+   * The rect covering both children of the Split (and the centre-line
+   * the divider sits on). Drag math converts cursor coordinates to a
+   * new ratio relative to this rect.
+   */
+  splitRect: Rect;
+  /** Current ratio of the Split (0..1, child `a` takes this fraction). */
+  ratio: number;
 }
 
 export interface LayoutGeometry {
@@ -177,31 +192,40 @@ const FULL_RECT: Rect = { left: 0, top: 0, width: 100, height: 100 };
 export function computeGeometry(node: LayoutNode, rect: Rect = FULL_RECT): LayoutGeometry {
   const panes: Placement[] = [];
   const dividers: DividerLine[] = [];
-  walk(node, rect, panes, dividers);
+  walk(node, rect, panes, dividers, []);
   return { panes, dividers };
 }
 
-function walk(node: LayoutNode, rect: Rect, panes: Placement[], dividers: DividerLine[]): void {
+function walk(
+  node: LayoutNode,
+  rect: Rect,
+  panes: Placement[],
+  dividers: DividerLine[],
+  path: SplitPath,
+): void {
   if (node.kind === "leaf") {
     panes.push({ paneId: node.paneId, rect });
     return;
   }
   if (node.direction === "row") {
     const aWidth = rect.width * node.ratio;
-    walk(node.a, { ...rect, width: aWidth }, panes, dividers);
+    walk(node.a, { ...rect, width: aWidth }, panes, dividers, [...path, "a"]);
     walk(
       node.b,
       { left: rect.left + aWidth, top: rect.top, width: rect.width - aWidth, height: rect.height },
       panes,
       dividers,
+      [...path, "b"],
     );
     dividers.push({
       direction: "row",
-      rect: { left: rect.left + aWidth, top: rect.top, width: 0, height: rect.height },
+      path,
+      splitRect: rect,
+      ratio: node.ratio,
     });
   } else {
     const aHeight = rect.height * node.ratio;
-    walk(node.a, { ...rect, height: aHeight }, panes, dividers);
+    walk(node.a, { ...rect, height: aHeight }, panes, dividers, [...path, "a"]);
     walk(
       node.b,
       {
@@ -212,10 +236,48 @@ function walk(node: LayoutNode, rect: Rect, panes: Placement[], dividers: Divide
       },
       panes,
       dividers,
+      [...path, "b"],
     );
     dividers.push({
       direction: "column",
-      rect: { left: rect.left, top: rect.top + aHeight, width: rect.width, height: 0 },
+      path,
+      splitRect: rect,
+      ratio: node.ratio,
     });
   }
+}
+
+/**
+ * Lower / upper bound on the ratio so a drag can't fully collapse a
+ * pane out of existence. 5 % keeps the doomed pane at least visible
+ * enough for the user to find and grab again.
+ */
+export const MIN_SPLIT_RATIO = 0.05;
+export const MAX_SPLIT_RATIO = 0.95;
+
+function clampRatio(ratio: number): number {
+  if (ratio < MIN_SPLIT_RATIO) return MIN_SPLIT_RATIO;
+  if (ratio > MAX_SPLIT_RATIO) return MAX_SPLIT_RATIO;
+  return ratio;
+}
+
+/**
+ * Update the ratio of the Split at `path` (root is `[]`). Returns the
+ * original tree unchanged if the path doesn't resolve to a Split.
+ */
+export function setRatio(node: LayoutNode, path: SplitPath, ratio: number): LayoutNode {
+  const next = clampRatio(ratio);
+  if (path.length === 0) {
+    if (node.kind !== "split") return node;
+    if (Math.abs(node.ratio - next) < 1e-6) return node;
+    return { ...node, ratio: next };
+  }
+  if (node.kind !== "split") return node;
+  const [head, ...rest] = path;
+  if (head === "a") {
+    const a = setRatio(node.a, rest, ratio);
+    return a === node.a ? node : { ...node, a };
+  }
+  const b = setRatio(node.b, rest, ratio);
+  return b === node.b ? node : { ...node, b };
 }

@@ -15,6 +15,9 @@ import {
   cycleFocus,
   neighborAfterClose,
   computeGeometry,
+  setRatio,
+  MIN_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
 } from "./layout";
 import type { LayoutNode } from "./layout";
 
@@ -201,9 +204,15 @@ describe("layout / computeGeometry", () => {
     const g = computeGeometry(tree);
     expect(g.panes[0]?.rect).toMatchObject({ left: 0, top: 0, width: 30, height: 100 });
     expect(g.panes[1]?.rect).toMatchObject({ left: 30, top: 0, width: 70, height: 100 });
-    expect(g.dividers).toEqual([
-      { direction: "row", rect: { left: 30, top: 0, width: 0, height: 100 } },
-    ]);
+    expect(g.dividers).toHaveLength(1);
+    const divider = g.dividers[0];
+    if (divider === undefined) throw new Error("expected a divider");
+    expect(divider).toMatchObject({
+      direction: "row",
+      path: [],
+      splitRect: { left: 0, top: 0, width: 100, height: 100 },
+      ratio: 0.3,
+    });
   });
 
   it("splits stacked (column) at the given ratio", () => {
@@ -217,9 +226,38 @@ describe("layout / computeGeometry", () => {
     const g = computeGeometry(tree);
     expect(g.panes[0]?.rect).toMatchObject({ left: 0, top: 0, width: 100, height: 50 });
     expect(g.panes[1]?.rect).toMatchObject({ left: 0, top: 50, width: 100, height: 50 });
-    expect(g.dividers).toEqual([
-      { direction: "column", rect: { left: 0, top: 50, width: 100, height: 0 } },
-    ]);
+    expect(g.dividers).toHaveLength(1);
+    expect(g.dividers[0]).toMatchObject({
+      direction: "column",
+      path: [],
+      ratio: 0.5,
+    });
+  });
+
+  it("nests splits and gives each divider its own path", () => {
+    // Left half is `a`. Right half is split vertically into b (top) and c (bottom).
+    const tree: LayoutNode = {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: leaf("a"),
+      b: {
+        kind: "split",
+        direction: "column",
+        ratio: 0.5,
+        a: leaf("b"),
+        b: leaf("c"),
+      },
+    };
+    const g = computeGeometry(tree);
+    expect(g.dividers).toHaveLength(2);
+    // Inner column-split divider is reached via the outer's `b` child.
+    const inner = g.dividers.find((d) => d.direction === "column");
+    expect(inner?.path).toEqual(["b"]);
+    expect(inner?.splitRect).toMatchObject({ left: 50, top: 0, width: 50, height: 100 });
+    // Outer row-split divider is at the root.
+    const outer = g.dividers.find((d) => d.direction === "row");
+    expect(outer?.path).toEqual([]);
   });
 
   it("nests splits and divides space proportionally", () => {
@@ -243,6 +281,76 @@ describe("layout / computeGeometry", () => {
     expect(byId.get("b")).toMatchObject({ left: 50, top: 0, width: 50, height: 50 });
     expect(byId.get("c")).toMatchObject({ left: 50, top: 50, width: 50, height: 50 });
     expect(g.dividers).toHaveLength(2);
+  });
+});
+
+describe("layout / setRatio", () => {
+  it("updates the ratio of the root Split", () => {
+    const tree: LayoutNode = {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: leaf("a"),
+      b: leaf("b"),
+    };
+    const next = setRatio(tree, [], 0.7);
+    if (next.kind !== "split") throw new Error("expected split");
+    expect(next.ratio).toBeCloseTo(0.7);
+  });
+
+  it("walks a path to a nested Split", () => {
+    const tree: LayoutNode = {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: leaf("a"),
+      b: {
+        kind: "split",
+        direction: "column",
+        ratio: 0.5,
+        a: leaf("b"),
+        b: leaf("c"),
+      },
+    };
+    const next = setRatio(tree, ["b"], 0.25);
+    if (next.kind !== "split" || next.b.kind !== "split") throw new Error("expected nested splits");
+    expect(next.b.ratio).toBeCloseTo(0.25);
+    // Outer Split's ratio stays at 0.5.
+    expect(next.ratio).toBeCloseTo(0.5);
+  });
+
+  it("clamps the ratio so a pane can't fully collapse", () => {
+    const tree: LayoutNode = {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: leaf("a"),
+      b: leaf("b"),
+    };
+    const small = setRatio(tree, [], 0.001);
+    if (small.kind !== "split") throw new Error("expected split");
+    expect(small.ratio).toBeCloseTo(MIN_SPLIT_RATIO);
+
+    const big = setRatio(tree, [], 0.999);
+    if (big.kind !== "split") throw new Error("expected split");
+    expect(big.ratio).toBeCloseTo(MAX_SPLIT_RATIO);
+  });
+
+  it("returns the original tree when the path does not resolve to a Split", () => {
+    const tree = leaf("a");
+    expect(setRatio(tree, [], 0.5)).toBe(tree);
+    expect(setRatio(tree, ["a"], 0.5)).toBe(tree);
+  });
+
+  it("is a near no-op when the ratio is unchanged (within float epsilon)", () => {
+    const tree: LayoutNode = {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: leaf("a"),
+      b: leaf("b"),
+    };
+    expect(setRatio(tree, [], 0.5)).toBe(tree);
   });
 });
 
