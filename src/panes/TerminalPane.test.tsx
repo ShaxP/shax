@@ -139,19 +139,14 @@ describe("TerminalPane", () => {
     expect(screen.getByTestId("block-list-empty")).toBeInTheDocument();
   });
 
-  it("wraps the pane in the M1.5 chrome (title bar + pane area + prompt strip + statusline)", () => {
+  it("renders the pane area and prompt strip (chrome lives at App level now)", () => {
     render(<TerminalPane />);
-    expect(screen.getByTestId("title-bar")).toBeInTheDocument();
     expect(screen.getByTestId("pane-area")).toBeInTheDocument();
     expect(screen.getByTestId("prompt-strip")).toBeInTheDocument();
-    expect(screen.getByTestId("statusline")).toBeInTheDocument();
-  });
-
-  it("seeds the title bar and statusline with neutral fallbacks before the first prompt", () => {
-    render(<TerminalPane />);
-    // No blocks yet → cwd/branch are null and rendered as "—".
-    expect(screen.getByTestId("active-tab")).toHaveTextContent("—");
-    expect(screen.getByTestId("statusline-cwd")).toHaveTextContent("—");
-    expect(screen.getByTestId("statusline-branch")).toHaveTextContent("—");
+    // M2 slice 2.1 moved the title bar and statusline up to App so
+    // multiple TerminalPanes can coexist in tabs without each
+    // rendering their own copy.
+    expect(screen.queryByTestId("title-bar")).toBeNull();
+    expect(screen.queryByTestId("statusline")).toBeNull();
   });
 });
