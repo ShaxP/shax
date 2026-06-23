@@ -19,10 +19,15 @@
  * The `⌘` modifier here means Cmd on macOS and Ctrl elsewhere; we listen
  * for either `metaKey` or `ctrlKey` so the same shortcuts work on Linux
  * and Windows builds without a platform-aware keymap.
+ *
+ * All tab transitions live in a single pure reducer. That way the tabs
+ * array and the active id update atomically — no setState-inside-setState
+ * impurity that StrictMode's double-render would otherwise expose as the
+ * "active id no longer matches any tab after the second ⌘W" bug.
  */
 
 import "./App.css";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalPane } from "./panes/TerminalPane";
 import { TitleBar } from "./panes/TitleBar";
 import type { TabDescriptor } from "./panes/TitleBar";
@@ -36,6 +41,19 @@ interface TabState {
   altScreen: boolean;
 }
 
+interface TabsState {
+  tabs: TabState[];
+  activeId: string;
+}
+
+type TabsAction =
+  | { type: "add" }
+  | { type: "close"; id: string }
+  | { type: "switch"; id: string }
+  | { type: "switch_by_index"; index: number }
+  | { type: "cycle"; direction: 1 | -1 }
+  | { type: "update"; id: string; updates: Partial<TabState> };
+
 function newTabId(): string {
   return (
     "tab-" + Math.random().toString(36).slice(2, 8) + "-" + Math.random().toString(36).slice(2, 8)
@@ -46,101 +64,141 @@ function makeTab(): TabState {
   return { id: newTabId(), label: "shax", cwd: null, branch: null, altScreen: false };
 }
 
-export default function App(): React.ReactElement {
-  const [tabs, setTabs] = useState<TabState[]>(() => [makeTab()]);
-  const [activeId, setActiveId] = useState<string>(() => tabs[0]?.id ?? "");
+function tabsReducer(state: TabsState, action: TabsAction): TabsState {
+  switch (action.type) {
+    case "add": {
+      const fresh = makeTab();
+      return { tabs: [...state.tabs, fresh], activeId: fresh.id };
+    }
+    case "close": {
+      const idx = state.tabs.findIndex((t) => t.id === action.id);
+      if (idx === -1) return state;
+      if (state.tabs.length === 1) {
+        // Last tab → replace with a fresh shell so the window is never
+        // paneless. The new tab becomes the active one in the same
+        // atomic transition.
+        const fresh = makeTab();
+        return { tabs: [fresh], activeId: fresh.id };
+      }
+      const tabs = state.tabs.filter((t) => t.id !== action.id);
+      let activeId = state.activeId;
+      if (action.id === state.activeId) {
+        // Closed the active tab: hand focus to the previous neighbour
+        // (or to index 0 when closing the first tab).
+        const neighborIdx = idx === 0 ? 0 : idx - 1;
+        activeId = tabs[neighborIdx]?.id ?? activeId;
+      }
+      return { tabs, activeId };
+    }
+    case "switch": {
+      if (action.id === state.activeId) return state;
+      if (state.tabs.some((t) => t.id === action.id)) {
+        return { ...state, activeId: action.id };
+      }
+      return state;
+    }
+    case "switch_by_index": {
+      const target = state.tabs[action.index];
+      if (target === undefined || target.id === state.activeId) return state;
+      return { ...state, activeId: target.id };
+    }
+    case "cycle": {
+      const i = state.tabs.findIndex((t) => t.id === state.activeId);
+      if (i === -1 || state.tabs.length === 0) return state;
+      const nextIdx = (i + action.direction + state.tabs.length) % state.tabs.length;
+      const next = state.tabs[nextIdx];
+      if (next === undefined || next.id === state.activeId) return state;
+      return { ...state, activeId: next.id };
+    }
+    case "update": {
+      const idx = state.tabs.findIndex((t) => t.id === action.id);
+      if (idx === -1) return state;
+      const current = state.tabs[idx];
+      if (current === undefined) return state;
+      // Skip the update if nothing actually changed — avoids re-render
+      // churn from inline-arrow callbacks that fire the same values on
+      // every parent render.
+      let same = true;
+      for (const key of Object.keys(action.updates) as (keyof TabState)[]) {
+        if (current[key] !== action.updates[key]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return state;
+      const tabs = state.tabs.slice();
+      tabs[idx] = { ...current, ...action.updates };
+      return { ...state, tabs };
+    }
+  }
+}
 
-  const updateTab = useCallback((id: string, updates: Partial<TabState>): void => {
-    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
-  }, []);
+function initialState(): TabsState {
+  const fresh = makeTab();
+  return { tabs: [fresh], activeId: fresh.id };
+}
+
+export default function App(): React.ReactElement {
+  const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
+  const { tabs, activeId } = state;
+
+  // Keep a ref to the current activeId so the keydown handler effect
+  // doesn't need to re-register on every switch.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
 
   const handleNew = useCallback((): void => {
-    const fresh = makeTab();
-    setTabs((prev) => [...prev, fresh]);
-    setActiveId(fresh.id);
+    dispatch({ type: "add" });
   }, []);
 
-  const handleClose = useCallback(
-    (id: string): void => {
-      setTabs((prev) => {
-        if (prev.length === 0) return prev;
-        const index = prev.findIndex((t) => t.id === id);
-        if (index === -1) return prev;
-        // Removing the last tab would leave the window paneless — open a
-        // fresh shell instead so there is always somewhere to type.
-        if (prev.length === 1) {
-          const fresh = makeTab();
-          setActiveId(fresh.id);
-          return [fresh];
-        }
-        const next = prev.filter((t) => t.id !== id);
-        // If we just closed the active tab, hand focus to a sensible
-        // neighbour (the previous one, or the new index-0 if we closed
-        // the first tab).
-        if (id === activeId) {
-          const neighborIndex = index === 0 ? 0 : index - 1;
-          const neighbor = next[neighborIndex];
-          if (neighbor !== undefined) setActiveId(neighbor.id);
-        }
-        return next;
-      });
-    },
-    [activeId],
-  );
+  const handleClose = useCallback((id: string): void => {
+    dispatch({ type: "close", id });
+  }, []);
 
-  // Keyboard shortcuts. Listening on the document so the bindings work
-  // regardless of which surface within the app has focus (xterm in
-  // alt-screen, the prompt strip in resting state, a future search
-  // overlay later, etc.).
+  const handleSwitch = useCallback((id: string): void => {
+    dispatch({ type: "switch", id });
+  }, []);
+
+  const updateTab = useCallback((id: string, updates: Partial<TabState>): void => {
+    dispatch({ type: "update", id, updates });
+  }, []);
+
+  // Keyboard shortcuts. Listening on the window so the bindings work
+  // regardless of which surface within the app has focus (xterm under
+  // alt-screen, the prompt strip in resting state).
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
-      // ⌘T — new tab.
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
-        handleNew();
+        dispatch({ type: "add" });
         return;
       }
-      // ⌘W — close current tab.
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
-        handleClose(activeId);
+        dispatch({ type: "close", id: activeIdRef.current });
         return;
       }
-      // ⌘1..⌘9 — switch to tab N by position.
       if (e.key >= "1" && e.key <= "9") {
-        const idx = e.key.charCodeAt(0) - "1".charCodeAt(0);
-        const target = tabs[idx];
-        if (target !== undefined) {
-          e.preventDefault();
-          setActiveId(target.id);
-        }
+        e.preventDefault();
+        dispatch({ type: "switch_by_index", index: e.key.charCodeAt(0) - "1".charCodeAt(0) });
         return;
       }
-      // ⌘⇧] — next tab. ⌘⇧[ — previous tab.
       if (e.shiftKey && (e.key === "]" || e.key === "}")) {
         e.preventDefault();
-        const i = tabs.findIndex((t) => t.id === activeId);
-        if (i !== -1) {
-          const next = tabs[(i + 1) % tabs.length];
-          if (next !== undefined) setActiveId(next.id);
-        }
+        dispatch({ type: "cycle", direction: 1 });
         return;
       }
       if (e.shiftKey && (e.key === "[" || e.key === "{")) {
         e.preventDefault();
-        const i = tabs.findIndex((t) => t.id === activeId);
-        if (i !== -1) {
-          const prev = tabs[(i - 1 + tabs.length) % tabs.length];
-          if (prev !== undefined) setActiveId(prev.id);
-        }
+        dispatch({ type: "cycle", direction: -1 });
         return;
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tabs, activeId, handleNew, handleClose]);
+  }, []);
 
   const titleTabs: TabDescriptor[] = useMemo(
     () => tabs.map((t) => ({ id: t.id, label: t.label, cwd: t.cwd })),
@@ -164,7 +222,7 @@ export default function App(): React.ReactElement {
       <TitleBar
         tabs={titleTabs}
         activeId={activeId}
-        onSwitch={setActiveId}
+        onSwitch={handleSwitch}
         onNew={handleNew}
         onClose={handleClose}
       />
