@@ -40,6 +40,20 @@
 
   /* Typography */
   --font-ui: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /*
+   * Monospace stack: prefer the Nerd Font build of JetBrains Mono so
+   * users with patched-glyph prompts (devicons, powerline arrows, the
+   * autosuggest chevron, etc.) see them rendered correctly. The browser
+   * picks the first family that has each glyph, so fall back to plain
+   * JetBrains Mono and finally the system mono stack when the Nerd Font
+   * isn't installed.
+   *
+   * Naming covers the variants installed by Homebrew
+   * (`font-jetbrains-mono-nerd-font`), the official Nerd Fonts release
+   * archives, and the no-ligatures variant.
+   */
   --font-mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font Mono",
+    "JetBrainsMonoNL Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, monospace;
 }

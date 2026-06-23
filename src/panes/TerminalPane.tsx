@@ -87,9 +87,18 @@ export function TerminalPane({
     const container = containerRef.current;
     if (container === null) return;
 
+    // Read the monospace font stack from the global theme so xterm's
+    // canvas renderer picks up the same Nerd-Font-first list used by
+    // the rest of the UI (prompt strip, block list). Falls back to a
+    // safe default if the CSS variable is missing for any reason.
+    const fontMono =
+      typeof window !== "undefined"
+        ? getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim()
+        : "";
     const terminal = new Terminal({
       // Let xterm fill the container; FitAddon will set the actual dimensions.
       allowProposedApi: true,
+      fontFamily: fontMono !== "" ? fontMono : "ui-monospace, monospace",
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
