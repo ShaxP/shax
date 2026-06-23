@@ -302,7 +302,16 @@ export function TerminalPane({
             position: "absolute",
             inset: 0,
             background: "var(--pane)",
-            visibility: altScreen ? "visible" : "hidden",
+            // Stack instead of visibility-toggle. The App-level tab
+            // wrapper uses `visibility: hidden` to hide background tabs;
+            // if we also used `visibility: visible` here it would
+            // override the parent's hide (visibility:visible on a child
+            // overrides visibility:hidden on the parent) and the
+            // alt-screen xterm of a background tab would render on top
+            // of the active tab. Z-index keeps xterm on top of the
+            // block list only when its own tab is in alt-screen mode,
+            // and the App's visibility:hidden remains effective for
+            // every layer inside an inactive tab.
             pointerEvents: altScreen ? "auto" : "none",
             zIndex: altScreen ? 2 : 0,
           }}
