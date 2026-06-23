@@ -1,44 +1,62 @@
 /**
  * App — top-level shell that owns the chrome (TitleBar, Statusline) and
- * orchestrates the open tab list.
+ * orchestrates the open tab list, plus each tab's pane layout tree
+ * (M2 slice 2.2a).
  *
- * Each tab carries one `TerminalPane`. Tabs that aren't the active one
- * stay mounted in a hidden wrapper so their PTYs keep running and their
- * block / prompt state stays in sync with the shell. Per-tab metadata
- * (cwd, branch, alt-screen) bubbles up from the panes via callbacks so
- * the TitleBar tab pills and the Statusline mirror the live state.
+ * Each tab carries:
+ *   - `layout`        — the pane tree (Leaf / Split, see `panes/layout.ts`)
+ *   - `focusedPaneId` — which pane in the tree currently owns focus
+ *   - `panes`         — per-pane cwd / branch / alt-screen, keyed by paneId
+ *
+ * Background tabs (and all panes inside them) stay mounted in a hidden
+ * wrapper so their PTYs keep running and their state stays in sync with
+ * the shells. The TitleBar tab pills show the focused pane's cwd for
+ * each tab. The Statusline mirrors the active tab's focused pane.
  *
  * Keyboard shortcuts:
  *   ⌘T              → new tab
- *   ⌘W              → close the active tab (or replace it with a fresh
- *                     one if it's the last tab — so the window never
- *                     ends up paneless)
- *   ⌘1 .. ⌘9        → jump to tab N by position (1-indexed)
- *   ⌘⇧]  / ⌘⇧[      → next / previous tab
+ *   ⌘W              → close the focused pane (cascades to closing the
+ *                     tab when it's the only pane, and to replacing the
+ *                     last tab with a fresh shell so the window is never
+ *                     empty)
+ *   ⌘1 .. ⌘9        → jump to tab N by position
+ *   ⌘⇧] / ⌘⇧[       → next / previous tab
+ *   ⌘D              → split the focused pane side-by-side (new pane right)
+ *   ⌘⇧D             → split the focused pane stacked (new pane below)
+ *   ⌘] / ⌘[         → cycle focus across panes within the active tab
+ *                     (⌘ is Cmd on macOS, Ctrl elsewhere)
  *
- * The `⌘` modifier here means Cmd on macOS and Ctrl elsewhere; we listen
- * for either `metaKey` or `ctrlKey` so the same shortcuts work on Linux
- * and Windows builds without a platform-aware keymap.
- *
- * All tab transitions live in a single pure reducer. That way the tabs
- * array and the active id update atomically — no setState-inside-setState
- * impurity that StrictMode's double-render would otherwise expose as the
- * "active id no longer matches any tab after the second ⌘W" bug.
+ * All tab transitions live in a single pure reducer.
  */
 
 import "./App.css";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { TerminalPane } from "./panes/TerminalPane";
 import { TitleBar } from "./panes/TitleBar";
 import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
+import { LayoutRender } from "./panes/LayoutRender";
+import type { LayoutNode, PaneId, SplitDirection } from "./panes/layout";
+import {
+  cycleFocus,
+  leaf,
+  leafIds,
+  neighborAfterClose,
+  removeLeaf,
+  splitLeaf,
+} from "./panes/layout";
+
+interface PaneMeta {
+  cwd: string | null;
+  branch: string | null;
+  altScreen: boolean;
+}
 
 interface TabState {
   id: string;
   label: string;
-  cwd: string | null;
-  branch: string | null;
-  altScreen: boolean;
+  layout: LayoutNode;
+  focusedPaneId: PaneId;
+  panes: Record<PaneId, PaneMeta>;
 }
 
 interface TabsState {
@@ -47,62 +65,135 @@ interface TabsState {
 }
 
 type TabsAction =
-  | { type: "add" }
-  | { type: "close"; id: string }
-  | { type: "switch"; id: string }
-  | { type: "switch_by_index"; index: number }
-  | { type: "cycle"; direction: 1 | -1 }
-  | { type: "update"; id: string; updates: Partial<TabState> };
+  | { type: "add_tab" }
+  | { type: "close_focused_pane"; tabId: string }
+  | { type: "close_tab"; id: string }
+  | { type: "switch_tab"; id: string }
+  | { type: "switch_tab_by_index"; index: number }
+  | { type: "cycle_tab"; direction: 1 | -1 }
+  | { type: "split"; tabId: string; direction: SplitDirection }
+  | { type: "focus_pane"; tabId: string; paneId: PaneId }
+  | { type: "cycle_focus"; tabId: string; direction: 1 | -1 }
+  | {
+      type: "update_meta";
+      tabId: string;
+      paneId: PaneId;
+      cwd: string | null;
+      branch: string | null;
+    }
+  | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean };
 
-function newTabId(): string {
-  return (
-    "tab-" + Math.random().toString(36).slice(2, 8) + "-" + Math.random().toString(36).slice(2, 8)
-  );
+function freshId(prefix: string): string {
+  return prefix + Math.random().toString(36).slice(2, 10);
+}
+
+function freshPaneId(): PaneId {
+  return freshId("pane-");
+}
+
+function freshTabId(): string {
+  return freshId("tab-");
+}
+
+function freshPaneMeta(): PaneMeta {
+  return { cwd: null, branch: null, altScreen: false };
 }
 
 function makeTab(): TabState {
-  return { id: newTabId(), label: "shax", cwd: null, branch: null, altScreen: false };
+  const paneId = freshPaneId();
+  return {
+    id: freshTabId(),
+    label: "shax",
+    layout: leaf(paneId),
+    focusedPaneId: paneId,
+    panes: { [paneId]: freshPaneMeta() },
+  };
+}
+
+function replaceTab(state: TabsState, id: string, mapper: (t: TabState) => TabState): TabsState {
+  let changed = false;
+  const tabs = state.tabs.map((t) => {
+    if (t.id !== id) return t;
+    const next = mapper(t);
+    if (next !== t) changed = true;
+    return next;
+  });
+  return changed ? { ...state, tabs } : state;
+}
+
+function closeTab(state: TabsState, id: string): TabsState {
+  const idx = state.tabs.findIndex((t) => t.id === id);
+  if (idx === -1) return state;
+  if (state.tabs.length === 1) {
+    // Window never empty: fresh single tab.
+    return { tabs: [makeTab()], activeId: "" }; // activeId filled in below
+  }
+  const tabs = state.tabs.filter((t) => t.id !== id);
+  let activeId = state.activeId;
+  if (id === state.activeId) {
+    const neighborIdx = idx === 0 ? 0 : idx - 1;
+    activeId = tabs[neighborIdx]?.id ?? activeId;
+  }
+  return { tabs, activeId };
 }
 
 function tabsReducer(state: TabsState, action: TabsAction): TabsState {
   switch (action.type) {
-    case "add": {
+    case "add_tab": {
       const fresh = makeTab();
       return { tabs: [...state.tabs, fresh], activeId: fresh.id };
     }
-    case "close": {
-      const idx = state.tabs.findIndex((t) => t.id === action.id);
-      if (idx === -1) return state;
-      if (state.tabs.length === 1) {
-        // Last tab → replace with a fresh shell so the window is never
-        // paneless. The new tab becomes the active one in the same
-        // atomic transition.
-        const fresh = makeTab();
-        return { tabs: [fresh], activeId: fresh.id };
+
+    case "close_tab": {
+      const next = closeTab(state, action.id);
+      // The single-tab branch leaves activeId === "" as a sentinel for us
+      // to fill in here with the fresh tab's id.
+      if (next.activeId === "" && next.tabs[0] !== undefined) {
+        return { ...next, activeId: next.tabs[0].id };
       }
-      const tabs = state.tabs.filter((t) => t.id !== action.id);
-      let activeId = state.activeId;
-      if (action.id === state.activeId) {
-        // Closed the active tab: hand focus to the previous neighbour
-        // (or to index 0 when closing the first tab).
-        const neighborIdx = idx === 0 ? 0 : idx - 1;
-        activeId = tabs[neighborIdx]?.id ?? activeId;
-      }
-      return { tabs, activeId };
+      return next;
     }
-    case "switch": {
+
+    case "close_focused_pane": {
+      const tab = state.tabs.find((t) => t.id === action.tabId);
+      if (tab === undefined) return state;
+      // Single-pane tab → fall through to close_tab semantics.
+      if (tab.layout.kind === "leaf") {
+        return tabsReducer(state, { type: "close_tab", id: tab.id });
+      }
+      const nextLayout = removeLeaf(tab.layout, tab.focusedPaneId);
+      if (nextLayout === null) {
+        // Should be unreachable (kind !== 'leaf' guarantees > 1 leaf).
+        return tabsReducer(state, { type: "close_tab", id: tab.id });
+      }
+      const nextFocus = neighborAfterClose(tab.layout, tab.focusedPaneId);
+      if (nextFocus === null) return state;
+      const { [tab.focusedPaneId]: _gone, ...remainingPanes } = tab.panes;
+      void _gone;
+      const nextTab: TabState = {
+        ...tab,
+        layout: nextLayout,
+        focusedPaneId: nextFocus,
+        panes: remainingPanes,
+      };
+      return { ...state, tabs: state.tabs.map((t) => (t.id === tab.id ? nextTab : t)) };
+    }
+
+    case "switch_tab": {
       if (action.id === state.activeId) return state;
       if (state.tabs.some((t) => t.id === action.id)) {
         return { ...state, activeId: action.id };
       }
       return state;
     }
-    case "switch_by_index": {
+
+    case "switch_tab_by_index": {
       const target = state.tabs[action.index];
       if (target === undefined || target.id === state.activeId) return state;
       return { ...state, activeId: target.id };
     }
-    case "cycle": {
+
+    case "cycle_tab": {
       const i = state.tabs.findIndex((t) => t.id === state.activeId);
       if (i === -1 || state.tabs.length === 0) return state;
       const nextIdx = (i + action.direction + state.tabs.length) % state.tabs.length;
@@ -110,89 +201,150 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       if (next === undefined || next.id === state.activeId) return state;
       return { ...state, activeId: next.id };
     }
-    case "update": {
-      const idx = state.tabs.findIndex((t) => t.id === action.id);
-      if (idx === -1) return state;
-      const current = state.tabs[idx];
-      if (current === undefined) return state;
-      // Skip the update if nothing actually changed — avoids re-render
-      // churn from inline-arrow callbacks that fire the same values on
-      // every parent render.
-      let same = true;
-      for (const key of Object.keys(action.updates) as (keyof TabState)[]) {
-        if (current[key] !== action.updates[key]) {
-          same = false;
-          break;
-        }
-      }
-      if (same) return state;
-      const tabs = state.tabs.slice();
-      tabs[idx] = { ...current, ...action.updates };
-      return { ...state, tabs };
+
+    case "split": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const newPaneId = freshPaneId();
+        return {
+          ...tab,
+          layout: splitLeaf(tab.layout, tab.focusedPaneId, newPaneId, action.direction),
+          focusedPaneId: newPaneId,
+          panes: { ...tab.panes, [newPaneId]: freshPaneMeta() },
+        };
+      });
+    }
+
+    case "focus_pane": {
+      return replaceTab(state, action.tabId, (tab) => {
+        if (tab.focusedPaneId === action.paneId) return tab;
+        // Defensive: only allow focusing a pane that's actually in the tree.
+        if (!leafIds(tab.layout).includes(action.paneId)) return tab;
+        return { ...tab, focusedPaneId: action.paneId };
+      });
+    }
+
+    case "cycle_focus": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const next = cycleFocus(tab.layout, tab.focusedPaneId, action.direction);
+        if (next === tab.focusedPaneId) return tab;
+        return { ...tab, focusedPaneId: next };
+      });
+    }
+
+    case "update_meta": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const current = tab.panes[action.paneId];
+        if (current === undefined) return tab;
+        if (current.cwd === action.cwd && current.branch === action.branch) return tab;
+        return {
+          ...tab,
+          panes: {
+            ...tab.panes,
+            [action.paneId]: { ...current, cwd: action.cwd, branch: action.branch },
+          },
+        };
+      });
+    }
+
+    case "update_alt_screen": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const current = tab.panes[action.paneId];
+        if (current === undefined) return tab;
+        if (current.altScreen === action.altScreen) return tab;
+        return {
+          ...tab,
+          panes: { ...tab.panes, [action.paneId]: { ...current, altScreen: action.altScreen } },
+        };
+      });
     }
   }
 }
 
 function initialState(): TabsState {
-  const fresh = makeTab();
-  return { tabs: [fresh], activeId: fresh.id };
+  const first = makeTab();
+  return { tabs: [first], activeId: first.id };
 }
 
 export default function App(): React.ReactElement {
   const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
   const { tabs, activeId } = state;
 
-  // Keep a ref to the current activeId so the keydown handler effect
-  // doesn't need to re-register on every switch.
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
   const handleNew = useCallback((): void => {
-    dispatch({ type: "add" });
+    dispatch({ type: "add_tab" });
   }, []);
 
-  const handleClose = useCallback((id: string): void => {
-    dispatch({ type: "close", id });
+  const handleCloseTab = useCallback((id: string): void => {
+    dispatch({ type: "close_tab", id });
   }, []);
 
   const handleSwitch = useCallback((id: string): void => {
-    dispatch({ type: "switch", id });
+    dispatch({ type: "switch_tab", id });
   }, []);
 
-  const updateTab = useCallback((id: string, updates: Partial<TabState>): void => {
-    dispatch({ type: "update", id, updates });
+  const handlePaneFocus = useCallback((tabId: string, paneId: PaneId): void => {
+    dispatch({ type: "focus_pane", tabId, paneId });
   }, []);
+
+  const handlePaneMeta = useCallback(
+    (tabId: string, paneId: PaneId, cwd: string | null, branch: string | null): void => {
+      dispatch({ type: "update_meta", tabId, paneId, cwd, branch });
+    },
+    [],
+  );
+
+  const handlePaneAltScreen = useCallback(
+    (tabId: string, paneId: PaneId, altScreen: boolean): void => {
+      dispatch({ type: "update_alt_screen", tabId, paneId, altScreen });
+    },
+    [],
+  );
 
   // Keyboard shortcuts. Listening on the window so the bindings work
-  // regardless of which surface within the app has focus (xterm under
-  // alt-screen, the prompt strip in resting state).
+  // regardless of which surface currently owns focus.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
-        dispatch({ type: "add" });
+        dispatch({ type: "add_tab" });
         return;
       }
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
-        dispatch({ type: "close", id: activeIdRef.current });
+        dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
+        return;
+      }
+      if (e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        const direction: SplitDirection = e.shiftKey ? "column" : "row";
+        dispatch({ type: "split", tabId: activeIdRef.current, direction });
         return;
       }
       if (e.key >= "1" && e.key <= "9") {
         e.preventDefault();
-        dispatch({ type: "switch_by_index", index: e.key.charCodeAt(0) - "1".charCodeAt(0) });
+        dispatch({ type: "switch_tab_by_index", index: e.key.charCodeAt(0) - "1".charCodeAt(0) });
         return;
       }
-      if (e.shiftKey && (e.key === "]" || e.key === "}")) {
+      if (e.key === "]" || e.key === "}") {
         e.preventDefault();
-        dispatch({ type: "cycle", direction: 1 });
+        if (e.shiftKey) {
+          dispatch({ type: "cycle_tab", direction: 1 });
+        } else {
+          dispatch({ type: "cycle_focus", tabId: activeIdRef.current, direction: 1 });
+        }
         return;
       }
-      if (e.shiftKey && (e.key === "[" || e.key === "{")) {
+      if (e.key === "[" || e.key === "{") {
         e.preventDefault();
-        dispatch({ type: "cycle", direction: -1 });
+        if (e.shiftKey) {
+          dispatch({ type: "cycle_tab", direction: -1 });
+        } else {
+          dispatch({ type: "cycle_focus", tabId: activeIdRef.current, direction: -1 });
+        }
         return;
       }
     };
@@ -201,11 +353,17 @@ export default function App(): React.ReactElement {
   }, []);
 
   const titleTabs: TabDescriptor[] = useMemo(
-    () => tabs.map((t) => ({ id: t.id, label: t.label, cwd: t.cwd })),
+    () =>
+      tabs.map((t) => ({
+        id: t.id,
+        label: t.label,
+        cwd: t.panes[t.focusedPaneId]?.cwd ?? null,
+      })),
     [tabs],
   );
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
+  const activeFocused = activeTab !== null ? activeTab.panes[activeTab.focusedPaneId] : null;
 
   return (
     <div
@@ -224,37 +382,44 @@ export default function App(): React.ReactElement {
         activeId={activeId}
         onSwitch={handleSwitch}
         onNew={handleNew}
-        onClose={handleClose}
+        onClose={handleCloseTab}
       />
       <main
         data-testid="tab-host"
         style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--bg)" }}
       >
         {tabs.map((tab) => {
-          const isActive = tab.id === activeId;
+          const isActiveTab = tab.id === activeId;
           return (
             <div
               key={tab.id}
               data-testid="tab-pane-wrapper"
               data-tab-id={tab.id}
-              data-active={isActive ? "true" : "false"}
+              data-active={isActiveTab ? "true" : "false"}
               style={{
                 position: "absolute",
                 inset: 0,
-                visibility: isActive ? "visible" : "hidden",
-                pointerEvents: isActive ? "auto" : "none",
+                visibility: isActiveTab ? "visible" : "hidden",
+                pointerEvents: isActiveTab ? "auto" : "none",
+                display: "flex",
+                flexDirection: "column",
               }}
             >
-              <TerminalPane
-                active={isActive}
-                onMetaChange={(cwd, branch) => updateTab(tab.id, { cwd, branch })}
-                onAltScreenChange={(altScreen) => updateTab(tab.id, { altScreen })}
+              <LayoutRender
+                node={tab.layout}
+                focusedPaneId={tab.focusedPaneId}
+                tabActive={isActiveTab}
+                onPaneFocus={(paneId) => handlePaneFocus(tab.id, paneId)}
+                onPaneMeta={(paneId, cwd, branch) => handlePaneMeta(tab.id, paneId, cwd, branch)}
+                onPaneAltScreen={(paneId, altScreen) =>
+                  handlePaneAltScreen(tab.id, paneId, altScreen)
+                }
               />
             </div>
           );
         })}
       </main>
-      <Statusline cwd={activeTab?.cwd ?? null} branch={activeTab?.branch ?? null} />
+      <Statusline cwd={activeFocused?.cwd ?? null} branch={activeFocused?.branch ?? null} />
     </div>
   );
 }
