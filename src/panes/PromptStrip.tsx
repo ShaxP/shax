@@ -158,14 +158,18 @@ function PromptStripInner(
       </span>
       <span style={PROMPT_GLYPH}>❯</span>
       <span style={LINE_AREA} data-testid="prompt-line">
+        {/*
+         * Cursor is always rendered so the user has a visible insertion
+         * point from the moment the strip mounts. In the empty state it
+         * sits at column 0 with the placeholder hint trailing after.
+         */}
+        <span data-testid="prompt-line-text">{before}</span>
+        <span style={CURSOR_BAR} data-testid="prompt-cursor" />
         {hasTyping ? (
-          <>
-            <span data-testid="prompt-line-text">{before}</span>
-            <span style={CURSOR_BAR} data-testid="prompt-cursor" />
-            <span>{after}</span>
-          </>
+          <span>{after}</span>
         ) : (
           <span style={LINE_TEXT_PLACEHOLDER}>
+            {" "}
             type a command, or <span style={{ fontFamily: "var(--font-mono)" }}>?</span> to ask Shax
           </span>
         )}

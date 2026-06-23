@@ -24,10 +24,12 @@ describe("PromptStrip / layout", () => {
     expect(screen.getByTestId("prompt-branch")).toHaveTextContent("—");
   });
 
-  it("shows the placeholder hint when the line is empty", () => {
+  it("shows the placeholder hint AND a visible cursor when the line is empty", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={{ text: "", cursor: 0 }} onInput={noop} />);
     expect(screen.getByTestId("prompt-line")).toHaveTextContent("type a command");
-    expect(screen.queryByTestId("prompt-cursor")).toBeNull();
+    // The cursor must be visible from the start so the user sees a clear
+    // insertion point even before typing.
+    expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
   });
 
   it("renders the typed line with the cursor at the end by default", () => {
