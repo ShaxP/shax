@@ -425,6 +425,12 @@ function BlockRowInner({
               wordBreak: "break-word",
               fontSize: 12,
               color: "var(--fg-dim)",
+              // The User-Agent stylesheet sets `<pre>` to a generic
+              // `monospace`, which overrides the Nerd-Font-first stack
+              // inherited from BlockRow. Force inheritance so Nerd Font
+              // glyphs (eza icons, devicons, powerline arrows, …) render
+              // the same as they do in the rest of the UI.
+              fontFamily: "inherit",
             }}
           >
             {outputText ?? "…"}
