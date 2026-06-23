@@ -45,6 +45,7 @@ import {
   setRatio,
   splitLeaf,
 } from "./panes/layout";
+import { appStateLoad, appStateSave } from "./lib/ipc";
 
 interface PaneMeta {
   cwd: string | null;
@@ -83,7 +84,8 @@ type TabsAction =
       branch: string | null;
     }
   | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean }
-  | { type: "set_ratio"; tabId: string; path: SplitPath; ratio: number };
+  | { type: "set_ratio"; tabId: string; path: SplitPath; ratio: number }
+  | { type: "hydrate"; state: TabsState };
 
 function freshId(prefix: string): string {
   return prefix + Math.random().toString(36).slice(2, 10);
@@ -267,12 +269,107 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         return { ...tab, layout };
       });
     }
+
+    case "hydrate":
+      // Replace the entire tab state with a previously-persisted snapshot.
+      // Used once on mount when the backend reports a saved app-state JSON.
+      return action.state;
   }
 }
 
 function initialState(): TabsState {
   const first = makeTab();
   return { tabs: [first], activeId: first.id };
+}
+
+// ── Persistence ─────────────────────────────────────────────────────────────
+//
+// The shape we write to disk is intentionally smaller than `TabsState`:
+// `altScreen` is transient (it'll be re-derived from the next OSC 1049
+// the shell emits), so we drop it. Layout, focus, cwd, and branch are
+// kept so the restored chrome feels continuous.
+
+interface PersistedPane {
+  cwd: string | null;
+  branch: string | null;
+}
+
+interface PersistedTab {
+  id: string;
+  label: string;
+  layout: LayoutNode;
+  focusedPaneId: PaneId;
+  panes: Record<PaneId, PersistedPane>;
+}
+
+interface PersistedAppState {
+  tabs: PersistedTab[];
+  activeId: string;
+}
+
+function serialiseState(state: TabsState): string {
+  const persistable: PersistedAppState = {
+    tabs: state.tabs.map((t) => ({
+      id: t.id,
+      label: t.label,
+      layout: t.layout,
+      focusedPaneId: t.focusedPaneId,
+      panes: Object.fromEntries(
+        Object.entries(t.panes).map(([id, meta]) => [id, { cwd: meta.cwd, branch: meta.branch }]),
+      ),
+    })),
+    activeId: state.activeId,
+  };
+  return JSON.stringify(persistable);
+}
+
+function hydrateFromJson(json: string): TabsState | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const candidate = parsed as Partial<PersistedAppState>;
+  if (!Array.isArray(candidate.tabs) || candidate.tabs.length === 0) return null;
+  const tabs: TabState[] = [];
+  for (const t of candidate.tabs) {
+    if (
+      typeof t !== "object" ||
+      t === null ||
+      typeof t.id !== "string" ||
+      typeof t.focusedPaneId !== "string" ||
+      typeof t.label !== "string" ||
+      typeof t.layout !== "object" ||
+      t.layout === null ||
+      typeof t.panes !== "object" ||
+      t.panes === null
+    ) {
+      return null;
+    }
+    const panes: Record<PaneId, { cwd: string | null; branch: string | null; altScreen: boolean }> =
+      {};
+    for (const [paneId, meta] of Object.entries(t.panes)) {
+      panes[paneId] = {
+        cwd: meta?.cwd ?? null,
+        branch: meta?.branch ?? null,
+        altScreen: false,
+      };
+    }
+    tabs.push({
+      id: t.id,
+      label: t.label,
+      layout: t.layout,
+      focusedPaneId: t.focusedPaneId,
+      panes,
+    });
+  }
+  const activeId =
+    typeof candidate.activeId === "string" && tabs.some((t) => t.id === candidate.activeId)
+      ? candidate.activeId
+      : (tabs[0]?.id ?? "");
+  return { tabs, activeId };
 }
 
 export default function App(): React.ReactElement {
@@ -315,6 +412,37 @@ export default function App(): React.ReactElement {
     },
     [],
   );
+
+  // Hydrate the tab state from the persisted snapshot on first mount.
+  // Outside a Tauri context (jsdom tests / browser preview) `appStateLoad`
+  // returns null synchronously-after-await and the initial fresh tab from
+  // `initialState()` stays in place; tests don't need to know this happened.
+  // Inside Tauri, a saved layout fires a `hydrate` dispatch — the throwaway
+  // tab created by `initialState` is unmounted (its PTY killed by the
+  // existing spawn race-guard in TerminalPane) before any user input lands.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    void appStateLoad().then((json) => {
+      hydratedRef.current = true;
+      if (json === null) return;
+      const restored = hydrateFromJson(json);
+      if (restored === null) return;
+      dispatch({ type: "hydrate", state: restored });
+    });
+  }, []);
+
+  // Persist the tab/layout snapshot on change, debounced so a divider drag
+  // doesn't hammer SQLite once per frame. We only save *after* the initial
+  // hydrate has resolved so we never overwrite a real saved layout with the
+  // throwaway initial-state default before we've had a chance to load.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (state.tabs.length === 0) return;
+    const handle = setTimeout(() => {
+      void appStateSave(serialiseState(state));
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [state]);
 
   // Keyboard shortcuts. Listening on the window so the bindings work
   // regardless of which surface currently owns focus.

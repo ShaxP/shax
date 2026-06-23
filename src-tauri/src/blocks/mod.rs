@@ -84,6 +84,11 @@ pub struct BlockSummary {
     pub exit_code: Option<i32>,
     pub duration_ms: Option<u64>,
     pub aborted: bool,
+    /// True when the alternate screen was active at any point during this
+    /// block — i.e. the user ran vim / htop / less / ssh / a REPL. The
+    /// frontend hides the output preview for these blocks because the
+    /// captured bytes are cursor / grid manipulation, not flow text.
+    pub interactive: bool,
 }
 
 // ── Full record (in-memory) ────────────────────────────────────────────────────
@@ -101,6 +106,8 @@ struct BlockRecord {
     ended_at_ms: Option<u64>,
     exit_code: Option<i32>,
     aborted: bool,
+    /// True if the alt-screen was active at any point during this block.
+    interactive: bool,
     /// Raw bytes captured between OSC 133 C and OSC 133 D.
     output: Vec<u8>,
 }
@@ -120,6 +127,7 @@ impl BlockRecord {
             exit_code: self.exit_code,
             duration_ms,
             aborted: self.aborted,
+            interactive: self.interactive,
         }
     }
 }
@@ -136,6 +144,10 @@ enum BlockState {
         cwd: Option<String>,
         git_branch: Option<String>,
         started_at_ms: u64,
+        /// Latches to true the first time the alt-screen activates during
+        /// this block. Sticks once set, so a nested vim-inside-ssh-inside-
+        /// vim leaves it true through every toggle.
+        interactive: bool,
     },
 }
 
@@ -206,6 +218,16 @@ impl BlockMachine {
                 // A full-screen program took over — anything it prints belongs
                 // to xterm, not the prompt strip.
                 self.at_input_prompt = false;
+                // Latch the running block as interactive so its captured
+                // output is hidden in the UI (and on the next reopen via
+                // the persisted flag).
+                if let BlockState::Running {
+                    ref mut interactive,
+                    ..
+                } = self.state
+                {
+                    *interactive = true;
+                }
                 vec![PtyEvent::AltScreenChanged { active: true }]
             }
             VtEvent::AltScreenLeft => {
@@ -304,6 +326,7 @@ impl BlockMachine {
             cwd: prev_cwd,
             git_branch: prev_branch,
             started_at_ms,
+            interactive: prev_interactive,
         } = std::mem::replace(&mut self.state, BlockState::Idle)
         {
             let now = now_ms();
@@ -319,6 +342,7 @@ impl BlockMachine {
                 ended_at_ms: Some(now),
                 exit_code: Some(-1),
                 aborted: true,
+                interactive: prev_interactive,
                 output,
             });
             events.push(PtyEvent::BlockCompleted {
@@ -329,6 +353,7 @@ impl BlockMachine {
                 aborted: true,
                 cwd: prev_cwd,
                 git_branch: prev_branch,
+                interactive: prev_interactive,
             });
         }
 
@@ -336,12 +361,17 @@ impl BlockMachine {
         let started_at_ms = now_ms();
         let cwd = self.latest_cwd.clone();
         let git_branch = self.latest_git_branch.clone();
+        // If alt-screen is already up when the new block opens (rare —
+        // would mean a program escaped its previous block but the shell
+        // still emitted a C), pre-arm the flag so we don't miss it.
+        let interactive = self.alt_screen;
         self.state = BlockState::Running {
             id,
             command: command.clone(),
             cwd: cwd.clone(),
             git_branch: git_branch.clone(),
             started_at_ms,
+            interactive,
         };
         self.current_output.clear();
         events.push(PtyEvent::BlockStarted {
@@ -367,6 +397,7 @@ impl BlockMachine {
                 cwd: start_cwd,
                 git_branch: start_branch,
                 started_at_ms,
+                interactive,
             } => {
                 let ended_at_ms = now_ms();
                 let duration_ms = ended_at_ms.saturating_sub(started_at_ms);
@@ -399,6 +430,7 @@ impl BlockMachine {
                     ended_at_ms: Some(ended_at_ms),
                     exit_code: Some(exit_code),
                     aborted: false,
+                    interactive,
                     output,
                 });
                 vec![PtyEvent::BlockCompleted {
@@ -409,6 +441,7 @@ impl BlockMachine {
                     aborted: false,
                     cwd,
                     git_branch,
+                    interactive,
                 }]
             }
             BlockState::Idle => {
@@ -442,6 +475,7 @@ impl BlockMachine {
             cwd,
             git_branch,
             started_at_ms,
+            interactive,
         } = std::mem::replace(&mut self.state, BlockState::Idle)
         {
             let ended_at_ms = now_ms();
@@ -457,6 +491,7 @@ impl BlockMachine {
                 ended_at_ms: Some(ended_at_ms),
                 exit_code: Some(-1),
                 aborted: true,
+                interactive,
                 output,
             });
             return vec![PtyEvent::BlockCompleted {
@@ -467,6 +502,7 @@ impl BlockMachine {
                 aborted: true,
                 cwd,
                 git_branch,
+                interactive,
             }];
         }
         Vec::new()

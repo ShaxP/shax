@@ -50,6 +50,10 @@ pub struct PersistedBlock {
     pub exit_code: Option<i32>,
     pub duration_ms: Option<u64>,
     pub aborted: bool,
+    /// True when the alternate screen was active at any point during this
+    /// block (vim, htop, less, …). Persisted so the UI knows not to show
+    /// the (garbled) output preview after a restart.
+    pub interactive: bool,
     pub output: Vec<u8>,
 }
 
@@ -86,35 +90,77 @@ impl Store {
     }
 
     fn init(conn: &Connection) -> Result<(), StoreError> {
-        // Schema version 1 — slice 4. Future migrations bump user_version and
-        // add ALTER TABLE / CREATE INDEX statements.
+        // Schema is versioned via `PRAGMA user_version`. v1 was the initial
+        // blocks-only schema; v2 adds the per-block `interactive` flag and
+        // the `app_state` table for tab/layout persistence. Older databases
+        // (v0 from before the version was set, or v1) migrate forward on
+        // open via the matching branch below.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS blocks (
-                id            TEXT PRIMARY KEY,        -- UUID
-                pane_id       TEXT NOT NULL,           -- UUID
-                session_id    TEXT,                    -- reserved for M2
-                command       TEXT,                    -- typed line, may be NULL
-                argv          TEXT,                    -- reserved JSON array
-                cwd           TEXT,
-                git_branch    TEXT,
-                host          TEXT,                    -- reserved (local vs ssh)
-                exit_code     INTEGER,
-                started_at_ms INTEGER NOT NULL,
-                ended_at_ms   INTEGER,
-                duration_ms   INTEGER,
-                aborted       INTEGER NOT NULL DEFAULT 0,
-                output        BLOB
-            );
-            CREATE INDEX IF NOT EXISTS idx_blocks_started_at
-                ON blocks(started_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_blocks_pane_started
-                ON blocks(pane_id, started_at_ms);
-            "#,
-        )?;
-        conn.pragma_update(None, "user_version", 1)?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+        if version < 2 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS blocks (
+                    id            TEXT PRIMARY KEY,        -- UUID
+                    pane_id       TEXT NOT NULL,           -- UUID
+                    session_id    TEXT,                    -- reserved for M2
+                    command       TEXT,                    -- typed line, may be NULL
+                    argv          TEXT,                    -- reserved JSON array
+                    cwd           TEXT,
+                    git_branch    TEXT,
+                    host          TEXT,                    -- reserved (local vs ssh)
+                    exit_code     INTEGER,
+                    started_at_ms INTEGER NOT NULL,
+                    ended_at_ms   INTEGER,
+                    duration_ms   INTEGER,
+                    aborted       INTEGER NOT NULL DEFAULT 0,
+                    output        BLOB
+                );
+                CREATE INDEX IF NOT EXISTS idx_blocks_started_at
+                    ON blocks(started_at_ms);
+                CREATE INDEX IF NOT EXISTS idx_blocks_pane_started
+                    ON blocks(pane_id, started_at_ms);
+                CREATE TABLE IF NOT EXISTS app_state (
+                    id            INTEGER PRIMARY KEY CHECK (id = 1),
+                    tabs_json     TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                "#,
+            )?;
+        }
+
+        if version == 1 {
+            // Upgrading a v1 database: the blocks table exists but lacks
+            // the `interactive` column. ADD COLUMN with a default keeps
+            // historical rows valid (they predate alt-screen tracking;
+            // false is the right neutral fallback for vim/htop blocks
+            // captured before this slice).
+            conn.execute_batch(
+                r#"
+                ALTER TABLE blocks
+                    ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0;
+                "#,
+            )?;
+        } else if version < 1 {
+            // Fresh v0 → ensure the column is present on the brand-new
+            // blocks table by re-running the ALTER ourselves; SQLite has
+            // no `IF NOT EXISTS` for columns, so we add it conditionally
+            // by checking for it first.
+            let has_interactive: bool = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('blocks') WHERE name = 'interactive'",
+                [],
+                |row| row.get::<_, i64>(0).map(|n| n > 0),
+            )?;
+            if !has_interactive {
+                conn.execute_batch(
+                    "ALTER TABLE blocks ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+        }
+
+        conn.pragma_update(None, "user_version", 2)?;
         Ok(())
     }
 
@@ -133,8 +179,8 @@ impl Store {
             INSERT INTO blocks
                 (id, pane_id, command, cwd, git_branch,
                  exit_code, started_at_ms, ended_at_ms, duration_ms,
-                 aborted, output)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 aborted, interactive, output)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 command       = excluded.command,
                 cwd           = excluded.cwd,
@@ -143,6 +189,7 @@ impl Store {
                 ended_at_ms   = excluded.ended_at_ms,
                 duration_ms   = excluded.duration_ms,
                 aborted       = excluded.aborted,
+                interactive   = excluded.interactive,
                 output        = excluded.output
             "#,
             params![
@@ -156,8 +203,37 @@ impl Store {
                 block.ended_at_ms.map(|v| v as i64),
                 block.duration_ms.map(|v| v as i64),
                 i32::from(block.aborted),
+                i32::from(block.interactive),
                 truncated,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Load the persisted app-state JSON blob (tabs + layout + focus),
+    /// or `None` if nothing has been saved yet.
+    pub fn load_app_state(&self) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let json = conn
+            .query_row("SELECT tabs_json FROM app_state WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        Ok(json)
+    }
+
+    /// Upsert the single app-state row with the given JSON blob.
+    pub fn save_app_state(&self, json: &str, now_ms: u64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            r#"
+            INSERT INTO app_state (id, tabs_json, updated_at_ms)
+            VALUES (1, ?1, ?2)
+            ON CONFLICT(id) DO UPDATE SET
+                tabs_json     = excluded.tabs_json,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![json, now_ms as i64],
         )?;
         Ok(())
     }
@@ -170,7 +246,8 @@ impl Store {
         let mut stmt = conn.prepare(
             r#"
             SELECT id, command, cwd, git_branch,
-                   started_at_ms, ended_at_ms, exit_code, duration_ms, aborted
+                   started_at_ms, ended_at_ms, exit_code, duration_ms,
+                   aborted, interactive
               FROM blocks
              ORDER BY started_at_ms DESC
              LIMIT ?1
@@ -190,6 +267,7 @@ impl Store {
             let exit_code: Option<i32> = row.get(6)?;
             let duration_ms: Option<i64> = row.get(7)?;
             let aborted_int: i32 = row.get(8)?;
+            let interactive_int: i32 = row.get(9)?;
             Ok(BlockSummary {
                 id,
                 command: row.get(1)?,
@@ -200,6 +278,7 @@ impl Store {
                 exit_code,
                 duration_ms: duration_ms.map(|v| v as u64),
                 aborted: aborted_int != 0,
+                interactive: interactive_int != 0,
             })
         })?;
         let mut out: Vec<BlockSummary> = rows.collect::<Result<_, _>>()?;
@@ -281,6 +360,7 @@ mod tests {
             exit_code: Some(0),
             duration_ms: Some(100),
             aborted: false,
+            interactive: false,
             output: output.to_vec(),
         }
     }
@@ -389,5 +469,90 @@ mod tests {
         let loaded = store.load_recent(10).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command.as_deref(), Some("first run"));
+    }
+
+    #[test]
+    fn interactive_flag_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let mut block = make_block(PtyId::new(), 1000, "vim foo", b"\x1b[?1049h");
+        block.interactive = true;
+        store.insert_block(&block).unwrap();
+        let loaded = store.load_recent(10).unwrap();
+        assert!(
+            loaded[0].interactive,
+            "interactive flag should survive a load"
+        );
+    }
+
+    #[test]
+    fn app_state_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.load_app_state().unwrap().is_none());
+        store.save_app_state(r#"{"tabs":[]}"#, 1234).unwrap();
+        assert_eq!(
+            store.load_app_state().unwrap().as_deref(),
+            Some(r#"{"tabs":[]}"#),
+        );
+        // Upsert behaviour: second save replaces the row, doesn't insert.
+        store
+            .save_app_state(r#"{"tabs":[{"id":"a"}]}"#, 2000)
+            .unwrap();
+        assert_eq!(
+            store.load_app_state().unwrap().as_deref(),
+            Some(r#"{"tabs":[{"id":"a"}]}"#),
+        );
+    }
+
+    #[test]
+    fn app_state_persists_across_reopen() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("shax.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store.save_app_state(r#"{"tabs":[{"id":"x"}]}"#, 1).unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.load_app_state().unwrap().as_deref(),
+            Some(r#"{"tabs":[{"id":"x"}]}"#),
+        );
+    }
+
+    #[test]
+    fn v1_database_migrates_to_v2_on_open() {
+        // Hand-craft a v1 schema (no interactive column, no app_state),
+        // then re-open and confirm both pieces of v2 are present and
+        // historical rows default to interactive=false.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("shax.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE blocks (
+                    id TEXT PRIMARY KEY, pane_id TEXT NOT NULL, session_id TEXT,
+                    command TEXT, argv TEXT, cwd TEXT, git_branch TEXT, host TEXT,
+                    exit_code INTEGER, started_at_ms INTEGER NOT NULL,
+                    ended_at_ms INTEGER, duration_ms INTEGER,
+                    aborted INTEGER NOT NULL DEFAULT 0, output BLOB
+                );
+                INSERT INTO blocks (id, pane_id, command, started_at_ms, aborted)
+                    VALUES ('11111111-1111-1111-1111-111111111111', 'aaaa', 'old', 500, 0);
+                "#,
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let store = Store::open(&path).expect("v1 should upgrade on open");
+        let loaded = store.load_recent(10).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(
+            !loaded[0].interactive,
+            "v1 row should default to non-interactive"
+        );
+        // app_state table exists and is empty after the upgrade.
+        assert!(store.load_app_state().unwrap().is_none());
+        store.save_app_state(r#"{"tabs":[]}"#, 1).unwrap();
+        assert!(store.load_app_state().unwrap().is_some());
     }
 }

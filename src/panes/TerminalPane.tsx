@@ -181,6 +181,7 @@ function TerminalPaneInner({
             aborted: event.aborted,
             cwd: event.cwd,
             git_branch: event.git_branch,
+            interactive: event.interactive,
           });
           break;
 
