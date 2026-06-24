@@ -182,6 +182,14 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search command history…"
           style={QUERY_INPUT}
+          // Search queries are commands, paths, code fragments, error
+          // tokens — never natural prose. Suppress the browser's
+          // autocorrect / autocapitalize / spell-check / autocomplete
+          // chrome that would otherwise overlay the input.
+          autoCorrect="off"
+          autoCapitalize="off"
+          autoComplete="off"
+          spellCheck={false}
         />
         <div style={STATUS_ROW} data-testid="search-status">
           {showHint && "Type to search across commands and output"}
@@ -232,6 +240,10 @@ function SearchResultRow({ block, onSelect }: SearchResultRowProps): React.React
         {block.git_branch !== null && (
           <>
             <span style={{ padding: "0 6px" }}>·</span>
+            {/* Powerline-Extra branch glyph from JetBrainsMono Nerd Font. */}
+            <span aria-hidden="true" style={{ marginRight: 4 }}>
+              {""}
+            </span>
             {block.git_branch}
           </>
         )}

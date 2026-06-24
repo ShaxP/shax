@@ -384,6 +384,17 @@ export default function App(): React.ReactElement {
   const [searchOpen, setSearchOpen] = useState(false);
   const [viewerBlock, setViewerBlock] = useState<BlockSummary | null>(null);
 
+  // When an overlay (search, viewer) closes, the focus that briefly
+  // landed in its input / button is gone — nothing else is focused, so
+  // the user can't type into their shell again until they click the
+  // pane. Fire a window-level event the active TerminalPane listens
+  // for to re-claim focus on its prompt strip (or xterm under
+  // alt-screen). Using an event keeps this a one-shot — no per-pane
+  // prop drilling for transient chrome state.
+  const refocusActivePane = useCallback((): void => {
+    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+  }, []);
+
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -584,7 +595,10 @@ export default function App(): React.ReactElement {
       <Statusline cwd={activeFocused?.cwd ?? null} branch={activeFocused?.branch ?? null} />
       {searchOpen && (
         <SearchOverlay
-          onClose={() => setSearchOpen(false)}
+          onClose={() => {
+            setSearchOpen(false);
+            refocusActivePane();
+          }}
           onSelect={(block) => {
             setSearchOpen(false);
             setViewerBlock(block);
@@ -592,7 +606,13 @@ export default function App(): React.ReactElement {
         />
       )}
       {viewerBlock !== null && (
-        <BlockViewerModal block={viewerBlock} onClose={() => setViewerBlock(null)} />
+        <BlockViewerModal
+          block={viewerBlock}
+          onClose={() => {
+            setViewerBlock(null);
+            refocusActivePane();
+          }}
+        />
       )}
     </div>
   );

@@ -160,14 +160,23 @@ fn backfill_fts(conn: &Connection) -> Result<(), StoreError> {
     tracing::info!(count = ids.len(), "backfilling blocks_fts from blocks");
     let tx = conn.unchecked_transaction()?;
     for id in ids {
-        let (command, output_bytes): (Option<String>, Option<Vec<u8>>) = tx.query_row(
-            "SELECT command, output FROM blocks WHERE id = ?1",
+        let (command, output_bytes, interactive_int): (Option<String>, Option<Vec<u8>>, i32) = tx
+            .query_row(
+            "SELECT command, output, interactive FROM blocks WHERE id = ?1",
             params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        let output_text = output_bytes
-            .map(|b| prepare_fts_output(&b))
-            .unwrap_or_default();
+        // Same exclusion as `insert_block`: alt-screen output is cursor
+        // / grid manipulation, not flow text. Skip indexing it; the
+        // command line stays searchable so "vim foo.txt" still finds
+        // the block.
+        let output_text = if interactive_int != 0 {
+            String::new()
+        } else {
+            output_bytes
+                .map(|b| prepare_fts_output(&b))
+                .unwrap_or_default()
+        };
         tx.execute(
             "INSERT INTO blocks_fts (block_id, command, output)
              VALUES (?1, ?2, ?3)",
@@ -311,7 +320,17 @@ impl Store {
         };
         let conn = self.conn.lock().expect("store mutex poisoned");
         let id_str = block.id.to_string();
-        let fts_output = prepare_fts_output(truncated);
+        // Interactive sessions (vim, htop, less, …) emit cursor / grid
+        // bytes, not flow text — indexing the stripped output gives
+        // search a haystack of fragments that match the user's queries
+        // by accident ("nodes" hits from a status line, etc.). Skip the
+        // output column for these; the command line still indexes so
+        // "vim foo.txt" remains findable.
+        let fts_output = if block.interactive {
+            String::new()
+        } else {
+            prepare_fts_output(truncated)
+        };
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             r#"
@@ -850,6 +869,26 @@ mod tests {
         // finishes typing.
         let hits = store.search("\"unterminated", 10, 0).unwrap();
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_does_not_index_alt_screen_output() {
+        // vim / htop / less emit cursor-and-grid bytes, not flow text;
+        // indexing them gives the user false-positive hits ("nodes" in a
+        // htop status line matching a `kubectl get nodes` query). The
+        // command line itself still indexes so `vim foo.txt` is findable.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let mut interactive_block = make_block(pane, 1000, "vim notes.txt", b"distinctive_token");
+        interactive_block.interactive = true;
+        store.insert_block(&interactive_block).unwrap();
+
+        // Output search misses — the alt-screen bytes aren't in the index.
+        assert!(store.search("distinctive_token", 10, 0).unwrap().is_empty());
+        // Command search still finds it.
+        let hits = store.search("vim", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command.as_deref(), Some("vim notes.txt"));
     }
 
     #[test]

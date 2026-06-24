@@ -326,6 +326,24 @@ function TerminalPaneInner({
     }
   }, [active, altScreen, exitedCode]);
 
+  // App-level overlays (search, viewer modal) steal focus into their
+  // input / button when they open. When they close, no DOM element is
+  // focused and the user has to click the pane to type again. App
+  // fires `shax:refocus-pane` on close; the active pane listens and
+  // re-claims its strip / xterm.
+  useEffect(() => {
+    if (!active || exitedCode !== null) return;
+    const handler = (): void => {
+      if (altScreen) {
+        terminalRef.current?.focus();
+      } else {
+        promptStripRef.current?.focus();
+      }
+    };
+    window.addEventListener("shax:refocus-pane", handler);
+    return () => window.removeEventListener("shax:refocus-pane", handler);
+  }, [active, altScreen, exitedCode]);
+
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
   // local-echoes; the shell's own echo (via `prompt_chunk`) drives the
   // visible line through the renderer.
