@@ -240,9 +240,9 @@ function SearchResultRow({ block, onSelect }: SearchResultRowProps): React.React
         {block.git_branch !== null && (
           <>
             <span style={{ padding: "0 6px" }}>·</span>
-            {/* Powerline-Extra branch glyph from JetBrainsMono Nerd Font. */}
+            {/* `⎇` matches the PromptStrip and Statusline branch glyph. */}
             <span aria-hidden="true" style={{ marginRight: 4 }}>
-              {""}
+              ⎇
             </span>
             {block.git_branch}
           </>

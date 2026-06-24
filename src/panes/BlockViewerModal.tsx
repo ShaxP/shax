@@ -221,7 +221,15 @@ export function BlockViewerModal({ block, onClose }: BlockViewerModalProps): Rea
             {block.cwd !== null && block.git_branch !== null && (
               <span style={{ padding: "0 6px" }}>·</span>
             )}
-            {block.git_branch}
+            {block.git_branch !== null && (
+              <>
+                {/* `⎇` matches the PromptStrip and Statusline branch glyph. */}
+                <span aria-hidden="true" style={{ marginRight: 4 }}>
+                  ⎇
+                </span>
+                {block.git_branch}
+              </>
+            )}
           </div>
         )}
         {block.interactive ? (
