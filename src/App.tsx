@@ -30,11 +30,14 @@
  */
 
 import "./App.css";
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { TitleBar } from "./panes/TitleBar";
 import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
+import { SearchOverlay } from "./panes/SearchOverlay";
+import { BlockViewerModal } from "./panes/BlockViewerModal";
+import type { BlockSummary } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
@@ -376,6 +379,22 @@ export default function App(): React.ReactElement {
   const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
   const { tabs, activeId } = state;
 
+  // Search + viewer overlays. Top-level so the keybindings can open them
+  // regardless of which pane currently owns focus.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [viewerBlock, setViewerBlock] = useState<BlockSummary | null>(null);
+
+  // When an overlay (search, viewer) closes, the focus that briefly
+  // landed in its input / button is gone — nothing else is focused, so
+  // the user can't type into their shell again until they click the
+  // pane. Fire a window-level event the active TerminalPane listens
+  // for to re-claim focus on its prompt strip (or xterm under
+  // alt-screen). Using an event keeps this a one-shot — no per-pane
+  // prop drilling for transient chrome state.
+  const refocusActivePane = useCallback((): void => {
+    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+  }, []);
+
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -455,6 +474,13 @@ export default function App(): React.ReactElement {
         dispatch({ type: "add_tab" });
         return;
       }
+      if (e.key === "k" || e.key === "K") {
+        // ⌘K opens the search overlay over the active tab. The overlay
+        // owns its own Esc handler for closing.
+        e.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
         dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
@@ -525,6 +551,7 @@ export default function App(): React.ReactElement {
         onSwitch={handleSwitch}
         onNew={handleNew}
         onClose={handleCloseTab}
+        onSearch={() => setSearchOpen(true)}
       />
       <main
         data-testid="tab-host"
@@ -566,6 +593,27 @@ export default function App(): React.ReactElement {
         })}
       </main>
       <Statusline cwd={activeFocused?.cwd ?? null} branch={activeFocused?.branch ?? null} />
+      {searchOpen && (
+        <SearchOverlay
+          onClose={() => {
+            setSearchOpen(false);
+            refocusActivePane();
+          }}
+          onSelect={(block) => {
+            setSearchOpen(false);
+            setViewerBlock(block);
+          }}
+        />
+      )}
+      {viewerBlock !== null && (
+        <BlockViewerModal
+          block={viewerBlock}
+          onClose={() => {
+            setViewerBlock(null);
+            refocusActivePane();
+          }}
+        />
+      )}
     </div>
   );
 }

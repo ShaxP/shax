@@ -24,6 +24,14 @@ use crate::pty::PtyId;
 /// in M4 per `specs/05`.
 const OUTPUT_CAP_BYTES: usize = 1024 * 1024;
 
+/// Cap how much of a block's stripped output we feed into the FTS5 index.
+/// 32 KiB covers the typical "where did I see that error string" case
+/// while keeping the on-disk index from ballooning — at 32 KiB per block
+/// the index for 10 000 blocks stays in the low-hundreds-of-MB range.
+/// Beyond this the trailing bytes are still in the `blocks.output` BLOB,
+/// just not searchable; M7 introduces head+tail spill for the full bytes.
+const FTS_OUTPUT_CAP_BYTES: usize = 32 * 1024;
+
 /// Errors returned by the store. The IPC layer converts these to strings.
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -63,6 +71,122 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+// ── ANSI stripping ────────────────────────────────────────────────────────────
+//
+// FTS5 indexes text, not raw byte streams. Captured `output` blobs include
+// CSI / OSC escape sequences from colours, cursor moves, and OSC 133 markers;
+// indexing them verbatim would either pollute the index with garbage tokens or
+// trip the tokenizer up. Strip them here and feed the FTS table the bare text.
+//
+// Mirrors the frontend's `stripAnsi` in `BlockRow.tsx` — CSI is `ESC [ … final`
+// (final byte in 0x40..=0x7e); OSC is `ESC ] … (BEL | ST)`; any other `ESC`
+// drops the byte that follows.
+
+/// Strip CSI and OSC escape sequences from a captured-output byte stream,
+/// returning a UTF-8 string of the surviving printable text (with byte
+/// sequences that aren't valid UTF-8 replaced by U+FFFD).
+fn strip_ansi(bytes: &[u8]) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('[') => {
+                chars.next();
+                // CSI: consume until a final byte in 0x40..=0x7e.
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    if matches!(c, '\u{40}'..='\u{7e}') {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                // OSC: consume until BEL (0x07) or ST (ESC '\\').
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    if c == '\u{07}' {
+                        break;
+                    }
+                    if c == '\u{1b}' {
+                        if chars.peek().copied() == Some('\\') {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            }
+            Some(_) => {
+                // Two-byte ESC sequence (charset selects, save/restore cursor,
+                // …): drop ESC + the next byte.
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Slice the raw output bytes down to at most `FTS_OUTPUT_CAP_BYTES`,
+/// returning the ANSI-stripped UTF-8 prefix that goes into the index.
+fn prepare_fts_output(bytes: &[u8]) -> String {
+    let cap = FTS_OUTPUT_CAP_BYTES.min(bytes.len());
+    strip_ansi(&bytes[..cap])
+}
+
+/// Backfill `blocks_fts` from rows in `blocks` that aren't yet indexed.
+/// Idempotent: subsequent opens skip blocks already present in the FTS
+/// table. Streams one row at a time so the worst-case memory footprint is
+/// bounded by one block's capped output, not the whole history.
+fn backfill_fts(conn: &Connection) -> Result<(), StoreError> {
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM blocks
+             WHERE id NOT IN (SELECT block_id FROM blocks_fts)",
+        )?;
+        let collected: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        collected
+    };
+    if ids.is_empty() {
+        return Ok(());
+    }
+    tracing::info!(count = ids.len(), "backfilling blocks_fts from blocks");
+    let tx = conn.unchecked_transaction()?;
+    for id in ids {
+        let (command, output_bytes, interactive_int): (Option<String>, Option<Vec<u8>>, i32) = tx
+            .query_row(
+            "SELECT command, output, interactive FROM blocks WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        // Same exclusion as `insert_block`: alt-screen output is cursor
+        // / grid manipulation, not flow text. Skip indexing it; the
+        // command line stays searchable so "vim foo.txt" still finds
+        // the block.
+        let output_text = if interactive_int != 0 {
+            String::new()
+        } else {
+            output_bytes
+                .map(|b| prepare_fts_output(&b))
+                .unwrap_or_default()
+        };
+        tx.execute(
+            "INSERT INTO blocks_fts (block_id, command, output)
+             VALUES (?1, ?2, ?3)",
+            params![id, command, output_text],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 impl Store {
     /// Open or create the database at `path`, applying the schema if needed.
     /// Intermediate directories are created.
@@ -91,10 +215,10 @@ impl Store {
 
     fn init(conn: &Connection) -> Result<(), StoreError> {
         // Schema is versioned via `PRAGMA user_version`. v1 was the initial
-        // blocks-only schema; v2 adds the per-block `interactive` flag and
-        // the `app_state` table for tab/layout persistence. Older databases
-        // (v0 from before the version was set, or v1) migrate forward on
-        // open via the matching branch below.
+        // blocks-only schema; v2 added the per-block `interactive` flag and
+        // the `app_state` table; v3 adds the FTS5 search index over command
+        // text and stripped output. Older databases migrate forward on open
+        // via the matching branches below.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -160,7 +284,28 @@ impl Store {
             }
         }
 
-        conn.pragma_update(None, "user_version", 2)?;
+        // v3: full-text search index. The FTS5 table mirrors the indexable
+        // columns of `blocks` (the typed command line plus an ANSI-stripped
+        // prefix of the captured output). `UNINDEXED` on `block_id` means
+        // we can JOIN back to `blocks` to fetch the summary fields without
+        // duplicating storage for the metadata.
+        if version < 3 {
+            conn.execute_batch(
+                r#"
+                CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
+                    block_id UNINDEXED,
+                    command,
+                    output,
+                    tokenize = 'porter unicode61 remove_diacritics 2'
+                );
+                "#,
+            )?;
+            // Backfill rows that existed before this version. Idempotent —
+            // skips ids already present so repeated opens don't double-index.
+            backfill_fts(conn)?;
+        }
+
+        conn.pragma_update(None, "user_version", 3)?;
         Ok(())
     }
 
@@ -174,7 +319,20 @@ impl Store {
             &block.output[..]
         };
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute(
+        let id_str = block.id.to_string();
+        // Interactive sessions (vim, htop, less, …) emit cursor / grid
+        // bytes, not flow text — indexing the stripped output gives
+        // search a haystack of fragments that match the user's queries
+        // by accident ("nodes" hits from a status line, etc.). Skip the
+        // output column for these; the command line still indexes so
+        // "vim foo.txt" remains findable.
+        let fts_output = if block.interactive {
+            String::new()
+        } else {
+            prepare_fts_output(truncated)
+        };
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             r#"
             INSERT INTO blocks
                 (id, pane_id, command, cwd, git_branch,
@@ -193,7 +351,7 @@ impl Store {
                 output        = excluded.output
             "#,
             params![
-                block.id.to_string(),
+                id_str,
                 block.pane_id.to_string(),
                 block.command,
                 block.cwd,
@@ -207,7 +365,91 @@ impl Store {
                 truncated,
             ],
         )?;
+        // Keep the FTS index in lockstep with the row. Upserting a block
+        // re-indexes it (e.g. when streaming completes and the output
+        // bytes are finalised); we delete the prior FTS row, then insert.
+        tx.execute(
+            "DELETE FROM blocks_fts WHERE block_id = ?1",
+            params![id_str],
+        )?;
+        tx.execute(
+            "INSERT INTO blocks_fts (block_id, command, output)
+             VALUES (?1, ?2, ?3)",
+            params![id_str, block.command, fts_output],
+        )?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Run a full-text search across `blocks_fts` and return matching block
+    /// summaries, ranked by FTS5 BM25. `query` is passed straight to FTS5's
+    /// `MATCH` operator, so multiple whitespace-separated words are AND'd
+    /// implicitly. An empty or whitespace-only query short-circuits to an
+    /// empty result. Syntactically-invalid FTS5 queries (the user typed
+    /// half a `(`, an unterminated `"`, …) also return empty rather than
+    /// surfacing an error — the search bar reads "no results" while the
+    /// user finishes typing.
+    pub fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<BlockSummary>, StoreError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let attempt = (|| -> Result<Vec<BlockSummary>, rusqlite::Error> {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT b.id, b.command, b.cwd, b.git_branch,
+                       b.started_at_ms, b.ended_at_ms, b.exit_code,
+                       b.duration_ms, b.aborted, b.interactive
+                FROM blocks_fts
+                JOIN blocks b ON b.id = blocks_fts.block_id
+                WHERE blocks_fts MATCH ?1
+                ORDER BY blocks_fts.rank
+                LIMIT ?2 OFFSET ?3
+                "#,
+            )?;
+            let rows = stmt.query_map(params![trimmed, limit as i64, offset as i64], |row| {
+                let id_str: String = row.get(0)?;
+                let id = BlockId::parse(&id_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    )
+                })?;
+                let started_at_ms: i64 = row.get(4)?;
+                let ended_at_ms: Option<i64> = row.get(5)?;
+                let exit_code: Option<i32> = row.get(6)?;
+                let duration_ms: Option<i64> = row.get(7)?;
+                let aborted_int: i32 = row.get(8)?;
+                let interactive_int: i32 = row.get(9)?;
+                Ok(BlockSummary {
+                    id,
+                    command: row.get(1)?,
+                    cwd: row.get(2)?,
+                    git_branch: row.get(3)?,
+                    started_at_ms: started_at_ms as u64,
+                    ended_at_ms: ended_at_ms.map(|v| v as u64),
+                    exit_code,
+                    duration_ms: duration_ms.map(|v| v as u64),
+                    aborted: aborted_int != 0,
+                    interactive: interactive_int != 0,
+                })
+            })?;
+            rows.collect::<Result<_, _>>()
+        })();
+        match attempt {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                tracing::debug!("search query rejected by FTS5: {e}");
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Load the persisted app-state JSON blob (tabs + layout + focus),
@@ -519,6 +761,151 @@ mod tests {
     }
 
     #[test]
+    fn strip_ansi_drops_csi_osc_and_two_byte_sequences() {
+        assert_eq!(strip_ansi(b"\x1b[31mhello\x1b[0m world"), "hello world");
+        assert_eq!(strip_ansi(b"\x1b]0;title\x07after"), "after");
+        // OSC terminated by ST (ESC \\).
+        assert_eq!(strip_ansi(b"\x1b]133;A\x1b\\hi"), "hi");
+        // Two-byte ESC sequence (charset select).
+        assert_eq!(strip_ansi(b"\x1bMplain"), "plain");
+        assert_eq!(strip_ansi(b"plain text"), "plain text");
+    }
+
+    #[test]
+    fn search_finds_blocks_by_command_text() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl get pods", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 2000, "echo hello", b""))
+            .unwrap();
+        let hits = store.search("kubectl", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command.as_deref(), Some("kubectl get pods"));
+    }
+
+    #[test]
+    fn search_finds_blocks_by_output_text() {
+        // "Where did I see that error string" — the canonical search use
+        // case. The unicode61 tokenizer breaks tokens on punctuation, so
+        // "Cargo.toml" indexes as two tokens; we query with bare words.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(
+                pane,
+                1000,
+                "ls",
+                b"Cargo.toml src tests target\n",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 2000, "cat README", b"# shax\n"))
+            .unwrap();
+        let hits = store.search("Cargo toml", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command.as_deref(), Some("ls"));
+    }
+
+    #[test]
+    fn search_ranks_command_match_above_unrelated_blocks() {
+        // Implicit AND: "kubectl pods" should require both words.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl get pods", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 2000, "kubectl get nodes", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 3000, "echo hi", b""))
+            .unwrap();
+        let hits = store.search("kubectl pods", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command.as_deref(), Some("kubectl get pods"));
+    }
+
+    #[test]
+    fn search_strips_ansi_from_indexed_output() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // The "magic" token is bracketed by SGR escapes — the index must
+        // see "magic" as a bare token, not "[1mmagic[0m".
+        store
+            .insert_block(&make_block(
+                pane,
+                1000,
+                "echo styled",
+                b"\x1b[1mmagic\x1b[0m\n",
+            ))
+            .unwrap();
+        let hits = store.search("magic", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn search_returns_empty_on_empty_or_whitespace_query() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "echo hi", b""))
+            .unwrap();
+        assert!(store.search("", 10, 0).unwrap().is_empty());
+        assert!(store.search("   ", 10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_returns_empty_on_invalid_fts5_syntax_instead_of_erroring() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "echo hi", b""))
+            .unwrap();
+        // Half-typed phrase / dangling operator: shouldn't error, just no
+        // results, so the search overlay can stay calm while the user
+        // finishes typing.
+        let hits = store.search("\"unterminated", 10, 0).unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_does_not_index_alt_screen_output() {
+        // vim / htop / less emit cursor-and-grid bytes, not flow text;
+        // indexing them gives the user false-positive hits ("nodes" in a
+        // htop status line matching a `kubectl get nodes` query). The
+        // command line itself still indexes so `vim foo.txt` is findable.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let mut interactive_block = make_block(pane, 1000, "vim notes.txt", b"distinctive_token");
+        interactive_block.interactive = true;
+        store.insert_block(&interactive_block).unwrap();
+
+        // Output search misses — the alt-screen bytes aren't in the index.
+        assert!(store.search("distinctive_token", 10, 0).unwrap().is_empty());
+        // Command search still finds it.
+        let hits = store.search("vim", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command.as_deref(), Some("vim notes.txt"));
+    }
+
+    #[test]
+    fn search_paginates_with_limit_and_offset() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        for i in 0..5 {
+            store
+                .insert_block(&make_block(pane, 1000 + i, &format!("kubectl c{i}"), b""))
+                .unwrap();
+        }
+        assert_eq!(store.search("kubectl", 2, 0).unwrap().len(), 2);
+        assert_eq!(store.search("kubectl", 2, 2).unwrap().len(), 2);
+        assert_eq!(store.search("kubectl", 2, 4).unwrap().len(), 1);
+    }
+
+    #[test]
     fn v1_database_migrates_to_v2_on_open() {
         // Hand-craft a v1 schema (no interactive column, no app_state),
         // then re-open and confirm both pieces of v2 are present and
@@ -554,5 +941,13 @@ mod tests {
         assert!(store.load_app_state().unwrap().is_none());
         store.save_app_state(r#"{"tabs":[]}"#, 1).unwrap();
         assert!(store.load_app_state().unwrap().is_some());
+        // The historical row was also indexed by the v3 step on the same
+        // open, so search picks it up.
+        let hits = store.search("old", 10, 0).unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "v1 historical row should be back-filled into FTS"
+        );
     }
 }

@@ -48,6 +48,8 @@ export interface TitleBarProps {
   onSwitch: (id: string) => void;
   onNew: () => void;
   onClose: (id: string) => void;
+  /** Optional: clicking the search pill opens the overlay. ⌘K does the same. */
+  onSearch?: () => void;
 }
 
 const ROW: CSSProperties = {
@@ -208,6 +210,7 @@ export function TitleBar({
   onSwitch,
   onNew,
   onClose,
+  onSearch,
 }: TitleBarProps): React.ReactElement {
   return (
     <div
@@ -269,7 +272,12 @@ export function TitleBar({
         <span title="split horizontal" style={ICON_BTN}>
           ⧈
         </span>
-        <span title="search" style={SEARCH_PILL}>
+        <span
+          data-testid="title-search"
+          title="Search (⌘K)"
+          style={{ ...SEARCH_PILL, cursor: onSearch !== undefined ? "pointer" : "default" }}
+          onClick={onSearch}
+        >
           ⌕ <span style={{ fontFamily: "var(--font-ui)", fontSize: 11 }}>⌘K</span>
         </span>
         <span title="assistant" style={{ ...ICON_BTN, color: "var(--accent)", fontSize: 13 }}>
