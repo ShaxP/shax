@@ -19,6 +19,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { searchBlocks } from "../lib/ipc";
 import type { SearchHit, SearchStatus } from "../lib/ipc";
 import { formatDuration } from "./blockFormat";
@@ -148,10 +149,8 @@ const CHIP_BASE: CSSProperties = {
   border: "1px solid var(--border)",
 };
 
-const POPOVER: CSSProperties = {
-  position: "absolute",
-  top: "calc(100% + 4px)",
-  left: 0,
+const POPOVER_BASE: CSSProperties = {
+  position: "fixed",
   minWidth: 160,
   background: "var(--surface)",
   border: "1px solid var(--border-strong)",
@@ -161,7 +160,10 @@ const POPOVER: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 1,
-  zIndex: 10,
+  // Higher than the search backdrop (1000) so the popover always
+  // floats above it, but the popover is portalled to the document body
+  // so it isn't clipped by the search panel's `overflow: hidden`.
+  zIndex: 1100,
 };
 
 const POPOVER_ITEM_BASE: CSSProperties = {
@@ -497,21 +499,41 @@ function FilterDropdown<T extends string>({
   onChange,
 }: FilterDropdownProps<T>): React.ReactElement {
   const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const pillRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   const current = options.find((o) => o.key === value) ?? options[0];
   const active = value !== neutralKey;
 
-  // Close on outside click. `mousedown` (not `click`) so the popover
-  // can re-act to a click on its own option in the same tick without
-  // racing the outside-detect logic.
+  // Anchor the popover to the pill's bottom-left in viewport coords.
+  // Recomputed on open and on scroll / resize so a parent scroll
+  // doesn't leave the popover floating in the wrong place.
+  useLayoutEffect(() => {
+    if (!open || pillRef.current === null) return;
+    const place = (): void => {
+      const rect = pillRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  // Close on outside click. The popover lives in a portal so the
+  // outside-check has to consider both the pill *and* the popover.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent): void => {
-      const wrapper = wrapperRef.current;
-      if (wrapper !== null && !wrapper.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const t = e.target as Node;
+      if (pillRef.current?.contains(t)) return;
+      if (popoverRef.current?.contains(t)) return;
+      setOpen(false);
     };
     window.addEventListener("mousedown", handler);
     return () => window.removeEventListener("mousedown", handler);
@@ -540,9 +562,48 @@ function FilterDropdown<T extends string>({
     color: active ? "var(--fg)" : "var(--fg-dim)",
   };
 
+  const popover =
+    open && pos !== null ? (
+      <div
+        ref={popoverRef}
+        data-testid={`${testId}-popover`}
+        style={{ ...POPOVER_BASE, top: pos.top, left: pos.left }}
+      >
+        {options.map((opt) => {
+          const selected = opt.key === value;
+          const itemStyle: CSSProperties = {
+            ...POPOVER_ITEM_BASE,
+            background: selected ? "var(--accent-soft)" : "transparent",
+            fontWeight: selected ? 600 : 400,
+          };
+          return (
+            <div
+              key={opt.key}
+              data-testid={`${testId}-option-${opt.key}`}
+              data-selected={selected ? "true" : "false"}
+              style={itemStyle}
+              onMouseEnter={(e) => {
+                if (!selected) e.currentTarget.style.background = "var(--surface-hover)";
+              }}
+              onMouseLeave={(e) => {
+                if (!selected) e.currentTarget.style.background = "transparent";
+              }}
+              onClick={() => {
+                onChange(opt.key);
+                setOpen(false);
+              }}
+            >
+              {opt.label}
+            </div>
+          );
+        })}
+      </div>
+    ) : null;
+
   return (
-    <div ref={wrapperRef} style={{ position: "relative" }}>
+    <>
       <span
+        ref={pillRef}
         data-testid={testId}
         data-active={active ? "true" : "false"}
         data-open={open ? "true" : "false"}
@@ -554,39 +615,8 @@ function FilterDropdown<T extends string>({
           ⌄
         </span>
       </span>
-      {open && (
-        <div data-testid={`${testId}-popover`} style={POPOVER}>
-          {options.map((opt) => {
-            const selected = opt.key === value;
-            const itemStyle: CSSProperties = {
-              ...POPOVER_ITEM_BASE,
-              background: selected ? "var(--accent-soft)" : "transparent",
-              fontWeight: selected ? 600 : 400,
-            };
-            return (
-              <div
-                key={opt.key}
-                data-testid={`${testId}-option-${opt.key}`}
-                data-selected={selected ? "true" : "false"}
-                style={itemStyle}
-                onMouseEnter={(e) => {
-                  if (!selected) e.currentTarget.style.background = "var(--surface-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  if (!selected) e.currentTarget.style.background = "transparent";
-                }}
-                onClick={() => {
-                  onChange(opt.key);
-                  setOpen(false);
-                }}
-              >
-                {opt.label}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+      {popover !== null && createPortal(popover, document.body)}
+    </>
   );
 }
 
