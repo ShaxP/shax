@@ -22,7 +22,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { searchBlocks } from "../lib/ipc";
 import type { SearchHit, SearchStatus } from "../lib/ipc";
-import { formatDuration } from "./blockFormat";
+import { formatDuration, formatTimestamp } from "./blockFormat";
 
 export interface SearchOverlayProps {
   /** Caller closes the overlay (Esc or backdrop click). */
@@ -258,37 +258,6 @@ const MARK_STYLE: CSSProperties = {
   padding: "0 2px",
   borderRadius: 2,
 };
-
-/**
- * Compact "when did this run" string. Today → `HH:MM`; yesterday →
- * `yesterday HH:MM`; same year → `Mon DD HH:MM`; older → `Mon DD,
- * YYYY`. Lets the user tell otherwise-identical duplicate rows
- * apart at a glance.
- */
-function formatTimestamp(ms: number, nowMs: number = Date.now()): string {
-  const date = new Date(ms);
-  const now = new Date(nowMs);
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  if (sameDay) return `${hh}:${mm}`;
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday =
-    date.getFullYear() === yesterday.getFullYear() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getDate() === yesterday.getDate();
-  if (isYesterday) return `yesterday ${hh}:${mm}`;
-  const month = date.toLocaleString("en-US", { month: "short" });
-  const day = date.getDate();
-  if (date.getFullYear() === now.getFullYear()) {
-    return `${month} ${day} ${hh}:${mm}`;
-  }
-  return `${month} ${day}, ${date.getFullYear()}`;
-}
 
 function statusGlyph(b: SearchHit["block"]): string {
   if (b.aborted) return "·";

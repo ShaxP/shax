@@ -33,7 +33,7 @@
 import { memo, useEffect, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
-import { formatDuration } from "./blockFormat";
+import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
 
@@ -418,12 +418,26 @@ function BlockRowInner({
               >
                 running
               </span>
+              <span
+                data-testid="block-timestamp"
+                style={{ fontSize: 11, color: "var(--fg-faint)" }}
+                title={new Date(block.started_at_ms).toLocaleString()}
+              >
+                {formatTimestamp(block.started_at_ms)}
+              </span>
               <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
                 {formatDuration(elapsedMs)}
               </span>
             </>
           ) : (
             <>
+              <span
+                data-testid="block-timestamp"
+                style={{ fontSize: 11, color: "var(--fg-faint)" }}
+                title={new Date(block.started_at_ms).toLocaleString()}
+              >
+                {formatTimestamp(block.started_at_ms)}
+              </span>
               <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
                 {formatDuration(elapsedMs)}
               </span>
