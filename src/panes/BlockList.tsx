@@ -42,6 +42,8 @@ export interface BlockListProps {
    * Rendered above the live list with a "from history" tag.
    */
   inspectedBlock?: UiBlock | null;
+  /** Click-to-select on any row. */
+  onSelectBlock?: (id: BlockId) => void;
 }
 
 export function BlockList({
@@ -51,6 +53,7 @@ export function BlockList({
   getOutput = getBlockOutput,
   selectedBlockId = null,
   inspectedBlock = null,
+  onSelectBlock,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
   // visible. Watching the `blocks` reference catches new blocks, completion
@@ -129,6 +132,7 @@ export function BlockList({
               liveOutput={liveOutputs?.get(inspectedBlock.id)}
               getOutput={getOutput}
               selected={inspectedBlock.id === selectedBlockId}
+              onSelect={() => onSelectBlock?.(inspectedBlock.id)}
             />
           )}
         </div>
@@ -158,6 +162,7 @@ export function BlockList({
                 liveOutput={liveOutputs?.get(block.id)}
                 getOutput={getOutput}
                 selected={block.id === selectedBlockId}
+                onSelect={() => onSelectBlock?.(block.id)}
               />
             ),
           )}

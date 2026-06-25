@@ -116,10 +116,12 @@ export interface BlockRowProps {
   /**
    * Draws a subtle accent border with rounded corners around the row
    * — used by the search overlay's jump-to-block path to point the
-   * user at the row that just matched. The BlockList owns the
-   * selection state.
+   * user at the row that just matched, and by click-to-select on any
+   * row. The BlockList owns the selection state.
    */
   selected?: boolean;
+  /** Called when the user clicks anywhere on the row. */
+  onSelect?: () => void;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -279,6 +281,7 @@ function BlockRowInner({
   getOutput,
   now = Date.now,
   selected = false,
+  onSelect,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -341,22 +344,6 @@ function BlockRowInner({
     void navigator.clipboard.writeText(block.command).catch(() => undefined);
   };
 
-  // Selection ring — drawn via an inset box-shadow so it doesn't
-  // displace the row layout (no extra width from a CSS border). 1.5
-  // px keeps it subtle; `border-radius` rounds the corners so the
-  // selection reads as a discrete handle rather than a banner. The
-  // resting state holds a transparent shadow so React's transition
-  // animates the colour change rather than fading in from nothing.
-  const selectionStyle: React.CSSProperties = selected
-    ? {
-        boxShadow: "inset 0 0 0 1.5px var(--accent)",
-        borderRadius: "var(--radius)",
-      }
-    : {
-        boxShadow: "inset 0 0 0 1.5px transparent",
-        borderRadius: "var(--radius)",
-      };
-
   return (
     <div
       className="block-row"
@@ -364,8 +351,27 @@ function BlockRowInner({
       data-block-id={block.id}
       data-status={status}
       data-selected={selected ? "true" : "false"}
-      style={{ ...ROW, ...selectionStyle, transition: "box-shadow 0.2s ease-out" }}
+      style={ROW}
+      onClick={onSelect}
     >
+      {/*
+       * Selection ring — an inset overlay rather than a `box-shadow`
+       * on the row itself so the ring sits a few pixels in from the
+       * pane edge and doesn't visually collide with the pane border.
+       * `pointer-events: none` keeps clicks reaching the row, and the
+       * `transition` softens replacement when the selection moves.
+       */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 4,
+          borderRadius: "var(--radius)",
+          border: `1px solid ${selected ? "var(--accent)" : "transparent"}`,
+          pointerEvents: "none",
+          transition: "border-color 0.2s ease-out",
+        }}
+      />
       <div
         data-testid="block-edge"
         className={isRunning ? "block-row-edge-running" : undefined}

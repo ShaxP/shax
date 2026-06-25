@@ -517,6 +517,7 @@ function TerminalPaneInner({
             liveOutputs={blockState.liveOutputs}
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
+            onSelectBlock={(id) => dispatch({ type: "select_block", id })}
           />
         </div>
         {exitedCode !== null && (
