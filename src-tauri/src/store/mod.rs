@@ -511,7 +511,13 @@ impl Store {
             sql.push_str(" AND ");
             sql.push_str(clause);
         }
-        sql.push_str(" ORDER BY blocks_fts.rank LIMIT :limit OFFSET :offset");
+        // Chronological, newest first. For a shell-history search the
+        // user almost always wants the most recent matching block,
+        // and this stays consistent with the browse-by-filter path
+        // (empty query + active filter, see `search_by_filter`)
+        // which also orders by `started_at_ms DESC`. FTS rank values
+        // on short shell commands are noisy and rarely useful.
+        sql.push_str(" ORDER BY b.started_at_ms DESC LIMIT :limit OFFSET :offset");
 
         let conn = self.conn.lock().expect("store mutex poisoned");
         let attempt = (|| -> Result<Vec<SearchHit>, rusqlite::Error> {
@@ -1325,6 +1331,31 @@ mod tests {
             snippet.contains("<mark>magic_token</mark>"),
             "expected <mark>…</mark> wrapper in snippet, got: {snippet:?}",
         );
+    }
+
+    #[test]
+    fn search_orders_results_newest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl get pods", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 2000, "kubectl get nodes", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 3000, "kubectl describe", b""))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        let times: Vec<u64> = hits.iter().map(|h| h.block.started_at_ms).collect();
+        assert_eq!(times, vec![3000, 2000, 1000], "newest first");
     }
 
     #[test]
