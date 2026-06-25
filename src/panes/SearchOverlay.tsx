@@ -692,7 +692,7 @@ function SearchResultRow({
           title={new Date(block.started_at_ms).toLocaleString()}
           data-testid="search-result-time"
         >
-          <span aria-hidden="true"></span>
+          <span aria-hidden="true">{""}</span>
           {formatTimestamp(block.started_at_ms)}
         </span>
       </div>
@@ -715,7 +715,9 @@ function SearchResultRow({
         {block.duration_ms !== null && (
           <>
             <span style={{ padding: "0 6px" }}>·</span>
-            <span aria-hidden="true" style={{ marginRight: 4 }}></span>
+            <span aria-hidden="true" style={{ marginRight: 4 }}>
+              {"\uF017"}
+            </span>
             {formatDuration(block.duration_ms)}
           </>
         )}

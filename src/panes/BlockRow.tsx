@@ -429,7 +429,7 @@ function BlockRowInner({
                 }}
                 title={new Date(block.started_at_ms).toLocaleString()}
               >
-                <span aria-hidden="true"></span>
+                <span aria-hidden="true">{"\uF073"}</span>
                 {formatTimestamp(block.started_at_ms)}
               </span>
               <span
@@ -442,7 +442,7 @@ function BlockRowInner({
                   gap: 4,
                 }}
               >
-                <span aria-hidden="true"></span>
+                <span aria-hidden="true">{"\uF017"}</span>
                 {formatDuration(elapsedMs)}
               </span>
             </>
@@ -459,7 +459,7 @@ function BlockRowInner({
                 }}
                 title={new Date(block.started_at_ms).toLocaleString()}
               >
-                <span aria-hidden="true"></span>
+                <span aria-hidden="true">{"\uF073"}</span>
                 {formatTimestamp(block.started_at_ms)}
               </span>
               <span
@@ -472,7 +472,7 @@ function BlockRowInner({
                   gap: 4,
                 }}
               >
-                <span aria-hidden="true"></span>
+                <span aria-hidden="true">{"\uF017"}</span>
                 {formatDuration(elapsedMs)}
               </span>
               <span data-testid="block-status" style={{ fontSize: 11 }}>
