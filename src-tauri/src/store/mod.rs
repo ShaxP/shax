@@ -446,8 +446,18 @@ impl Store {
     /// `<mark>…</mark>` around the matching tokens.
     pub fn search(&self, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
         let trimmed = opts.query.trim();
-        if trimmed.is_empty() {
+        let has_filter = opts.status != SearchStatus::Any || opts.since_ms.is_some();
+        if trimmed.is_empty() && !has_filter {
+            // Empty query and no active filter → nothing to show. Keeps
+            // the search overlay's initial state clean instead of
+            // dumping the entire history the moment ⌘K opens.
             return Ok(Vec::new());
+        }
+        if trimmed.is_empty() {
+            // Filter-only browse mode: dodge FTS5 entirely and read
+            // straight from `blocks`, ordered most-recent first. Hits
+            // carry no snippet (nothing to highlight).
+            return self.search_by_filter(opts);
         }
 
         // Compose optional filter SQL inline; each branch widens both
@@ -574,6 +584,91 @@ impl Store {
             params![json, now_ms as i64],
         )?;
         Ok(())
+    }
+
+    /// Filter-only browse: empty FTS query, but the status / since filters
+    /// are active. Read straight from `blocks`, apply the filters, order
+    /// most-recent first. Hits carry no snippet because there's no FTS
+    /// match to anchor one on.
+    fn search_by_filter(&self, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("aborted = 0 AND exit_code = 0"),
+            SearchStatus::Fail => clauses.push("aborted = 0 AND exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("aborted = 1"),
+        }
+        if opts.since_ms.is_some() {
+            clauses.push("started_at_ms >= :since");
+        }
+
+        let mut sql = String::from(
+            r#"
+            SELECT id, pane_id, command, cwd, git_branch,
+                   started_at_ms, ended_at_ms, exit_code,
+                   duration_ms, aborted, interactive
+            FROM blocks
+            WHERE 1 = 1
+            "#,
+        );
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" ORDER BY started_at_ms DESC LIMIT :limit OFFSET :offset");
+
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let limit_i64 = opts.limit as i64;
+        let offset_i64 = opts.offset as i64;
+        let since_i64 = opts.since_ms.map(|v| v as i64);
+        let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> =
+            vec![(":limit", &limit_i64), (":offset", &offset_i64)];
+        if let Some(ref s) = since_i64 {
+            bind.push((":since", s));
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(bind.as_slice(), |row| {
+            let id_str: String = row.get(0)?;
+            let id = BlockId::parse(&id_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                )
+            })?;
+            let pane_id_str: String = row.get(1)?;
+            let pane_uuid = uuid::Uuid::parse_str(&pane_id_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                )
+            })?;
+            let pane_id = PtyId(pane_uuid);
+            let started_at_ms: i64 = row.get(5)?;
+            let ended_at_ms: Option<i64> = row.get(6)?;
+            let exit_code: Option<i32> = row.get(7)?;
+            let duration_ms: Option<i64> = row.get(8)?;
+            let aborted_int: i32 = row.get(9)?;
+            let interactive_int: i32 = row.get(10)?;
+            Ok(SearchHit {
+                block: BlockSummary {
+                    id,
+                    command: row.get(2)?,
+                    cwd: row.get(3)?,
+                    git_branch: row.get(4)?,
+                    started_at_ms: started_at_ms as u64,
+                    ended_at_ms: ended_at_ms.map(|v| v as u64),
+                    exit_code,
+                    duration_ms: duration_ms.map(|v| v as u64),
+                    aborted: aborted_int != 0,
+                    interactive: interactive_int != 0,
+                },
+                pane_id,
+                snippet: None,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Return the most recent `limit` blocks across all panes, oldest-first
@@ -1103,6 +1198,57 @@ mod tests {
             .unwrap();
         assert_eq!(aborted.len(), 1);
         assert_eq!(aborted[0].block.command.as_deref(), Some("kubectl killed"));
+    }
+
+    #[test]
+    fn search_empty_query_with_filter_browses_history() {
+        // "Show me every failure today" is a valid search even with no
+        // text query. The store falls through to a non-FTS path that
+        // orders by started_at_ms DESC.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let mut ok_block = make_block(pane, 1000, "ls", b"");
+        ok_block.exit_code = Some(0);
+        store.insert_block(&ok_block).unwrap();
+        let mut fail_block = make_block(pane, 2000, "false", b"");
+        fail_block.exit_code = Some(1);
+        store.insert_block(&fail_block).unwrap();
+
+        // Empty query + Fail filter → just the failed block.
+        let hits = store
+            .search(&SearchOptions {
+                query: String::new(),
+                limit: 10,
+                offset: 0,
+                status: SearchStatus::Fail,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.command.as_deref(), Some("false"));
+        // Filter-only mode has no FTS match → no snippet.
+        assert!(hits[0].snippet.is_none());
+    }
+
+    #[test]
+    fn search_empty_query_no_filter_returns_empty() {
+        // Without a query AND without any active filter we still
+        // return nothing — the search overlay's empty state is "type
+        // to search", not "dump everything".
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "ls", b""))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: String::new(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]

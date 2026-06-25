@@ -257,10 +257,14 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
 
   // Debounce the query so the user gets snappy keystrokes without the
   // SQLite mutex thrashing on every letter. Filter changes are also
-  // deps so toggling a chip refreshes the results.
+  // deps so toggling a chip refreshes the results. An empty query
+  // plus an active filter falls through to the backend's filter-only
+  // browse path — "show me every failure today" is a valid search
+  // without a text query.
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed === "") {
+    const hasFilter = status !== "any" || time !== "any";
+    if (trimmed === "" && !hasFilter) {
       setResults([]);
       setLoading(false);
       return;
@@ -350,8 +354,15 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
   };
 
   const trimmed = query.trim();
-  const showEmpty = trimmed !== "" && !loading && results.length === 0;
-  const showHint = trimmed === "";
+  const hasFilter = status !== "any" || time !== "any";
+  // Empty state changes depending on whether a filter is active. With
+  // no query and no filter the overlay invites the user to type;
+  // with no query but an active filter we're in browse-by-filter mode
+  // and the empty-results case should read like "nothing matches your
+  // filter" instead.
+  const isActive = trimmed !== "" || hasFilter;
+  const showEmpty = isActive && !loading && results.length === 0;
+  const showHint = !isActive;
 
   return (
     <div data-testid="search-overlay" style={BACKDROP} onPointerDown={handleBackdropPointerDown}>

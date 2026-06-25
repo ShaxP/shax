@@ -552,6 +552,28 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     expect(snippet.querySelector("mark")?.textContent).toBe("panic");
   });
 
+  it("running with empty query + active filter still hits searchBlocks", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([
+      makeHit({ id: "blk-fail", command: "false", exit_code: 1 }),
+    ]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    // Don't type anything; just click the status chip to activate the filter.
+    fireEvent.click(screen.getByTestId("search-chip-status"));
+    await vi.waitFor(() => {
+      expect(mockSearchBlocks).toHaveBeenCalled();
+    });
+    const calls = mockSearchBlocks.mock.calls;
+    const lastArg = calls[calls.length - 1]?.[0] as { query: string; status: string };
+    expect(lastArg.query).toBe("");
+    expect(lastArg.status).toBe("ok");
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("search-result")).toBeInTheDocument();
+    });
+  });
+
   it("cycles the status chip and propagates it to searchBlocks", async () => {
     mockSearchBlocks.mockResolvedValue([]);
     render(<App />);
