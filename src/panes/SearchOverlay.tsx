@@ -210,12 +210,28 @@ const RESULT_ROW_BASE: CSSProperties = {
 };
 
 const COMMAND_LINE: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 8,
   fontFamily: "var(--font-mono)",
   fontSize: 13,
   color: "var(--fg)",
+  minWidth: 0,
+};
+
+const COMMAND_TEXT: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
+};
+
+const TIMESTAMP: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  color: "var(--fg-faint)",
+  flexShrink: 0,
 };
 
 const META_LINE: CSSProperties = {
@@ -242,6 +258,37 @@ const MARK_STYLE: CSSProperties = {
   padding: "0 2px",
   borderRadius: 2,
 };
+
+/**
+ * Compact "when did this run" string. Today → `HH:MM`; yesterday →
+ * `yesterday HH:MM`; same year → `Mon DD HH:MM`; older → `Mon DD,
+ * YYYY`. Lets the user tell otherwise-identical duplicate rows
+ * apart at a glance.
+ */
+function formatTimestamp(ms: number, nowMs: number = Date.now()): string {
+  const date = new Date(ms);
+  const now = new Date(nowMs);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) return `${hh}:${mm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate();
+  if (isYesterday) return `yesterday ${hh}:${mm}`;
+  const month = date.toLocaleString("en-US", { month: "short" });
+  const day = date.getDate();
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${month} ${day} ${hh}:${mm}`;
+  }
+  return `${month} ${day}, ${date.getFullYear()}`;
+}
 
 function statusGlyph(b: SearchHit["block"]): string {
   if (b.aborted) return "·";
@@ -669,8 +716,15 @@ function SearchResultRow({
       onMouseEnter={onHover}
     >
       <div style={COMMAND_LINE}>
-        <span style={{ color: statusColor(block), marginRight: 8 }}>{statusGlyph(block)}</span>
-        {block.command ?? "(no command)"}
+        <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
+        <span style={COMMAND_TEXT}>{block.command ?? "(no command)"}</span>
+        <span
+          style={TIMESTAMP}
+          title={new Date(block.started_at_ms).toLocaleString()}
+          data-testid="search-result-time"
+        >
+          {formatTimestamp(block.started_at_ms)}
+        </span>
       </div>
       {snippet !== null && (
         <div style={SNIPPET_LINE} data-testid="search-result-snippet">

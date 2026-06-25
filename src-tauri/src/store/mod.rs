@@ -357,6 +357,28 @@ impl Store {
         }
 
         conn.pragma_update(None, "user_version", 3)?;
+
+        // One-shot dedup: an earlier build of the FTS-insert path didn't
+        // delete prior rows before inserting, so re-running `insert_block`
+        // for the same block id (which the writer does as the block's
+        // metadata fills in) left duplicate rows behind. They surface as
+        // "5 results, 1 visible row" because the search overlay keys by
+        // block id and React renders only one. Keep the lowest-rowid row
+        // per block_id and drop the rest. Runs every open, cheap when
+        // there's nothing to clean (DELETE … WHERE rowid IN (empty)).
+        let dropped = conn.execute(
+            r#"
+            DELETE FROM blocks_fts
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid) FROM blocks_fts GROUP BY block_id
+            )
+            "#,
+            [],
+        )?;
+        if dropped > 0 {
+            tracing::info!(dropped, "removed duplicate rows from blocks_fts");
+        }
+
         Ok(())
     }
 
