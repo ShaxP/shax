@@ -275,6 +275,14 @@ export interface SearchOptions {
   status?: SearchStatus;
   /** Lower bound on `started_at_ms` (inclusive). Omit to skip. */
   since_ms?: number;
+  /**
+   * Narrow on the exact cwd the block ran in. The slice-3.3 "Here"
+   * chip passes the active pane's cwd verbatim. Free-form / glob
+   * filtering is a deferred M3 follow-up.
+   */
+  cwd?: string;
+  /** Narrow on the exact git branch the block ran on. */
+  git_branch?: string;
 }
 
 /**

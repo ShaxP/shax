@@ -29,6 +29,17 @@ export interface SearchOverlayProps {
   onClose: () => void;
   /** Caller routes the chosen hit (jump to pane vs. open viewer modal). */
   onSelect: (hit: SearchHit) => void;
+  /**
+   * Active pane's working directory at the time the overlay opened.
+   * Drives the cwd chip's "Here" option. `null` means the pane never
+   * reported a cwd, in which case the chip stays "Any" only.
+   */
+  currentCwd?: string | null;
+  /**
+   * Active pane's git branch at the time the overlay opened. Same
+   * semantics as `currentCwd` for the branch chip.
+   */
+  currentBranch?: string | null;
 }
 
 const DEBOUNCE_MS = 150;
@@ -259,6 +270,18 @@ const MARK_STYLE: CSSProperties = {
   borderRadius: 2,
 };
 
+/**
+ * Last path segment of a POSIX-ish path. Used to compress the cwd chip's
+ * "Here · …" label so a deep nesting doesn't blow out the chip width.
+ * Trailing slashes are tolerated. Pure UI helper; the actual filter
+ * passed to the backend is the full path.
+ */
+function basename(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1) || "/";
+}
+
 function statusGlyph(b: SearchHit["block"]): string {
   if (b.aborted) return "·";
   if (b.exit_code === null) return "…";
@@ -269,6 +292,65 @@ function statusColor(b: SearchHit["block"]): string {
   if (b.aborted) return "var(--fg-faint)";
   if (b.exit_code === null) return "var(--accent)";
   return b.exit_code === 0 ? "var(--green)" : "var(--red)";
+}
+
+/**
+ * Highlight every occurrence of every query token inside the command
+ * string. We don't get a backend snippet for the command line — the
+ * FTS5 `snippet()` call targets the output column — so the frontend
+ * does its own pass. Tokens are split on whitespace; trailing `*`
+ * (FTS prefix wildcard) and surrounding quotes are stripped so the
+ * highlight matches what the index matched. Case-insensitive, with
+ * overlapping ranges merged so we never emit nested `<mark>`s. Empty
+ * query short-circuits to the raw string.
+ */
+function highlightCommand(command: string, query: string): ReactNode {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return command;
+  const tokens = trimmed
+    .replace(/"([^"]+)"/g, "$1")
+    .split(/\s+/)
+    .map((t) => t.replace(/\*+$/, ""))
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return command;
+  const lower = command.toLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const tok of tokens) {
+    const needle = tok.toLowerCase();
+    if (needle.length === 0) continue;
+    let from = 0;
+    // Scan all matches for this token; bail if `indexOf` returns -1.
+    while (true) {
+      const idx = lower.indexOf(needle, from);
+      if (idx === -1) break;
+      ranges.push([idx, idx + needle.length]);
+      from = idx + needle.length;
+    }
+  }
+  if (ranges.length === 0) return command;
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && r[0] <= last[1]) {
+      last[1] = Math.max(last[1], r[1]);
+    } else {
+      merged.push([r[0], r[1]]);
+    }
+  }
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  merged.forEach(([s, e], i) => {
+    if (s > cursor) parts.push(command.slice(cursor, s));
+    parts.push(
+      <mark key={i} style={MARK_STYLE}>
+        {command.slice(s, e)}
+      </mark>,
+    );
+    cursor = e;
+  });
+  if (cursor < command.length) parts.push(command.slice(cursor));
+  return parts;
 }
 
 /**
@@ -308,10 +390,24 @@ function renderSnippet(raw: string): ReactNode {
 
 // ── component ────────────────────────────────────────────────────────────────
 
-export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.ReactElement {
+export function SearchOverlay({
+  onClose,
+  onSelect,
+  currentCwd = null,
+  currentBranch = null,
+}: SearchOverlayProps): React.ReactElement {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SearchStatus>("any");
   const [time, setTime] = useState<TimeBucket>("any");
+  // `cwd` / `branch` chips: "any" is the no-filter state; "here"
+  // resolves to `currentCwd` / `currentBranch` at search time. We
+  // store the key, not the resolved value, so the chip pill stays
+  // readable as "Here · <path>" without tying us to the actual
+  // string at render time.
+  type CwdKey = "any" | "here";
+  type BranchKey = "any" | "here";
+  const [cwd, setCwd] = useState<CwdKey>("any");
+  const [branch, setBranch] = useState<BranchKey>("any");
   const [results, setResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(0);
@@ -323,6 +419,36 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
     inputRef.current?.focus();
   }, []);
 
+  // cwd / branch chip option lists. Built per-render from the
+  // currentCwd / currentBranch props so the pill label can show the
+  // basename of the actual path / the branch name. If the active
+  // pane never reported a cwd or branch the chip is omitted entirely
+  // — a no-op pill would be more noise than help.
+  const cwdOptions: FilterOption<"any" | "here">[] = [
+    { key: "any", label: "Any directory" },
+    ...(currentCwd !== null
+      ? [
+          {
+            key: "here" as const,
+            label: `Here · ${basename(currentCwd)}`,
+            color: "var(--cyan)",
+          },
+        ]
+      : []),
+  ];
+  const branchOptions: FilterOption<"any" | "here">[] = [
+    { key: "any", label: "Any branch" },
+    ...(currentBranch !== null
+      ? [
+          {
+            key: "here" as const,
+            label: `⎇ ${currentBranch}`,
+            color: "var(--amber)",
+          },
+        ]
+      : []),
+  ];
+
   // Debounce the query so the user gets snappy keystrokes without the
   // SQLite mutex thrashing on every letter. Filter changes are also
   // deps so toggling a chip refreshes the results. An empty query
@@ -331,7 +457,17 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
   // without a text query.
   useEffect(() => {
     const trimmed = query.trim();
-    const hasFilter = status !== "any" || time !== "any";
+    // "Here" resolves at search time. If the chip is on "here" but the
+    // pane reported no cwd / branch, the chip behaves as "any" rather
+    // than silently filtering against an empty string (which would
+    // match nothing).
+    const resolvedCwd = cwd === "here" ? (currentCwd ?? undefined) : undefined;
+    const resolvedBranch = branch === "here" ? (currentBranch ?? undefined) : undefined;
+    const hasFilter =
+      status !== "any" ||
+      time !== "any" ||
+      resolvedCwd !== undefined ||
+      resolvedBranch !== undefined;
     if (trimmed === "" && !hasFilter) {
       setResults([]);
       setLoading(false);
@@ -346,6 +482,8 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
         offset: 0,
         status,
         since_ms: since,
+        cwd: resolvedCwd,
+        git_branch: resolvedBranch,
       }).then((hits) => {
         setResults(hits);
         setSelected(0);
@@ -353,7 +491,7 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
       });
     }, DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [query, status, time]);
+  }, [query, status, time, cwd, branch, currentCwd, currentBranch]);
 
   // Keyboard handling — scoped to the window while the overlay is up.
   // Refs let the listener observe the latest results/selected without
@@ -463,6 +601,24 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
             value={time}
             onChange={setTime}
           />
+          {currentCwd !== null && (
+            <FilterDropdown
+              testId="search-chip-cwd"
+              options={cwdOptions}
+              neutralKey="any"
+              value={cwd}
+              onChange={setCwd}
+            />
+          )}
+          {currentBranch !== null && (
+            <FilterDropdown
+              testId="search-chip-branch"
+              options={branchOptions}
+              neutralKey="any"
+              value={branch}
+              onChange={setBranch}
+            />
+          )}
         </div>
         <div style={STATUS_ROW} data-testid="search-status">
           {showHint && "Type to search across commands and output"}
@@ -482,6 +638,7 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
               hit={hit}
               index={i}
               selected={i === selected}
+              query={query}
               onHover={() => setSelected(i)}
               onSelect={() => onSelect(hit)}
             />
@@ -656,6 +813,8 @@ interface SearchResultRowProps {
   hit: SearchHit;
   index: number;
   selected: boolean;
+  /** Current query text, used to highlight matches in the command line. */
+  query: string;
   onHover: () => void;
   onSelect: () => void;
 }
@@ -664,6 +823,7 @@ function SearchResultRow({
   hit,
   index,
   selected,
+  query,
   onHover,
   onSelect,
 }: SearchResultRowProps): React.ReactElement {
@@ -686,7 +846,9 @@ function SearchResultRow({
     >
       <div style={COMMAND_LINE}>
         <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
-        <span style={COMMAND_TEXT}>{block.command ?? "(no command)"}</span>
+        <span style={COMMAND_TEXT}>
+          {block.command !== null ? highlightCommand(block.command, query) : "(no command)"}
+        </span>
         <span
           style={{ ...TIMESTAMP, display: "inline-flex", alignItems: "center", gap: 4 }}
           title={new Date(block.started_at_ms).toLocaleString()}
