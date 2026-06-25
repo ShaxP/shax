@@ -30,7 +30,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { spawnPty, writePty, resizePty, killPty, listBlocks, base64Decode } from "../lib/ipc";
-import type { PtyId, PtyEvent } from "../lib/ipc";
+import type { BlockId, PtyId, PtyEvent } from "../lib/ipc";
+import type { UiBlock } from "./blockReducer";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
 import { PromptStrip } from "./PromptStrip";
@@ -42,6 +43,13 @@ function isTauriContext(): boolean {
 }
 
 export interface TerminalPaneProps {
+  /**
+   * Stable id by which the parent (App, via LayoutRender) addresses
+   * this pane. The pane uses it to filter window-level "send this
+   * block to a specific pane" events (the search overlay's jump and
+   * inspect paths).
+   */
+  paneId?: string;
   /**
    * True when this pane is the currently-visible tab. The pane uses this
    * to decide whether to claim focus on mount / on alt-screen toggle, and
@@ -71,6 +79,7 @@ export interface TerminalPaneProps {
 }
 
 function TerminalPaneInner({
+  paneId,
   active = true,
   onMetaChange,
   onAltScreenChange,
@@ -114,6 +123,33 @@ function TerminalPaneInner({
   useEffect(() => {
     altScreenRef.current = altScreen;
   }, [altScreen]);
+
+  // ── Search-jump events ────────────────────────────────────────────────
+  //
+  // The search overlay fires window-level events to tell *a specific*
+  // pane to either select an existing block (`shax:select-block`) or
+  // inspect a historical one (`shax:inspect-block`). Every TerminalPane
+  // listens; only the one whose `paneId` matches the event's detail
+  // routes the action to its block reducer.
+  useEffect(() => {
+    if (paneId === undefined) return;
+    const onSelect = (e: Event): void => {
+      const detail = (e as CustomEvent<{ paneId: string; blockId: BlockId }>).detail;
+      if (detail?.paneId !== paneId) return;
+      dispatch({ type: "select_block", id: detail.blockId });
+    };
+    const onInspect = (e: Event): void => {
+      const detail = (e as CustomEvent<{ paneId: string; block: UiBlock }>).detail;
+      if (detail?.paneId !== paneId) return;
+      dispatch({ type: "inspect_block", block: detail.block });
+    };
+    window.addEventListener("shax:select-block", onSelect);
+    window.addEventListener("shax:inspect-block", onInspect);
+    return () => {
+      window.removeEventListener("shax:select-block", onSelect);
+      window.removeEventListener("shax:inspect-block", onInspect);
+    };
+  }, [paneId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -475,7 +511,13 @@ function TerminalPaneInner({
             zIndex: 1,
           }}
         >
-          <BlockList pty={ptyId} blocks={blockState.blocks} liveOutputs={blockState.liveOutputs} />
+          <BlockList
+            pty={ptyId}
+            blocks={blockState.blocks}
+            liveOutputs={blockState.liveOutputs}
+            selectedBlockId={blockState.selectedBlockId}
+            inspectedBlock={blockState.inspectedBlock}
+          />
         </div>
         {exitedCode !== null && (
           <div

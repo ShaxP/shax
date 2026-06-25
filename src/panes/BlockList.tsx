@@ -8,9 +8,14 @@
  * Layout is a simple vertical scroll. Empty state shows a friendly hint that
  * blocks will appear as commands run. The full block-first layout from the
  * design lands at M4/M5 once formatters exist.
+ *
+ * An optional `inspectedBlock` is shown above the live list with a "from
+ * history" tag — that's how search results from previous sessions land in
+ * the current pane (slice 3.2). `selectedBlockId` drives the per-row
+ * selection border that follows a search jump.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -30,6 +35,13 @@ export interface BlockListProps {
   liveOutputs?: Map<BlockId, Uint8Array>;
   /** Injected for tests; defaults to the real IPC client. */
   getOutput?: (pty: PtyId, blockId: string) => Promise<Uint8Array>;
+  /** Drives the per-row selection border (search-jump highlight). */
+  selectedBlockId?: BlockId | null;
+  /**
+   * Historical block surfaced via search when no live pane carries it.
+   * Rendered above the live list with a "from history" tag.
+   */
+  inspectedBlock?: UiBlock | null;
 }
 
 export function BlockList({
@@ -37,19 +49,13 @@ export function BlockList({
   blocks,
   liveOutputs,
   getOutput = getBlockOutput,
+  selectedBlockId = null,
+  inspectedBlock = null,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
-  // visible. We re-scroll on any block-state change:
-  //  - new block appended (length grows),
-  //  - running block completes (status / duration / "interactive session"
-  //    label appears → row height changes),
-  //  - chunk streamed into a block (liveOutputs identity bumped).
-  // Watching the `blocks` reference (not just `length`) catches the
-  // completion case — including the one where an interactive block
-  // finishes and the `liveOutputs` map didn't change during alt-screen,
-  // so the old `[length, liveOutputs]` deps would have missed it.
-  // `useLayoutEffect` runs after the DOM update but before paint, so the
-  // user never sees the list at the wrong scroll position.
+  // visible. Watching the `blocks` reference catches new blocks, completion
+  // updates, and streamed chunks alike — every reducer transition that
+  // touches a block returns a fresh array.
   // Known limitation: this always scrolls, so a user who has scrolled up
   // mid-stream to read earlier output will be pulled back to the bottom on
   // the next chunk. A "scroll-lock" affordance is a polish item for later.
@@ -60,36 +66,20 @@ export function BlockList({
     el.scrollTop = el.scrollHeight;
   }, [blocks, liveOutputs]);
 
-  // Jump-to-block flash. Dispatched by App when a search result is
-  // routed to a still-alive pane: scroll the matching row into view
-  // and pulse it briefly so the user sees *which* block matched
-  // instead of landing in a long list and scanning. Every BlockList
-  // across the app listens; only the one with that block id reacts.
-  const [flashedBlockId, setFlashedBlockId] = useState<BlockId | null>(null);
-  useEffect(() => {
-    const handler = (e: Event): void => {
-      const detail = (e as CustomEvent<{ blockId: BlockId }>).detail;
-      const id = detail?.blockId;
-      if (id === undefined) return;
-      const el = scrollRef.current?.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
-      if (el === undefined || el === null) return;
-      if (typeof el.scrollIntoView === "function") {
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-      setFlashedBlockId(id);
-    };
-    window.addEventListener("shax:flash-block", handler);
-    return () => window.removeEventListener("shax:flash-block", handler);
-  }, []);
-
-  // Self-clearing pulse: hold the flash for 1.5 s then reset, which
-  // lets the BlockRow's `transition` animate the highlight back to
-  // its resting state.
-  useEffect(() => {
-    if (flashedBlockId === null) return;
-    const t = setTimeout(() => setFlashedBlockId(null), 1500);
-    return () => clearTimeout(t);
-  }, [flashedBlockId]);
+  // Whenever the selection moves (search jump), scroll the selected row
+  // into view. `block: "center"` keeps the row near the middle so the
+  // border-with-rounded-corners highlight reads clearly even for blocks
+  // that would otherwise sit at the very top or bottom.
+  useLayoutEffect(() => {
+    if (selectedBlockId === null) return;
+    const list = scrollRef.current;
+    if (list === null) return;
+    const row = list.querySelector<HTMLElement>(`[data-block-id="${selectedBlockId}"]`);
+    if (row === null) return;
+    if (typeof row.scrollIntoView === "function") {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [selectedBlockId]);
 
   return (
     <aside
@@ -116,34 +106,61 @@ export function BlockList({
       >
         blocks · {blocks.length}
       </header>
-      {blocks.length === 0 ? (
-        <div
-          data-testid="block-list-empty"
-          style={{
-            padding: 16,
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "var(--fg-faint)",
-          }}
-        >
-          Run a command to see it captured here.
-        </div>
-      ) : (
-        // pty is set together with the first block; once we have blocks we
-        // always have a pty id, so the non-null assertion is sound.
-        blocks.map((block) =>
-          pty === null ? null : (
+      {inspectedBlock !== null && (
+        <div data-testid="block-list-inspected">
+          <div
+            style={{
+              padding: "6px 12px",
+              fontSize: 10,
+              color: "var(--fg-faint)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              background: "var(--surface)",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            from history
+          </div>
+          {pty !== null && (
             <BlockRow
-              key={block.id}
+              key={`inspected-${inspectedBlock.id}`}
               pty={pty}
-              block={block}
-              liveOutput={liveOutputs?.get(block.id)}
+              block={inspectedBlock}
+              liveOutput={liveOutputs?.get(inspectedBlock.id)}
               getOutput={getOutput}
-              flashed={block.id === flashedBlockId}
+              selected={inspectedBlock.id === selectedBlockId}
             />
-          ),
-        )
+          )}
+        </div>
       )}
+      {blocks.length === 0
+        ? inspectedBlock === null && (
+            <div
+              data-testid="block-list-empty"
+              style={{
+                padding: 16,
+                fontFamily: "var(--font-mono)",
+                fontSize: 12,
+                color: "var(--fg-faint)",
+              }}
+            >
+              Run a command to see it captured here.
+            </div>
+          )
+        : // pty is set together with the first block; once we have blocks we
+          // always have a pty id, so the non-null assertion is sound.
+          blocks.map((block) =>
+            pty === null ? null : (
+              <BlockRow
+                key={block.id}
+                pty={pty}
+                block={block}
+                liveOutput={liveOutputs?.get(block.id)}
+                getOutput={getOutput}
+                selected={block.id === selectedBlockId}
+              />
+            ),
+          )}
     </aside>
   );
 }

@@ -201,6 +201,7 @@ function PaneLeafInner({
       onPointerDown={handleFocus}
     >
       <TerminalPane
+        paneId={paneId}
         active={tabActive && isFocused}
         onMetaChange={handleMeta}
         onAltScreenChange={handleAltScreen}

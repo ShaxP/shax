@@ -114,11 +114,12 @@ export interface BlockRowProps {
   /** Injected for tests; defaults to Date.now. */
   now?: () => number;
   /**
-   * Briefly tint the row when set true (driven by the search overlay's
-   * "jump to this block" path). The BlockList holds the timer; this
-   * prop is its broadcast.
+   * Draws a subtle accent border with rounded corners around the row
+   * — used by the search overlay's jump-to-block path to point the
+   * user at the row that just matched. The BlockList owns the
+   * selection state.
    */
-  flashed?: boolean;
+  selected?: boolean;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -277,7 +278,7 @@ function BlockRowInner({
   liveOutput,
   getOutput,
   now = Date.now,
-  flashed = false,
+  selected = false,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -340,13 +341,21 @@ function BlockRowInner({
     void navigator.clipboard.writeText(block.command).catch(() => undefined);
   };
 
-  // When `flashed` is on, paint a soft accent overlay via `box-shadow
-  // inset` — doesn't fight the row's background or any hover styles,
-  // and the CSS transition (BlockRow.css) animates it back to
-  // resting state when the flash flips off.
-  const flashStyle: React.CSSProperties = flashed
-    ? { boxShadow: "inset 0 0 0 9999px var(--accent-soft)" }
-    : { boxShadow: "inset 0 0 0 0 transparent" };
+  // Selection ring — drawn via an inset box-shadow so it doesn't
+  // displace the row layout (no extra width from a CSS border). 1.5
+  // px keeps it subtle; `border-radius` rounds the corners so the
+  // selection reads as a discrete handle rather than a banner. The
+  // resting state holds a transparent shadow so React's transition
+  // animates the colour change rather than fading in from nothing.
+  const selectionStyle: React.CSSProperties = selected
+    ? {
+        boxShadow: "inset 0 0 0 1.5px var(--accent)",
+        borderRadius: "var(--radius)",
+      }
+    : {
+        boxShadow: "inset 0 0 0 1.5px transparent",
+        borderRadius: "var(--radius)",
+      };
 
   return (
     <div
@@ -354,8 +363,8 @@ function BlockRowInner({
       data-testid="block-row"
       data-block-id={block.id}
       data-status={status}
-      data-flashed={flashed ? "true" : "false"}
-      style={{ ...ROW, ...flashStyle, transition: "box-shadow 0.6s ease-out" }}
+      data-selected={selected ? "true" : "false"}
+      style={{ ...ROW, ...selectionStyle, transition: "box-shadow 0.2s ease-out" }}
     >
       <div
         data-testid="block-edge"

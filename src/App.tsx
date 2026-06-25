@@ -36,8 +36,6 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
-import { BlockViewerModal } from "./panes/BlockViewerModal";
-import type { BlockSummary } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
@@ -420,10 +418,9 @@ export default function App(): React.ReactElement {
   const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
   const { tabs, activeId } = state;
 
-  // Search + viewer overlays. Top-level so the keybindings can open them
-  // regardless of which pane currently owns focus.
+  // Search overlay. Top-level so the keybindings can open it regardless
+  // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
-  const [viewerBlock, setViewerBlock] = useState<BlockSummary | null>(null);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -649,40 +646,51 @@ export default function App(): React.ReactElement {
             refocusActivePane();
           }}
           onSelect={(hit) => {
-            // Jump to the originating pane when it's still alive in this
-            // session: scan every tab for a pane whose backend ptyId
-            // matches the search hit's pane_id, then switch to it. If
-            // we don't find one (the pane was closed, or the hit comes
-            // from a previous session), fall back to the read-only
-            // viewer modal so the user can still inspect the block.
+            // Search hand-off rule (slice 3.2 polish):
+            //
+            //   1. Live pane exists for this block (its PTY is still in
+            //      this session) → switch tabs + focus that pane, then
+            //      tell it to select the matching block row.
+            //   2. No live pane (block from a previous session, or its
+            //      pane was closed) → surface the block in the *current
+            //      active* pane via the `inspect_block` reducer action,
+            //      tagged "from history". Same selection treatment.
+            //
+            // Either way the user lands in a pane with the matched
+            // block visible and selected — no separate viewer modal.
             setSearchOpen(false);
-            const target = findPaneByPtyId(state.tabs, hit.pane_id);
-            if (target !== null) {
+            const live = findPaneByPtyId(state.tabs, hit.pane_id);
+            const target =
+              live ??
+              (() => {
+                const tab = state.tabs.find((t) => t.id === state.activeId);
+                if (tab === undefined) return null;
+                return { tabId: tab.id, paneId: tab.focusedPaneId };
+              })();
+            if (target === null) return;
+            if (target.tabId !== state.activeId) {
               dispatch({ type: "switch_tab", id: target.tabId });
-              dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
-              refocusActivePane();
-              // Defer one tick so the tab/pane switch commits before we
-              // ask the (now-visible) BlockList to scroll + flash the
-              // matching row. Without the defer, the event fires while
-              // the target pane is still hidden and scrollIntoView is
-              // a no-op.
-              setTimeout(() => {
-                window.dispatchEvent(
-                  new CustomEvent("shax:flash-block", { detail: { blockId: hit.block.id } }),
-                );
-              }, 0);
-              return;
             }
-            setViewerBlock(hit.block);
-          }}
-        />
-      )}
-      {viewerBlock !== null && (
-        <BlockViewerModal
-          block={viewerBlock}
-          onClose={() => {
-            setViewerBlock(null);
+            dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
             refocusActivePane();
+            // Defer one tick so the tab/pane switch commits before we
+            // ask the (now-visible) BlockList to scroll + select. The
+            // listeners live in the matching TerminalPane.
+            setTimeout(() => {
+              if (live !== null) {
+                window.dispatchEvent(
+                  new CustomEvent("shax:select-block", {
+                    detail: { paneId: target.paneId, blockId: hit.block.id },
+                  }),
+                );
+              } else {
+                window.dispatchEvent(
+                  new CustomEvent("shax:inspect-block", {
+                    detail: { paneId: target.paneId, block: hit.block },
+                  }),
+                );
+              }
+            }, 0);
           }}
         />
       )}

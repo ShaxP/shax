@@ -616,58 +616,80 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     expect(screen.getByTestId("search-overlay")).toBeInTheDocument();
   });
 
-  it("↑ / ↓ moves the selection and Enter activates the focused row", async () => {
+  it("↑ / ↓ moves the selection and Enter dispatches the jump path", async () => {
     mockSearchBlocks.mockResolvedValueOnce([
       makeHit({ id: "blk-a", command: "alpha" }),
       makeHit({ id: "blk-b", command: "beta" }),
       makeHit({ id: "blk-c", command: "gamma" }),
     ]);
-    mockBlockGetOutput.mockResolvedValueOnce(new Uint8Array());
-    render(<App />);
-    act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
-    });
-    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "a" } });
-    await vi.waitFor(() => {
-      expect(screen.getAllByTestId("search-result")).toHaveLength(3);
-    });
-    const rows = () => screen.getAllByTestId("search-result");
-    expect(rows()[0]).toHaveAttribute("data-selected", "true");
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowDown" });
-    });
-    expect(rows()[1]).toHaveAttribute("data-selected", "true");
-    act(() => {
-      fireEvent.keyDown(window, { key: "Enter" });
-    });
-    expect(screen.queryByTestId("search-overlay")).toBeNull();
-    // The "beta" row was the selected one — its block opens in the viewer.
-    expect(screen.getByTestId("block-viewer-modal")).toBeInTheDocument();
+    const events: CustomEvent[] = [];
+    const recorder = (e: Event): void => {
+      events.push(e as CustomEvent);
+    };
+    window.addEventListener("shax:inspect-block", recorder);
+    window.addEventListener("shax:select-block", recorder);
+    try {
+      render(<App />);
+      act(() => {
+        fireEvent.keyDown(window, { key: "k", metaKey: true });
+      });
+      fireEvent.change(screen.getByTestId("search-input"), { target: { value: "a" } });
+      await vi.waitFor(() => {
+        expect(screen.getAllByTestId("search-result")).toHaveLength(3);
+      });
+      const rows = () => screen.getAllByTestId("search-result");
+      expect(rows()[0]).toHaveAttribute("data-selected", "true");
+      act(() => {
+        fireEvent.keyDown(window, { key: "ArrowDown" });
+      });
+      expect(rows()[1]).toHaveAttribute("data-selected", "true");
+      act(() => {
+        fireEvent.keyDown(window, { key: "Enter" });
+      });
+      expect(screen.queryByTestId("search-overlay")).toBeNull();
+      await vi.waitFor(() => {
+        // No live pane matches `makeHit`'s default pane_id (it's a
+        // random UUID, not any spawned pty), so the jump path takes
+        // the "inspect in active pane" branch.
+        expect(events.some((e) => e.type === "shax:inspect-block")).toBe(true);
+      });
+    } finally {
+      window.removeEventListener("shax:inspect-block", recorder);
+      window.removeEventListener("shax:select-block", recorder);
+    }
   });
 
-  it("clicking a result opens the block viewer when the pane is not in this session", async () => {
+  it("a search hit with no live pane fires shax:inspect-block on the active pane", async () => {
     mockSearchBlocks.mockResolvedValueOnce([
-      // Pane id that no live pane in this fresh App will ever match.
       makeHit({
         id: "blk-2",
         command: "echo hi",
         pane_id: "deadbeef-dead-beef-dead-beefdeadbeef",
       }),
     ]);
-    mockBlockGetOutput.mockResolvedValueOnce(new TextEncoder().encode("hi\n"));
-    render(<App />);
-    act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
-    });
-    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "echo" } });
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("search-result")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId("search-result"));
-    expect(screen.queryByTestId("search-overlay")).toBeNull();
-    expect(screen.getByTestId("block-viewer-modal")).toBeInTheDocument();
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("block-viewer-output")).toHaveTextContent("hi");
-    });
+    const events: CustomEvent[] = [];
+    const recorder = (e: Event): void => {
+      events.push(e as CustomEvent);
+    };
+    window.addEventListener("shax:inspect-block", recorder);
+    try {
+      render(<App />);
+      act(() => {
+        fireEvent.keyDown(window, { key: "k", metaKey: true });
+      });
+      fireEvent.change(screen.getByTestId("search-input"), { target: { value: "echo" } });
+      await vi.waitFor(() => {
+        expect(screen.getByTestId("search-result")).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId("search-result"));
+      expect(screen.queryByTestId("search-overlay")).toBeNull();
+      await vi.waitFor(() => {
+        expect(events.length).toBeGreaterThan(0);
+      });
+      const detail = events[0]?.detail as { block?: { command: string } } | undefined;
+      expect(detail?.block?.command).toBe("echo hi");
+    } finally {
+      window.removeEventListener("shax:inspect-block", recorder);
+    }
   });
 });

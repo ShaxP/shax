@@ -47,6 +47,8 @@ describe("blockReducer / seed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const fresh = [makeBlock({ id: "new" })];
     const next = blockReducer(existing, { type: "seed", blocks: fresh });
@@ -59,6 +61,8 @@ describe("blockReducer / seed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     blockReducer(prev, { type: "seed", blocks: [makeBlock()] });
     expect(prev.blocks).toHaveLength(0);
@@ -120,6 +124,8 @@ describe("blockReducer / started", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "started",
@@ -160,6 +166,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -195,6 +203,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -219,6 +229,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -241,6 +253,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -265,6 +279,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const blocksBefore = state.blocks;
     blockReducer(state, {
@@ -294,6 +310,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -322,6 +340,8 @@ describe("blockReducer / completed", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "completed",
@@ -355,6 +375,8 @@ describe("blockReducer / alt_screen", () => {
       altScreen: true,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "alt_screen", active: false });
     expect(next.altScreen).toBe(false);
@@ -366,6 +388,8 @@ describe("blockReducer / alt_screen", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
     expect(next.blocks).toHaveLength(1);
@@ -380,6 +404,8 @@ describe("blockReducer / alt_screen", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
     expect(next.blocks[0]?.interactive).toBe(true);
@@ -394,6 +420,8 @@ describe("blockReducer / alt_screen", () => {
       altScreen: false,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "alt_screen", active: true });
     expect(next.blocks[0]?.interactive).toBe(false);
@@ -408,6 +436,8 @@ describe("blockReducer / alt_screen", () => {
       altScreen: true,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "alt_screen", active: false });
     expect(next.altScreen).toBe(false);
@@ -432,6 +462,8 @@ describe("blockReducer / block_chunk", () => {
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "block_chunk",
@@ -451,6 +483,8 @@ describe("blockReducer / block_chunk", () => {
         ["b", otherBytes],
       ]),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "block_chunk",
@@ -470,6 +504,8 @@ describe("blockReducer / block_chunk", () => {
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1])]]),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     blockReducer(state, { type: "block_chunk", id: "a", bytes: new Uint8Array([2]) });
     expect(state.liveOutputs.get("a")).toEqual(new Uint8Array([1]));
@@ -487,6 +523,8 @@ describe("blockReducer / block_chunk", () => {
       altScreen: true,
       liveOutputs: new Map(),
       promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, {
       type: "block_chunk",
@@ -553,6 +591,8 @@ describe("blockReducer / reset", () => {
       altScreen: true,
       liveOutputs: new Map([["stale", new Uint8Array([1, 2, 3])]]),
       promptLine: { text: "old", styled: [], cursor: 3, currentStyled: false },
+      selectedBlockId: null,
+      inspectedBlock: null,
     };
     const next = blockReducer(state, { type: "reset" });
     expect(next).toBe(initialBlockState);
