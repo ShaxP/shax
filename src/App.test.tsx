@@ -471,11 +471,11 @@ describe("App / persistence", () => {
 });
 
 describe("App / search overlay (M3 slice 3.1)", () => {
-  it("⌘K opens the search overlay; Esc closes it", () => {
+  it("⌘F opens the search overlay; Esc closes it", () => {
     render(<App />);
     expect(screen.queryByTestId("search-overlay")).toBeNull();
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     expect(screen.getByTestId("search-overlay")).toBeInTheDocument();
     expect(screen.getByTestId("search-input")).toBeInTheDocument();
@@ -521,7 +521,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     mockSearchBlocks.mockResolvedValueOnce([makeHit()]);
     render(<App />);
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     const input = screen.getByTestId("search-input");
     fireEvent.change(input, { target: { value: "kubectl" } });
@@ -540,7 +540,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     ]);
     render(<App />);
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     fireEvent.change(screen.getByTestId("search-input"), { target: { value: "panic" } });
     await vi.waitFor(() => {
@@ -558,7 +558,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     ]);
     render(<App />);
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     // Don't type anything; open the status dropdown and pick "Failed".
     fireEvent.click(screen.getByTestId("search-chip-status"));
@@ -579,7 +579,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     mockSearchBlocks.mockResolvedValue([]);
     render(<App />);
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     fireEvent.change(screen.getByTestId("search-input"), { target: { value: "x" } });
     await vi.waitFor(() => {
@@ -604,7 +604,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     mockSearchBlocks.mockResolvedValue([]);
     render(<App />);
     act(() => {
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
     });
     fireEvent.click(screen.getByTestId("search-chip-status"));
     expect(screen.getByTestId("search-chip-status-popover")).toBeInTheDocument();
@@ -631,7 +631,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     try {
       render(<App />);
       act(() => {
-        fireEvent.keyDown(window, { key: "k", metaKey: true });
+        fireEvent.keyDown(window, { key: "f", metaKey: true });
       });
       fireEvent.change(screen.getByTestId("search-input"), { target: { value: "a" } });
       await vi.waitFor(() => {
@@ -675,7 +675,7 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     try {
       render(<App />);
       act(() => {
-        fireEvent.keyDown(window, { key: "k", metaKey: true });
+        fireEvent.keyDown(window, { key: "f", metaKey: true });
       });
       fireEvent.change(screen.getByTestId("search-input"), { target: { value: "echo" } });
       await vi.waitFor(() => {

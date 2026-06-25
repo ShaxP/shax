@@ -519,9 +519,13 @@ export default function App(): React.ReactElement {
         dispatch({ type: "add_tab" });
         return;
       }
-      if (e.key === "k" || e.key === "K") {
-        // ⌘K opens the search overlay over the active tab. The overlay
-        // owns its own Esc handler for closing.
+      if (e.key === "f" || e.key === "F") {
+        // ⌘F opens the search overlay. (⌘K stays reserved for the
+        // assistant — see `specs/09-ai-assistant-and-auth.md`.) The
+        // listener is registered in the *capture* phase below so we
+        // see the keystroke before xterm's textarea translates it
+        // into `^F` (readline forward-char) and writes a byte to
+        // the PTY.
         e.preventDefault();
         setSearchOpen(true);
         return;
@@ -561,8 +565,14 @@ export default function App(): React.ReactElement {
         return;
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    // Capture-phase so this handler runs before the focused xterm
+    // textarea's own keydown listener — needed for ⌘F, which xterm
+    // would otherwise translate to a `^F` byte and write to the PTY
+    // before we get a chance to `preventDefault`. The other bindings
+    // (⌘T, ⌘W, ⌘D, …) don't strictly need capture phase but ride
+    // along for symmetry.
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, []);
 
   const titleTabs: TabDescriptor[] = useMemo(
