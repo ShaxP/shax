@@ -249,9 +249,21 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
     case "reset":
       return initialBlockState;
 
-    case "select_block":
-      if (state.selectedBlockId === action.id) return state;
-      return { ...state, selectedBlockId: action.id };
+    case "select_block": {
+      // If the new selection matches the currently-inspected block, drop
+      // the inspected helper — keeping it would render the same row twice
+      // (top via inspect, middle via blocks[]) with both selected.
+      const stale =
+        state.inspectedBlock !== null &&
+        action.id !== null &&
+        state.inspectedBlock.id === action.id;
+      if (state.selectedBlockId === action.id && !stale) return state;
+      return {
+        ...state,
+        selectedBlockId: action.id,
+        inspectedBlock: stale ? null : state.inspectedBlock,
+      };
+    }
 
     case "inspect_block":
       // Replace any previously-inspected block; the new one becomes the

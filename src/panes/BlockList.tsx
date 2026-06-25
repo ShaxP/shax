@@ -109,7 +109,7 @@ export function BlockList({
       >
         blocks · {blocks.length}
       </header>
-      {inspectedBlock !== null && (
+      {inspectedBlock !== null && !blocks.some((b) => b.id === inspectedBlock.id) && (
         <div data-testid="block-list-inspected">
           <div
             style={{
