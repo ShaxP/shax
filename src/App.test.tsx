@@ -485,21 +485,40 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     expect(screen.queryByTestId("search-overlay")).toBeNull();
   });
 
-  it("typing a query calls searchBlocks (debounced) and renders results", async () => {
-    mockSearchBlocks.mockResolvedValueOnce([
-      {
-        id: "blk-1",
-        command: "kubectl get pods",
-        cwd: "/home/me",
-        git_branch: "main",
+  // Build a SearchHit with sensible defaults so the per-test fixtures stay short.
+  function makeHit(
+    overrides: {
+      id?: string;
+      command?: string | null;
+      pane_id?: string;
+      snippet?: string | null;
+      interactive?: boolean;
+      exit_code?: number;
+      aborted?: boolean;
+      cwd?: string | null;
+      git_branch?: string | null;
+    } = {},
+  ): unknown {
+    return {
+      block: {
+        id: overrides.id ?? "blk-1",
+        command: overrides.command ?? "kubectl get pods",
+        cwd: overrides.cwd ?? "/home/me",
+        git_branch: overrides.git_branch ?? "main",
         started_at_ms: 1000,
         ended_at_ms: 1500,
-        exit_code: 0,
+        exit_code: overrides.exit_code ?? 0,
         duration_ms: 500,
-        aborted: false,
-        interactive: false,
+        aborted: overrides.aborted ?? false,
+        interactive: overrides.interactive ?? false,
       },
-    ]);
+      pane_id: overrides.pane_id ?? "11111111-1111-1111-1111-111111111111",
+      snippet: overrides.snippet ?? null,
+    };
+  }
+
+  it("typing a query calls searchBlocks (debounced) and renders results", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([makeHit()]);
     render(<App />);
     act(() => {
       fireEvent.keyDown(window, { key: "k", metaKey: true });
@@ -515,28 +534,88 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     expect(screen.getByTestId("search-result")).toHaveTextContent("kubectl get pods");
   });
 
-  it("clicking a result closes the overlay and opens the block viewer", async () => {
+  it("renders the matched-output snippet with <mark> highlights", async () => {
     mockSearchBlocks.mockResolvedValueOnce([
-      {
+      makeHit({ command: "cat err.log", snippet: "before <mark>panic</mark> after" }),
+    ]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "panic" } });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("search-result-snippet")).toBeInTheDocument();
+    });
+    const snippet = screen.getByTestId("search-result-snippet");
+    expect(snippet).toHaveTextContent("before");
+    expect(snippet).toHaveTextContent("panic");
+    expect(snippet.querySelector("mark")?.textContent).toBe("panic");
+  });
+
+  it("cycles the status chip and propagates it to searchBlocks", async () => {
+    mockSearchBlocks.mockResolvedValue([]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "x" } });
+    await vi.waitFor(() => {
+      expect(mockSearchBlocks).toHaveBeenCalled();
+    });
+    // First click → Ok, second → Fail.
+    fireEvent.click(screen.getByTestId("search-chip-status"));
+    fireEvent.click(screen.getByTestId("search-chip-status"));
+    await vi.waitFor(() => {
+      const calls = mockSearchBlocks.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as { status?: string };
+      expect(last?.status).toBe("fail");
+    });
+  });
+
+  it("↑ / ↓ moves the selection and Enter activates the focused row", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([
+      makeHit({ id: "blk-a", command: "alpha" }),
+      makeHit({ id: "blk-b", command: "beta" }),
+      makeHit({ id: "blk-c", command: "gamma" }),
+    ]);
+    mockBlockGetOutput.mockResolvedValueOnce(new Uint8Array());
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "a" } });
+    await vi.waitFor(() => {
+      expect(screen.getAllByTestId("search-result")).toHaveLength(3);
+    });
+    const rows = () => screen.getAllByTestId("search-result");
+    expect(rows()[0]).toHaveAttribute("data-selected", "true");
+    act(() => {
+      fireEvent.keyDown(window, { key: "ArrowDown" });
+    });
+    expect(rows()[1]).toHaveAttribute("data-selected", "true");
+    act(() => {
+      fireEvent.keyDown(window, { key: "Enter" });
+    });
+    expect(screen.queryByTestId("search-overlay")).toBeNull();
+    // The "beta" row was the selected one — its block opens in the viewer.
+    expect(screen.getByTestId("block-viewer-modal")).toBeInTheDocument();
+  });
+
+  it("clicking a result opens the block viewer when the pane is not in this session", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([
+      // Pane id that no live pane in this fresh App will ever match.
+      makeHit({
         id: "blk-2",
         command: "echo hi",
-        cwd: null,
-        git_branch: null,
-        started_at_ms: 1,
-        ended_at_ms: 2,
-        exit_code: 0,
-        duration_ms: 1,
-        aborted: false,
-        interactive: false,
-      },
+        pane_id: "deadbeef-dead-beef-dead-beefdeadbeef",
+      }),
     ]);
     mockBlockGetOutput.mockResolvedValueOnce(new TextEncoder().encode("hi\n"));
     render(<App />);
     act(() => {
       fireEvent.keyDown(window, { key: "k", metaKey: true });
     });
-    const input = screen.getByTestId("search-input");
-    fireEvent.change(input, { target: { value: "echo" } });
+    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "echo" } });
     await vi.waitFor(() => {
       expect(screen.getByTestId("search-result")).toBeInTheDocument();
     });

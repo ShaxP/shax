@@ -61,12 +61,20 @@ export interface TerminalPaneProps {
    * App can route focus and adjust chrome accordingly.
    */
   onAltScreenChange?: (active: boolean) => void;
+  /**
+   * Notify the parent of the backend-assigned PTY id once spawn
+   * resolves. The App uses this to maintain a paneId → ptyId map so
+   * that "jump to pane" in the search overlay can route to a still-
+   * alive pane when its block was the search hit.
+   */
+  onPtyIdChange?: (ptyId: PtyId | null) => void;
 }
 
 function TerminalPaneInner({
   active = true,
   onMetaChange,
   onAltScreenChange,
+  onPtyIdChange,
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   // Held as refs so the cleanup closure always sees the live values without
@@ -296,6 +304,7 @@ function TerminalPaneInner({
   // every parent render and cause an effect → setState → render loop.
   const onMetaChangeRef = useRef(onMetaChange);
   const onAltScreenChangeRef = useRef(onAltScreenChange);
+  const onPtyIdChangeRef = useRef(onPtyIdChange);
   useEffect(() => {
     onMetaChangeRef.current = onMetaChange;
   }, [onMetaChange]);
@@ -303,11 +312,17 @@ function TerminalPaneInner({
     onAltScreenChangeRef.current = onAltScreenChange;
   }, [onAltScreenChange]);
   useEffect(() => {
+    onPtyIdChangeRef.current = onPtyIdChange;
+  }, [onPtyIdChange]);
+  useEffect(() => {
     onMetaChangeRef.current?.(cwd, branch);
   }, [cwd, branch]);
   useEffect(() => {
     onAltScreenChangeRef.current?.(altScreen);
   }, [altScreen]);
+  useEffect(() => {
+    onPtyIdChangeRef.current?.(ptyId);
+  }, [ptyId]);
 
   // Focus management. Only the active pane claims focus, so background
   // tabs don't pull keystrokes away from the user's currently-visible

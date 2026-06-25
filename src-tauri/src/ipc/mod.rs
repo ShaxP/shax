@@ -5,6 +5,7 @@
 
 pub use crate::blocks::{BlockId, BlockSummary};
 pub use crate::pty::{PtyEvent, PtyId, SpawnOpts};
+pub use crate::store::{SearchHit, SearchOptions};
 
 use crate::pty::PtyManager;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -143,24 +144,22 @@ pub async fn app_state_save(
         .map_err(|e| e.to_string())
 }
 
-/// Full-text search across all persisted block summaries. `query` is the
-/// raw FTS5 MATCH expression — multiple whitespace-separated words are
-/// AND'd implicitly; users wanting fancier syntax (`OR`, `*`, quoted
-/// phrases) can spell it out. An empty / whitespace-only query returns
-/// no rows; invalid FTS5 syntax (a half-typed `"`, …) also returns no
-/// rows rather than surfacing an error so the search overlay can show
-/// "no results" cleanly while the user keeps typing.
+/// Full-text search across all persisted block summaries. `opts.query`
+/// is the raw FTS5 MATCH expression — multiple whitespace-separated
+/// words are AND'd implicitly. Optional status / time filters compose
+/// with the FTS match. An empty / whitespace-only query, or invalid
+/// FTS5 syntax, returns no rows rather than surfacing an error so the
+/// search overlay can show "no matches" cleanly while the user keeps
+/// typing. Each hit carries the originating pane id (so the UI can
+/// jump back to a still-alive pane) and, when the match landed in
+/// output, a snippet excerpt with `<mark>` / `</mark>` markers.
 #[tauri::command]
 pub async fn search_blocks(
-    query: String,
-    limit: usize,
-    offset: usize,
+    opts: SearchOptions,
     manager: State<'_, Arc<PtyManager>>,
-) -> Result<Vec<BlockSummary>, String> {
+) -> Result<Vec<SearchHit>, String> {
     let Some(store) = manager.store() else {
         return Ok(Vec::new());
     };
-    store
-        .search(&query, limit, offset)
-        .map_err(|e| e.to_string())
+    store.search(&opts).map_err(|e| e.to_string())
 }

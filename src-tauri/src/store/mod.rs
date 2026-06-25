@@ -24,6 +24,57 @@ use crate::pty::PtyId;
 /// in M4 per `specs/05`.
 const OUTPUT_CAP_BYTES: usize = 1024 * 1024;
 
+/// Filter on the success / failure status of search results.
+///
+/// `Any` (the default) returns every block matching the query; the
+/// narrower modes mirror the status iconography the frontend already
+/// shows on a block row, so a user toggling "fail" gets exactly the
+/// rows with a non-zero, non-aborted exit code.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchStatus {
+    #[default]
+    Any,
+    Ok,
+    Fail,
+    Aborted,
+}
+
+/// Composite options for `Store::search`. Built around an FTS5 MATCH
+/// query plus optional structured filters that the frontend exposes as
+/// the chips above the search input. The Tauri command deserialises
+/// straight into this struct, so the field set on the TS side is the
+/// authoritative shape.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct SearchOptions {
+    /// The raw FTS5 MATCH expression. Empty / invalid → no results.
+    pub query: String,
+    pub limit: usize,
+    pub offset: usize,
+    /// Narrow on the block's terminal status. `Any` skips the filter.
+    #[serde(default)]
+    pub status: SearchStatus,
+    /// Lower bound on `started_at_ms` (inclusive). `None` skips the filter.
+    #[serde(default)]
+    pub since_ms: Option<u64>,
+}
+
+/// One search result: the matching block summary plus, when available,
+/// a short ANSI-marked excerpt from the indexed output ("snippet") that
+/// the UI uses to show *why* the row matched. `pane_id` carries the
+/// originating PTY id so the frontend can jump to a still-alive pane
+/// instead of opening the read-only viewer modal.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchHit {
+    pub block: BlockSummary,
+    pub pane_id: PtyId,
+    /// `None` when the match was on the command line only (output column
+    /// is empty or the query matched in `command`). HTML-safe — the
+    /// frontend escapes the surrounding text and renders `<mark>` /
+    /// `</mark>` literally as marker tokens.
+    pub snippet: Option<String>,
+}
+
 /// Cap how much of a block's stripped output we feed into the FTS5 index.
 /// 32 KiB covers the typical "where did I see that error string" case
 /// while keeping the on-disk index from ballooning — at 32 KiB per block
@@ -381,39 +432,70 @@ impl Store {
         Ok(())
     }
 
-    /// Run a full-text search across `blocks_fts` and return matching block
-    /// summaries, ranked by FTS5 BM25. `query` is passed straight to FTS5's
-    /// `MATCH` operator, so multiple whitespace-separated words are AND'd
-    /// implicitly. An empty or whitespace-only query short-circuits to an
-    /// empty result. Syntactically-invalid FTS5 queries (the user typed
-    /// half a `(`, an unterminated `"`, …) also return empty rather than
-    /// surfacing an error — the search bar reads "no results" while the
-    /// user finishes typing.
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<BlockSummary>, StoreError> {
-        let trimmed = query.trim();
+    /// Run a full-text search across `blocks_fts` and return matching
+    /// hits, ranked by FTS5 BM25. `opts.query` is the raw FTS5 MATCH
+    /// expression — whitespace-separated words are AND'd implicitly.
+    /// Status and time filters compose with the FTS match. An empty /
+    /// whitespace-only query, or syntactically-invalid FTS5 input,
+    /// short-circuits to an empty result so the search bar can read
+    /// "no matches" while the user finishes typing.
+    ///
+    /// Each hit carries the `pane_id` of the originating PTY (so the
+    /// frontend can jump back to a still-alive pane) and, when the
+    /// match landed in `output`, a `snippet()` excerpt with
+    /// `<mark>…</mark>` around the matching tokens.
+    pub fn search(&self, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
+        let trimmed = opts.query.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Compose optional filter SQL inline; each branch widens both
+        // the SQL and the named-bind list. Named binds keep the query
+        // readable as the filter set grows in slice 3.3+ (cwd, branch).
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("b.aborted = 0 AND b.exit_code = 0"),
+            SearchStatus::Fail => clauses.push("b.aborted = 0 AND b.exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("b.aborted = 1"),
+        }
+        if opts.since_ms.is_some() {
+            clauses.push("b.started_at_ms >= :since");
+        }
+
+        let mut sql = String::from(
+            r#"
+            SELECT b.id, b.pane_id, b.command, b.cwd, b.git_branch,
+                   b.started_at_ms, b.ended_at_ms, b.exit_code,
+                   b.duration_ms, b.aborted, b.interactive,
+                   snippet(blocks_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
+            FROM blocks_fts
+            JOIN blocks b ON b.id = blocks_fts.block_id
+            WHERE blocks_fts MATCH :match
+            "#,
+        );
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" ORDER BY blocks_fts.rank LIMIT :limit OFFSET :offset");
+
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let attempt = (|| -> Result<Vec<BlockSummary>, rusqlite::Error> {
-            let mut stmt = conn.prepare(
-                r#"
-                SELECT b.id, b.command, b.cwd, b.git_branch,
-                       b.started_at_ms, b.ended_at_ms, b.exit_code,
-                       b.duration_ms, b.aborted, b.interactive
-                FROM blocks_fts
-                JOIN blocks b ON b.id = blocks_fts.block_id
-                WHERE blocks_fts MATCH ?1
-                ORDER BY blocks_fts.rank
-                LIMIT ?2 OFFSET ?3
-                "#,
-            )?;
-            let rows = stmt.query_map(params![trimmed, limit as i64, offset as i64], |row| {
+        let attempt = (|| -> Result<Vec<SearchHit>, rusqlite::Error> {
+            let limit_i64 = opts.limit as i64;
+            let offset_i64 = opts.offset as i64;
+            let since_i64 = opts.since_ms.map(|v| v as i64);
+            let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> = vec![
+                (":match", &trimmed),
+                (":limit", &limit_i64),
+                (":offset", &offset_i64),
+            ];
+            if let Some(ref s) = since_i64 {
+                bind.push((":since", s));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(bind.as_slice(), |row| {
                 let id_str: String = row.get(0)?;
                 let id = BlockId::parse(&id_str).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -422,23 +504,37 @@ impl Store {
                         Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
                     )
                 })?;
-                let started_at_ms: i64 = row.get(4)?;
-                let ended_at_ms: Option<i64> = row.get(5)?;
-                let exit_code: Option<i32> = row.get(6)?;
-                let duration_ms: Option<i64> = row.get(7)?;
-                let aborted_int: i32 = row.get(8)?;
-                let interactive_int: i32 = row.get(9)?;
-                Ok(BlockSummary {
-                    id,
-                    command: row.get(1)?,
-                    cwd: row.get(2)?,
-                    git_branch: row.get(3)?,
-                    started_at_ms: started_at_ms as u64,
-                    ended_at_ms: ended_at_ms.map(|v| v as u64),
-                    exit_code,
-                    duration_ms: duration_ms.map(|v| v as u64),
-                    aborted: aborted_int != 0,
-                    interactive: interactive_int != 0,
+                let pane_id_str: String = row.get(1)?;
+                let pane_uuid = uuid::Uuid::parse_str(&pane_id_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    )
+                })?;
+                let pane_id = PtyId(pane_uuid);
+                let started_at_ms: i64 = row.get(5)?;
+                let ended_at_ms: Option<i64> = row.get(6)?;
+                let exit_code: Option<i32> = row.get(7)?;
+                let duration_ms: Option<i64> = row.get(8)?;
+                let aborted_int: i32 = row.get(9)?;
+                let interactive_int: i32 = row.get(10)?;
+                let snippet: Option<String> = row.get(11)?;
+                Ok(SearchHit {
+                    block: BlockSummary {
+                        id,
+                        command: row.get(2)?,
+                        cwd: row.get(3)?,
+                        git_branch: row.get(4)?,
+                        started_at_ms: started_at_ms as u64,
+                        ended_at_ms: ended_at_ms.map(|v| v as u64),
+                        exit_code,
+                        duration_ms: duration_ms.map(|v| v as u64),
+                        aborted: aborted_int != 0,
+                        interactive: interactive_int != 0,
+                    },
+                    pane_id,
+                    snippet: snippet.filter(|s| !s.is_empty()),
                 })
             })?;
             rows.collect::<Result<_, _>>()
@@ -781,9 +877,16 @@ mod tests {
         store
             .insert_block(&make_block(pane, 2000, "echo hello", b""))
             .unwrap();
-        let hits = store.search("kubectl", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].command.as_deref(), Some("kubectl get pods"));
+        assert_eq!(hits[0].block.command.as_deref(), Some("kubectl get pods"));
     }
 
     #[test]
@@ -804,9 +907,16 @@ mod tests {
         store
             .insert_block(&make_block(pane, 2000, "cat README", b"# shax\n"))
             .unwrap();
-        let hits = store.search("Cargo toml", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "Cargo toml".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].command.as_deref(), Some("ls"));
+        assert_eq!(hits[0].block.command.as_deref(), Some("ls"));
     }
 
     #[test]
@@ -823,9 +933,16 @@ mod tests {
         store
             .insert_block(&make_block(pane, 3000, "echo hi", b""))
             .unwrap();
-        let hits = store.search("kubectl pods", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl pods".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].command.as_deref(), Some("kubectl get pods"));
+        assert_eq!(hits[0].block.command.as_deref(), Some("kubectl get pods"));
     }
 
     #[test]
@@ -842,7 +959,14 @@ mod tests {
                 b"\x1b[1mmagic\x1b[0m\n",
             ))
             .unwrap();
-        let hits = store.search("magic", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "magic".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1);
     }
 
@@ -853,8 +977,24 @@ mod tests {
         store
             .insert_block(&make_block(pane, 1000, "echo hi", b""))
             .unwrap();
-        assert!(store.search("", 10, 0).unwrap().is_empty());
-        assert!(store.search("   ", 10, 0).unwrap().is_empty());
+        assert!(store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .search(&SearchOptions {
+                query: "   ".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -867,7 +1007,14 @@ mod tests {
         // Half-typed phrase / dangling operator: shouldn't error, just no
         // results, so the search overlay can stay calm while the user
         // finishes typing.
-        let hits = store.search("\"unterminated", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "\"unterminated".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert!(hits.is_empty());
     }
 
@@ -884,11 +1031,132 @@ mod tests {
         store.insert_block(&interactive_block).unwrap();
 
         // Output search misses — the alt-screen bytes aren't in the index.
-        assert!(store.search("distinctive_token", 10, 0).unwrap().is_empty());
+        assert!(store
+            .search(&SearchOptions {
+                query: "distinctive_token".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap()
+            .is_empty());
         // Command search still finds it.
-        let hits = store.search("vim", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "vim".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].command.as_deref(), Some("vim notes.txt"));
+        assert_eq!(hits[0].block.command.as_deref(), Some("vim notes.txt"));
+    }
+
+    #[test]
+    fn search_filters_by_status() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let mut ok_block = make_block(pane, 1000, "kubectl ok", b"");
+        ok_block.exit_code = Some(0);
+        store.insert_block(&ok_block).unwrap();
+        let mut fail_block = make_block(pane, 2000, "kubectl fail", b"");
+        fail_block.exit_code = Some(1);
+        store.insert_block(&fail_block).unwrap();
+        let mut aborted_block = make_block(pane, 3000, "kubectl killed", b"");
+        aborted_block.aborted = true;
+        aborted_block.exit_code = Some(-1);
+        store.insert_block(&aborted_block).unwrap();
+
+        let ok = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                status: SearchStatus::Ok,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ok.len(), 1);
+        assert_eq!(ok[0].block.command.as_deref(), Some("kubectl ok"));
+
+        let fail = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                status: SearchStatus::Fail,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(fail.len(), 1);
+        assert_eq!(fail[0].block.command.as_deref(), Some("kubectl fail"));
+
+        let aborted = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                status: SearchStatus::Aborted,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(aborted.len(), 1);
+        assert_eq!(aborted[0].block.command.as_deref(), Some("kubectl killed"));
+    }
+
+    #[test]
+    fn search_filters_by_since_ms() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "old kubectl", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 5000, "new kubectl", b""))
+            .unwrap();
+        let recent = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                since_ms: Some(3000),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].block.command.as_deref(), Some("new kubectl"));
+    }
+
+    #[test]
+    fn search_returns_pane_id_and_snippet_for_output_hits() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(
+                pane,
+                1000,
+                "cat",
+                b"before the magic_token after the token line\n",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "magic_token".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        // The pane id round-trips so the UI can route jump-to-pane.
+        assert_eq!(hits[0].pane_id, pane);
+        // Snippet marks the matched token.
+        let snippet = hits[0].snippet.as_deref().expect("snippet present");
+        assert!(
+            snippet.contains("<mark>magic_token</mark>"),
+            "expected <mark>…</mark> wrapper in snippet, got: {snippet:?}",
+        );
     }
 
     #[test]
@@ -900,9 +1168,42 @@ mod tests {
                 .insert_block(&make_block(pane, 1000 + i, &format!("kubectl c{i}"), b""))
                 .unwrap();
         }
-        assert_eq!(store.search("kubectl", 2, 0).unwrap().len(), 2);
-        assert_eq!(store.search("kubectl", 2, 2).unwrap().len(), 2);
-        assert_eq!(store.search("kubectl", 2, 4).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search(&SearchOptions {
+                    query: "kubectl".into(),
+                    limit: 2,
+                    offset: 0,
+                    ..Default::default()
+                })
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .search(&SearchOptions {
+                    query: "kubectl".into(),
+                    limit: 2,
+                    offset: 2,
+                    ..Default::default()
+                })
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .search(&SearchOptions {
+                    query: "kubectl".into(),
+                    limit: 2,
+                    offset: 4,
+                    ..Default::default()
+                })
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -924,7 +1225,11 @@ mod tests {
                     aborted INTEGER NOT NULL DEFAULT 0, output BLOB
                 );
                 INSERT INTO blocks (id, pane_id, command, started_at_ms, aborted)
-                    VALUES ('11111111-1111-1111-1111-111111111111', 'aaaa', 'old', 500, 0);
+                    VALUES (
+                        '11111111-1111-1111-1111-111111111111',
+                        '22222222-2222-2222-2222-222222222222',
+                        'old', 500, 0
+                    );
                 "#,
             )
             .unwrap();
@@ -943,7 +1248,14 @@ mod tests {
         assert!(store.load_app_state().unwrap().is_some());
         // The historical row was also indexed by the v3 step on the same
         // open, so search picks it up.
-        let hits = store.search("old", 10, 0).unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "old".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(
             hits.len(),
             1,

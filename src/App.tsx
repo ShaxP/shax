@@ -54,6 +54,13 @@ interface PaneMeta {
   cwd: string | null;
   branch: string | null;
   altScreen: boolean;
+  /**
+   * Backend pty id assigned by `spawnPty`, populated once the spawn
+   * resolves. Stays `null` until then and after the shell exits. The
+   * search overlay's "jump to pane" path scans this across every tab
+   * to map a search hit's `pane_id` back to a live (tab, pane).
+   */
+  ptyId: string | null;
 }
 
 interface TabState {
@@ -87,6 +94,7 @@ type TabsAction =
       branch: string | null;
     }
   | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean }
+  | { type: "update_pty_id"; tabId: string; paneId: PaneId; ptyId: string | null }
   | { type: "set_ratio"; tabId: string; path: SplitPath; ratio: number }
   | { type: "hydrate"; state: TabsState };
 
@@ -103,7 +111,26 @@ function freshTabId(): string {
 }
 
 function freshPaneMeta(): PaneMeta {
-  return { cwd: null, branch: null, altScreen: false };
+  return { cwd: null, branch: null, altScreen: false, ptyId: null };
+}
+
+/**
+ * Scan every tab's pane map for one whose backend ptyId matches the
+ * given hit. Returns the addressing pair, or null when no live pane
+ * carries that PTY (closed pane, previous session, etc.). Linear in
+ * the total pane count but the tab/pane count stays in the dozens —
+ * we don't need an index for this.
+ */
+function findPaneByPtyId(
+  tabs: TabState[],
+  ptyId: string,
+): { tabId: string; paneId: PaneId } | null {
+  for (const tab of tabs) {
+    for (const [paneId, meta] of Object.entries(tab.panes)) {
+      if (meta.ptyId === ptyId) return { tabId: tab.id, paneId };
+    }
+  }
+  return null;
 }
 
 function makeTab(): TabState {
@@ -265,6 +292,18 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       });
     }
 
+    case "update_pty_id": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const current = tab.panes[action.paneId];
+        if (current === undefined) return tab;
+        if (current.ptyId === action.ptyId) return tab;
+        return {
+          ...tab,
+          panes: { ...tab.panes, [action.paneId]: { ...current, ptyId: action.ptyId } },
+        };
+      });
+    }
+
     case "set_ratio": {
       return replaceTab(state, action.tabId, (tab) => {
         const layout = setRatio(tab.layout, action.path, action.ratio);
@@ -351,13 +390,15 @@ function hydrateFromJson(json: string): TabsState | null {
     ) {
       return null;
     }
-    const panes: Record<PaneId, { cwd: string | null; branch: string | null; altScreen: boolean }> =
-      {};
+    const panes: Record<PaneId, PaneMeta> = {};
     for (const [paneId, meta] of Object.entries(t.panes)) {
       panes[paneId] = {
         cwd: meta?.cwd ?? null,
         branch: meta?.branch ?? null,
         altScreen: false,
+        // ptyId only becomes known after spawn resolves; restored panes
+        // get fresh shells, so leave this null until then.
+        ptyId: null,
       };
     }
     tabs.push({
@@ -428,6 +469,13 @@ export default function App(): React.ReactElement {
   const handlePaneAltScreen = useCallback(
     (tabId: string, paneId: PaneId, altScreen: boolean): void => {
       dispatch({ type: "update_alt_screen", tabId, paneId, altScreen });
+    },
+    [],
+  );
+
+  const handlePanePtyId = useCallback(
+    (tabId: string, paneId: PaneId, ptyId: string | null): void => {
+      dispatch({ type: "update_pty_id", tabId, paneId, ptyId });
     },
     [],
   );
@@ -586,6 +634,7 @@ export default function App(): React.ReactElement {
                 onPaneFocus={handlePaneFocus}
                 onPaneMeta={handlePaneMeta}
                 onPaneAltScreen={handlePaneAltScreen}
+                onPanePtyId={handlePanePtyId}
                 onSetRatio={handleSetRatio}
               />
             </div>
@@ -599,9 +648,22 @@ export default function App(): React.ReactElement {
             setSearchOpen(false);
             refocusActivePane();
           }}
-          onSelect={(block) => {
+          onSelect={(hit) => {
+            // Jump to the originating pane when it's still alive in this
+            // session: scan every tab for a pane whose backend ptyId
+            // matches the search hit's pane_id, then switch to it. If
+            // we don't find one (the pane was closed, or the hit comes
+            // from a previous session), fall back to the read-only
+            // viewer modal so the user can still inspect the block.
             setSearchOpen(false);
-            setViewerBlock(block);
+            const target = findPaneByPtyId(state.tabs, hit.pane_id);
+            if (target !== null) {
+              dispatch({ type: "switch_tab", id: target.tabId });
+              dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
+              refocusActivePane();
+              return;
+            }
+            setViewerBlock(hit.block);
           }}
         />
       )}
