@@ -10,7 +10,7 @@
  * design lands at M4/M5 once formatters exist.
  */
 
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -60,6 +60,37 @@ export function BlockList({
     el.scrollTop = el.scrollHeight;
   }, [blocks, liveOutputs]);
 
+  // Jump-to-block flash. Dispatched by App when a search result is
+  // routed to a still-alive pane: scroll the matching row into view
+  // and pulse it briefly so the user sees *which* block matched
+  // instead of landing in a long list and scanning. Every BlockList
+  // across the app listens; only the one with that block id reacts.
+  const [flashedBlockId, setFlashedBlockId] = useState<BlockId | null>(null);
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const detail = (e as CustomEvent<{ blockId: BlockId }>).detail;
+      const id = detail?.blockId;
+      if (id === undefined) return;
+      const el = scrollRef.current?.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
+      if (el === undefined || el === null) return;
+      if (typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      setFlashedBlockId(id);
+    };
+    window.addEventListener("shax:flash-block", handler);
+    return () => window.removeEventListener("shax:flash-block", handler);
+  }, []);
+
+  // Self-clearing pulse: hold the flash for 1.5 s then reset, which
+  // lets the BlockRow's `transition` animate the highlight back to
+  // its resting state.
+  useEffect(() => {
+    if (flashedBlockId === null) return;
+    const t = setTimeout(() => setFlashedBlockId(null), 1500);
+    return () => clearTimeout(t);
+  }, [flashedBlockId]);
+
   return (
     <aside
       ref={scrollRef}
@@ -108,6 +139,7 @@ export function BlockList({
               block={block}
               liveOutput={liveOutputs?.get(block.id)}
               getOutput={getOutput}
+              flashed={block.id === flashedBlockId}
             />
           ),
         )

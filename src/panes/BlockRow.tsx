@@ -113,6 +113,12 @@ export interface BlockRowProps {
   getOutput?: (pty: PtyId, blockId: string) => Promise<Uint8Array>;
   /** Injected for tests; defaults to Date.now. */
   now?: () => number;
+  /**
+   * Briefly tint the row when set true (driven by the search overlay's
+   * "jump to this block" path). The BlockList holds the timer; this
+   * prop is its broadcast.
+   */
+  flashed?: boolean;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -271,6 +277,7 @@ function BlockRowInner({
   liveOutput,
   getOutput,
   now = Date.now,
+  flashed = false,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -333,13 +340,22 @@ function BlockRowInner({
     void navigator.clipboard.writeText(block.command).catch(() => undefined);
   };
 
+  // When `flashed` is on, paint a soft accent overlay via `box-shadow
+  // inset` — doesn't fight the row's background or any hover styles,
+  // and the CSS transition (BlockRow.css) animates it back to
+  // resting state when the flash flips off.
+  const flashStyle: React.CSSProperties = flashed
+    ? { boxShadow: "inset 0 0 0 9999px var(--accent-soft)" }
+    : { boxShadow: "inset 0 0 0 0 transparent" };
+
   return (
     <div
       className="block-row"
       data-testid="block-row"
       data-block-id={block.id}
       data-status={status}
-      style={ROW}
+      data-flashed={flashed ? "true" : "false"}
+      style={{ ...ROW, ...flashStyle, transition: "box-shadow 0.6s ease-out" }}
     >
       <div
         data-testid="block-edge"

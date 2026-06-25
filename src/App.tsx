@@ -661,6 +661,16 @@ export default function App(): React.ReactElement {
               dispatch({ type: "switch_tab", id: target.tabId });
               dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
               refocusActivePane();
+              // Defer one tick so the tab/pane switch commits before we
+              // ask the (now-visible) BlockList to scroll + flash the
+              // matching row. Without the defer, the event fires while
+              // the target pane is still hidden and scrollIntoView is
+              // a no-op.
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new CustomEvent("shax:flash-block", { detail: { blockId: hit.block.id } }),
+                );
+              }, 0);
               return;
             }
             setViewerBlock(hit.block);
