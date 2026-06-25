@@ -29,6 +29,20 @@ export interface BlockState {
   /** True while a program holds the alternate screen buffer. */
   altScreen: boolean;
   /**
+   * Search-jump selection: the block that the user just jumped to from
+   * the search overlay. Renders with a subtle accent border until the
+   * next jump (or the user clears it). Null means no current selection.
+   */
+  selectedBlockId: BlockId | null;
+  /**
+   * Block from a previous session (no live pane carries it) that the
+   * user surfaced via search. Rendered at the top of *this* pane's
+   * block list with a small "from history" tag — same BlockRow as a
+   * real block, but the row knows it doesn't belong to the live shell.
+   * Replaced on each historical jump, cleared when null.
+   */
+  inspectedBlock: UiBlock | null;
+  /**
    * Captured output bytes per block, accumulated from `block_chunk` events
    * as a command streams. The map is rebuilt on every chunk so the reducer
    * stays pure; entries for unchanged blocks keep their existing Uint8Array
@@ -85,13 +99,23 @@ export type BlockAction =
    * outputs, alt-screen flag, and prompt strip all need to go back to
    * their initial empty values before the new shell's events arrive.
    */
-  | { type: "reset" };
+  | { type: "reset" }
+  /** Set or clear the search-jump selection. */
+  | { type: "select_block"; id: BlockId | null }
+  /**
+   * Surface a historical block in this pane via search. Replaces any
+   * previously-inspected block. The block is rendered above the live
+   * list with a "from history" tag and immediately selected.
+   */
+  | { type: "inspect_block"; block: UiBlock };
 
 export const initialBlockState: BlockState = {
   blocks: [],
   altScreen: false,
   liveOutputs: new Map(),
   promptLine: emptyPromptLine,
+  selectedBlockId: null,
+  inspectedBlock: null,
 };
 
 /**
@@ -224,5 +248,30 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
 
     case "reset":
       return initialBlockState;
+
+    case "select_block": {
+      // If the new selection matches the currently-inspected block, drop
+      // the inspected helper — keeping it would render the same row twice
+      // (top via inspect, middle via blocks[]) with both selected.
+      const stale =
+        state.inspectedBlock !== null &&
+        action.id !== null &&
+        state.inspectedBlock.id === action.id;
+      if (state.selectedBlockId === action.id && !stale) return state;
+      return {
+        ...state,
+        selectedBlockId: action.id,
+        inspectedBlock: stale ? null : state.inspectedBlock,
+      };
+    }
+
+    case "inspect_block":
+      // Replace any previously-inspected block; the new one becomes the
+      // selection as well so the user lands on it visually.
+      return {
+        ...state,
+        inspectedBlock: action.block,
+        selectedBlockId: action.block.id,
+      };
   }
 }

@@ -48,7 +48,7 @@ export interface TitleBarProps {
   onSwitch: (id: string) => void;
   onNew: () => void;
   onClose: (id: string) => void;
-  /** Optional: clicking the search pill opens the overlay. ⌘K does the same. */
+  /** Optional: clicking the search pill opens the overlay. ⌘F does the same. */
   onSearch?: () => void;
 }
 
@@ -274,11 +274,11 @@ export function TitleBar({
         </span>
         <span
           data-testid="title-search"
-          title="Search (⌘K)"
+          title="Search (⌘F)"
           style={{ ...SEARCH_PILL, cursor: onSearch !== undefined ? "pointer" : "default" }}
           onClick={onSearch}
         >
-          ⌕ <span style={{ fontFamily: "var(--font-ui)", fontSize: 11 }}>⌘K</span>
+          ⌕ <span style={{ fontFamily: "var(--font-ui)", fontSize: 11 }}>⌘F</span>
         </span>
         <span title="assistant" style={{ ...ICON_BTN, color: "var(--accent)", fontSize: 13 }}>
           ✦

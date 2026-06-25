@@ -36,8 +36,6 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
-import { BlockViewerModal } from "./panes/BlockViewerModal";
-import type { BlockSummary } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
@@ -54,6 +52,13 @@ interface PaneMeta {
   cwd: string | null;
   branch: string | null;
   altScreen: boolean;
+  /**
+   * Backend pty id assigned by `spawnPty`, populated once the spawn
+   * resolves. Stays `null` until then and after the shell exits. The
+   * search overlay's "jump to pane" path scans this across every tab
+   * to map a search hit's `pane_id` back to a live (tab, pane).
+   */
+  ptyId: string | null;
 }
 
 interface TabState {
@@ -87,6 +92,7 @@ type TabsAction =
       branch: string | null;
     }
   | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean }
+  | { type: "update_pty_id"; tabId: string; paneId: PaneId; ptyId: string | null }
   | { type: "set_ratio"; tabId: string; path: SplitPath; ratio: number }
   | { type: "hydrate"; state: TabsState };
 
@@ -103,7 +109,26 @@ function freshTabId(): string {
 }
 
 function freshPaneMeta(): PaneMeta {
-  return { cwd: null, branch: null, altScreen: false };
+  return { cwd: null, branch: null, altScreen: false, ptyId: null };
+}
+
+/**
+ * Scan every tab's pane map for one whose backend ptyId matches the
+ * given hit. Returns the addressing pair, or null when no live pane
+ * carries that PTY (closed pane, previous session, etc.). Linear in
+ * the total pane count but the tab/pane count stays in the dozens —
+ * we don't need an index for this.
+ */
+function findPaneByPtyId(
+  tabs: TabState[],
+  ptyId: string,
+): { tabId: string; paneId: PaneId } | null {
+  for (const tab of tabs) {
+    for (const [paneId, meta] of Object.entries(tab.panes)) {
+      if (meta.ptyId === ptyId) return { tabId: tab.id, paneId };
+    }
+  }
+  return null;
 }
 
 function makeTab(): TabState {
@@ -265,6 +290,18 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       });
     }
 
+    case "update_pty_id": {
+      return replaceTab(state, action.tabId, (tab) => {
+        const current = tab.panes[action.paneId];
+        if (current === undefined) return tab;
+        if (current.ptyId === action.ptyId) return tab;
+        return {
+          ...tab,
+          panes: { ...tab.panes, [action.paneId]: { ...current, ptyId: action.ptyId } },
+        };
+      });
+    }
+
     case "set_ratio": {
       return replaceTab(state, action.tabId, (tab) => {
         const layout = setRatio(tab.layout, action.path, action.ratio);
@@ -351,13 +388,15 @@ function hydrateFromJson(json: string): TabsState | null {
     ) {
       return null;
     }
-    const panes: Record<PaneId, { cwd: string | null; branch: string | null; altScreen: boolean }> =
-      {};
+    const panes: Record<PaneId, PaneMeta> = {};
     for (const [paneId, meta] of Object.entries(t.panes)) {
       panes[paneId] = {
         cwd: meta?.cwd ?? null,
         branch: meta?.branch ?? null,
         altScreen: false,
+        // ptyId only becomes known after spawn resolves; restored panes
+        // get fresh shells, so leave this null until then.
+        ptyId: null,
       };
     }
     tabs.push({
@@ -379,10 +418,9 @@ export default function App(): React.ReactElement {
   const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
   const { tabs, activeId } = state;
 
-  // Search + viewer overlays. Top-level so the keybindings can open them
-  // regardless of which pane currently owns focus.
+  // Search overlay. Top-level so the keybindings can open it regardless
+  // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
-  const [viewerBlock, setViewerBlock] = useState<BlockSummary | null>(null);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -432,6 +470,13 @@ export default function App(): React.ReactElement {
     [],
   );
 
+  const handlePanePtyId = useCallback(
+    (tabId: string, paneId: PaneId, ptyId: string | null): void => {
+      dispatch({ type: "update_pty_id", tabId, paneId, ptyId });
+    },
+    [],
+  );
+
   // Hydrate the tab state from the persisted snapshot on first mount.
   // Outside a Tauri context (jsdom tests / browser preview) `appStateLoad`
   // returns null synchronously-after-await and the initial fresh tab from
@@ -474,9 +519,13 @@ export default function App(): React.ReactElement {
         dispatch({ type: "add_tab" });
         return;
       }
-      if (e.key === "k" || e.key === "K") {
-        // ⌘K opens the search overlay over the active tab. The overlay
-        // owns its own Esc handler for closing.
+      if (e.key === "f" || e.key === "F") {
+        // ⌘F opens the search overlay. (⌘K stays reserved for the
+        // assistant — see `specs/09-ai-assistant-and-auth.md`.) The
+        // listener is registered in the *capture* phase below so we
+        // see the keystroke before xterm's textarea translates it
+        // into `^F` (readline forward-char) and writes a byte to
+        // the PTY.
         e.preventDefault();
         setSearchOpen(true);
         return;
@@ -516,8 +565,14 @@ export default function App(): React.ReactElement {
         return;
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    // Capture-phase so this handler runs before the focused xterm
+    // textarea's own keydown listener — needed for ⌘F, which xterm
+    // would otherwise translate to a `^F` byte and write to the PTY
+    // before we get a chance to `preventDefault`. The other bindings
+    // (⌘T, ⌘W, ⌘D, …) don't strictly need capture phase but ride
+    // along for symmetry.
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, []);
 
   const titleTabs: TabDescriptor[] = useMemo(
@@ -586,6 +641,7 @@ export default function App(): React.ReactElement {
                 onPaneFocus={handlePaneFocus}
                 onPaneMeta={handlePaneMeta}
                 onPaneAltScreen={handlePaneAltScreen}
+                onPanePtyId={handlePanePtyId}
                 onSetRatio={handleSetRatio}
               />
             </div>
@@ -599,18 +655,52 @@ export default function App(): React.ReactElement {
             setSearchOpen(false);
             refocusActivePane();
           }}
-          onSelect={(block) => {
+          onSelect={(hit) => {
+            // Search hand-off rule (slice 3.2 polish):
+            //
+            //   1. Live pane exists for this block (its PTY is still in
+            //      this session) → switch tabs + focus that pane, then
+            //      tell it to select the matching block row.
+            //   2. No live pane (block from a previous session, or its
+            //      pane was closed) → surface the block in the *current
+            //      active* pane via the `inspect_block` reducer action,
+            //      tagged "from history". Same selection treatment.
+            //
+            // Either way the user lands in a pane with the matched
+            // block visible and selected — no separate viewer modal.
             setSearchOpen(false);
-            setViewerBlock(block);
-          }}
-        />
-      )}
-      {viewerBlock !== null && (
-        <BlockViewerModal
-          block={viewerBlock}
-          onClose={() => {
-            setViewerBlock(null);
+            const live = findPaneByPtyId(state.tabs, hit.pane_id);
+            const target =
+              live ??
+              (() => {
+                const tab = state.tabs.find((t) => t.id === state.activeId);
+                if (tab === undefined) return null;
+                return { tabId: tab.id, paneId: tab.focusedPaneId };
+              })();
+            if (target === null) return;
+            if (target.tabId !== state.activeId) {
+              dispatch({ type: "switch_tab", id: target.tabId });
+            }
+            dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
             refocusActivePane();
+            // Defer one tick so the tab/pane switch commits before we
+            // ask the (now-visible) BlockList to scroll + select. The
+            // listeners live in the matching TerminalPane.
+            setTimeout(() => {
+              if (live !== null) {
+                window.dispatchEvent(
+                  new CustomEvent("shax:select-block", {
+                    detail: { paneId: target.paneId, blockId: hit.block.id },
+                  }),
+                );
+              } else {
+                window.dispatchEvent(
+                  new CustomEvent("shax:inspect-block", {
+                    detail: { paneId: target.paneId, block: hit.block },
+                  }),
+                );
+              }
+            }, 0);
           }}
         />
       )}

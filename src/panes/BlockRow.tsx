@@ -33,7 +33,7 @@
 import { memo, useEffect, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
-import { formatDuration } from "./blockFormat";
+import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
 
@@ -113,6 +113,15 @@ export interface BlockRowProps {
   getOutput?: (pty: PtyId, blockId: string) => Promise<Uint8Array>;
   /** Injected for tests; defaults to Date.now. */
   now?: () => number;
+  /**
+   * Draws a subtle accent border with rounded corners around the row
+   * — used by the search overlay's jump-to-block path to point the
+   * user at the row that just matched, and by click-to-select on any
+   * row. The BlockList owns the selection state.
+   */
+  selected?: boolean;
+  /** Called when the user clicks anywhere on the row. */
+  onSelect?: () => void;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -271,6 +280,8 @@ function BlockRowInner({
   liveOutput,
   getOutput,
   now = Date.now,
+  selected = false,
+  onSelect,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -339,8 +350,28 @@ function BlockRowInner({
       data-testid="block-row"
       data-block-id={block.id}
       data-status={status}
+      data-selected={selected ? "true" : "false"}
       style={ROW}
+      onClick={onSelect}
     >
+      {/*
+       * Selection ring — an inset overlay rather than a `box-shadow`
+       * on the row itself so the ring sits a few pixels in from the
+       * pane edge and doesn't visually collide with the pane border.
+       * `pointer-events: none` keeps clicks reaching the row, and the
+       * `transition` softens replacement when the selection moves.
+       */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 4,
+          borderRadius: "var(--radius)",
+          border: `1px solid ${selected ? "var(--accent)" : "transparent"}`,
+          pointerEvents: "none",
+          transition: "border-color 0.2s ease-out",
+        }}
+      />
       <div
         data-testid="block-edge"
         className={isRunning ? "block-row-edge-running" : undefined}
@@ -387,13 +418,61 @@ function BlockRowInner({
               >
                 running
               </span>
-              <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
+              <span
+                data-testid="block-timestamp"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+                title={new Date(block.started_at_ms).toLocaleString()}
+              >
+                <span aria-hidden="true">{"\uF073"}</span>
+                {formatTimestamp(block.started_at_ms)}
+              </span>
+              <span
+                data-testid="block-duration"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span aria-hidden="true">{"\uF017"}</span>
                 {formatDuration(elapsedMs)}
               </span>
             </>
           ) : (
             <>
-              <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
+              <span
+                data-testid="block-timestamp"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+                title={new Date(block.started_at_ms).toLocaleString()}
+              >
+                <span aria-hidden="true">{"\uF073"}</span>
+                {formatTimestamp(block.started_at_ms)}
+              </span>
+              <span
+                data-testid="block-duration"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span aria-hidden="true">{"\uF017"}</span>
                 {formatDuration(elapsedMs)}
               </span>
               <span data-testid="block-status" style={{ fontSize: 11 }}>

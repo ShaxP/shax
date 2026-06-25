@@ -37,6 +37,11 @@ export interface LayoutRenderProps {
   onPaneMeta: (tabId: string, paneId: PaneId, cwd: string | null, branch: string | null) => void;
   /** Per-pane alt-screen toggle. */
   onPaneAltScreen: (tabId: string, paneId: PaneId, active: boolean) => void;
+  /**
+   * Per-pane PTY id reporting. Bubbles the backend pty id up to App so
+   * the search-overlay's jump-to-pane can route to a still-alive pane.
+   */
+  onPanePtyId: (tabId: string, paneId: PaneId, ptyId: string | null) => void;
   /** Drag-to-resize: caller updates the layout-tree Split at `path` in `tabId`. */
   onSetRatio: (tabId: string, path: SplitPath, ratio: number) => void;
 }
@@ -157,6 +162,7 @@ interface PaneLeafProps {
   onFocus: (paneId: PaneId) => void;
   onMeta: (paneId: PaneId, cwd: string | null, branch: string | null) => void;
   onAltScreen: (paneId: PaneId, active: boolean) => void;
+  onPtyId: (paneId: PaneId, ptyId: string | null) => void;
 }
 
 function PaneLeafInner({
@@ -168,6 +174,7 @@ function PaneLeafInner({
   onFocus,
   onMeta,
   onAltScreen,
+  onPtyId,
 }: PaneLeafProps): React.ReactElement {
   // Per-pane bound callbacks. Stable as long as the parent's
   // (tabId-bound) callbacks are stable.
@@ -180,6 +187,10 @@ function PaneLeafInner({
     (active: boolean) => onAltScreen(paneId, active),
     [paneId, onAltScreen],
   );
+  const handlePtyId = useCallback(
+    (ptyId: string | null) => onPtyId(paneId, ptyId),
+    [paneId, onPtyId],
+  );
 
   return (
     <div
@@ -190,9 +201,11 @@ function PaneLeafInner({
       onPointerDown={handleFocus}
     >
       <TerminalPane
+        paneId={paneId}
         active={tabActive && isFocused}
         onMetaChange={handleMeta}
         onAltScreenChange={handleAltScreen}
+        onPtyIdChange={handlePtyId}
       />
       {showFocusRing && <div data-testid="layout-focus-ring" style={focusRingStyle(isFocused)} />}
     </div>
@@ -214,6 +227,7 @@ function paneLeafEqual(prev: PaneLeafProps, next: PaneLeafProps): boolean {
     prev.onFocus === next.onFocus &&
     prev.onMeta === next.onMeta &&
     prev.onAltScreen === next.onAltScreen &&
+    prev.onPtyId === next.onPtyId &&
     prev.rect.left === next.rect.left &&
     prev.rect.top === next.rect.top &&
     prev.rect.width === next.rect.width &&
@@ -303,6 +317,7 @@ export function LayoutRender({
   onPaneFocus,
   onPaneMeta,
   onPaneAltScreen,
+  onPanePtyId,
   onSetRatio,
 }: LayoutRenderProps): React.ReactElement {
   const geometry = useMemo(() => computeGeometry(node), [node]);
@@ -323,6 +338,10 @@ export function LayoutRender({
     (paneId: PaneId, active: boolean) => onPaneAltScreen(tabId, paneId, active),
     [tabId, onPaneAltScreen],
   );
+  const handlePtyId = useCallback(
+    (paneId: PaneId, ptyId: string | null) => onPanePtyId(tabId, paneId, ptyId),
+    [tabId, onPanePtyId],
+  );
   const handleSetRatio = useCallback(
     (path: SplitPath, ratio: number) => onSetRatio(tabId, path, ratio),
     [tabId, onSetRatio],
@@ -341,6 +360,7 @@ export function LayoutRender({
           onFocus={handleFocus}
           onMeta={handleMeta}
           onAltScreen={handleAltScreen}
+          onPtyId={handlePtyId}
         />
       ))}
       {geometry.dividers.map((d, i) => (

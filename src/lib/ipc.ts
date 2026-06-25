@@ -257,20 +257,48 @@ export async function appStateSave(json: string): Promise<void> {
 }
 
 /**
+ * Filter on a block's final terminal status. Mirrors the iconography
+ * on each row (✓ / ✗ / · / …). The frontend cycles through these on
+ * the status chip; `any` skips the filter entirely.
+ */
+export type SearchStatus = "any" | "ok" | "fail" | "aborted";
+
+/**
+ * Composite options for `searchBlocks`. Matches the backend's
+ * `SearchOptions` struct shape one-for-one so Tauri's auto-derived
+ * deserialisation just works.
+ */
+export interface SearchOptions {
+  query: string;
+  limit: number;
+  offset: number;
+  status?: SearchStatus;
+  /** Lower bound on `started_at_ms` (inclusive). Omit to skip. */
+  since_ms?: number;
+}
+
+/**
+ * One search result: the matching block plus the originating pane id
+ * (so the UI can jump to a still-alive pane) and an optional snippet
+ * excerpt with `<mark>` / `</mark>` around the matched tokens.
+ */
+export interface SearchHit {
+  block: BlockSummary;
+  pane_id: PtyId;
+  snippet: string | null;
+}
+
+/**
  * Full-text search across persisted block summaries. `query` is the raw
  * FTS5 MATCH expression — whitespace-separated words are AND'd implicitly,
  * `*` is the prefix wildcard, `"…"` quotes a phrase. Empty / invalid
  * queries resolve to an empty array (no error), so the search overlay
  * can show "no results" while the user finishes typing.
  */
-export async function searchBlocks(
-  query: string,
-  limit: number,
-  offset: number,
-): Promise<BlockSummary[]> {
+export async function searchBlocks(opts: SearchOptions): Promise<SearchHit[]> {
   if (!isTauriContext()) return [];
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<BlockSummary[]>("search_blocks", { query, limit, offset });
+  return invoke<SearchHit[]>("search_blocks", { opts });
 }
 
 /**
