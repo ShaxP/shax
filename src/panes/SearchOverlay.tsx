@@ -38,6 +38,13 @@ const RESULT_LIMIT = 50;
 interface FilterOption<T extends string> {
   key: T;
   label: string;
+  /**
+   * Optional accent for the pill while this option is active —
+   * matches the block-row status iconography so the user reads the
+   * filter state at a glance (green for Ok, red for Fail, …). Omit
+   * to fall back to the generic `--accent` (used by the time chip).
+   */
+  color?: string;
 }
 
 // ── time filter ──────────────────────────────────────────────────────────────
@@ -83,12 +90,15 @@ const STATUS_LABELS: Record<SearchStatus, string> = {
   aborted: "· Aborted",
 };
 
-const STATUS_ORDER: SearchStatus[] = ["any", "ok", "fail", "aborted"];
-
-const STATUS_OPTIONS: FilterOption<SearchStatus>[] = STATUS_ORDER.map((k) => ({
-  key: k,
-  label: STATUS_LABELS[k],
-}));
+// Per-status accent colours mirror the block-row iconography (see
+// `BlockRow.statusEdgeColor`) — green for success, red for failure,
+// faint for aborted. `any` stays uncoloured.
+const STATUS_OPTIONS: FilterOption<SearchStatus>[] = [
+  { key: "any", label: STATUS_LABELS.any },
+  { key: "ok", label: STATUS_LABELS.ok, color: "var(--green)" },
+  { key: "fail", label: STATUS_LABELS.fail, color: "var(--red)" },
+  { key: "aborted", label: STATUS_LABELS.aborted, color: "var(--fg-faint)" },
+];
 
 // ── styles ───────────────────────────────────────────────────────────────────
 
@@ -555,10 +565,16 @@ function FilterDropdown<T extends string>({
     return () => window.removeEventListener("keydown", handler, { capture: true });
   }, [open]);
 
+  // When active, take the option's per-status colour if any; otherwise
+  // fall back to the generic accent (used by chips with no per-value
+  // colouring, e.g. the time chip). The soft background is derived
+  // via `color-mix` so we don't need a `--green-soft` token per hue.
+  const activeColor = current?.color ?? "var(--accent)";
+  const activeBg = `color-mix(in srgb, ${activeColor} 14%, transparent)`;
   const pillStyle: CSSProperties = {
     ...CHIP_BASE,
-    background: active ? "var(--accent-soft)" : "transparent",
-    borderColor: active ? "var(--accent)" : "var(--border)",
+    background: active ? activeBg : "transparent",
+    borderColor: active ? activeColor : "var(--border)",
     color: active ? "var(--fg)" : "var(--fg-dim)",
   };
 
