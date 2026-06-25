@@ -420,12 +420,29 @@ function BlockRowInner({
               </span>
               <span
                 data-testid="block-timestamp"
-                style={{ fontSize: 11, color: "var(--fg-faint)" }}
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
                 title={new Date(block.started_at_ms).toLocaleString()}
               >
+                <span aria-hidden="true"></span>
                 {formatTimestamp(block.started_at_ms)}
               </span>
-              <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
+              <span
+                data-testid="block-duration"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span aria-hidden="true"></span>
                 {formatDuration(elapsedMs)}
               </span>
             </>
@@ -433,12 +450,29 @@ function BlockRowInner({
             <>
               <span
                 data-testid="block-timestamp"
-                style={{ fontSize: 11, color: "var(--fg-faint)" }}
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
                 title={new Date(block.started_at_ms).toLocaleString()}
               >
+                <span aria-hidden="true"></span>
                 {formatTimestamp(block.started_at_ms)}
               </span>
-              <span data-testid="block-duration" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
+              <span
+                data-testid="block-duration"
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-faint)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span aria-hidden="true"></span>
                 {formatDuration(elapsedMs)}
               </span>
               <span data-testid="block-status" style={{ fontSize: 11 }}>

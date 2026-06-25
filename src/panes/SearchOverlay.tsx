@@ -688,10 +688,11 @@ function SearchResultRow({
         <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
         <span style={COMMAND_TEXT}>{block.command ?? "(no command)"}</span>
         <span
-          style={TIMESTAMP}
+          style={{ ...TIMESTAMP, display: "inline-flex", alignItems: "center", gap: 4 }}
           title={new Date(block.started_at_ms).toLocaleString()}
           data-testid="search-result-time"
         >
+          <span aria-hidden="true"></span>
           {formatTimestamp(block.started_at_ms)}
         </span>
       </div>
@@ -714,6 +715,7 @@ function SearchResultRow({
         {block.duration_ms !== null && (
           <>
             <span style={{ padding: "0 6px" }}>·</span>
+            <span aria-hidden="true" style={{ marginRight: 4 }}></span>
             {formatDuration(block.duration_ms)}
           </>
         )}
