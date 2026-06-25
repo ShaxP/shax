@@ -33,6 +33,12 @@ export interface SearchOverlayProps {
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 50;
 
+/** One entry in a filter dropdown's option list. */
+interface FilterOption<T extends string> {
+  key: T;
+  label: string;
+}
+
 // ── time filter ──────────────────────────────────────────────────────────────
 
 type TimeBucket = "any" | "hour" | "day" | "week" | "month";
@@ -46,6 +52,11 @@ const TIME_LABELS: Record<TimeBucket, string> = {
 };
 
 const TIME_ORDER: TimeBucket[] = ["any", "hour", "day", "week", "month"];
+
+const TIME_OPTIONS: FilterOption<TimeBucket>[] = TIME_ORDER.map((k) => ({
+  key: k,
+  label: TIME_LABELS[k],
+}));
 
 function bucketToSinceMs(bucket: TimeBucket, nowMs: number): number | undefined {
   switch (bucket) {
@@ -73,10 +84,10 @@ const STATUS_LABELS: Record<SearchStatus, string> = {
 
 const STATUS_ORDER: SearchStatus[] = ["any", "ok", "fail", "aborted"];
 
-function cycle<T>(order: T[], current: T): T {
-  const i = order.indexOf(current);
-  return order[(i + 1) % order.length] ?? current;
-}
+const STATUS_OPTIONS: FilterOption<SearchStatus>[] = STATUS_ORDER.map((k) => ({
+  key: k,
+  label: STATUS_LABELS[k],
+}));
 
 // ── styles ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +136,9 @@ const CHIP_ROW: CSSProperties = {
 };
 
 const CHIP_BASE: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
   fontFamily: "var(--font-ui)",
   fontSize: 11.5,
   padding: "4px 9px",
@@ -132,6 +146,32 @@ const CHIP_BASE: CSSProperties = {
   cursor: "pointer",
   userSelect: "none",
   border: "1px solid var(--border)",
+};
+
+const POPOVER: CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  left: 0,
+  minWidth: 160,
+  background: "var(--surface)",
+  border: "1px solid var(--border-strong)",
+  borderRadius: "var(--radius-sm)",
+  boxShadow: "0 10px 28px rgba(0, 0, 0, 0.4)",
+  padding: 4,
+  display: "flex",
+  flexDirection: "column",
+  gap: 1,
+  zIndex: 10,
+};
+
+const POPOVER_ITEM_BASE: CSSProperties = {
+  padding: "5px 10px",
+  fontFamily: "var(--font-ui)",
+  fontSize: 12,
+  borderRadius: 3,
+  cursor: "pointer",
+  color: "var(--fg)",
+  whiteSpace: "nowrap",
 };
 
 const STATUS_ROW: CSSProperties = {
@@ -381,17 +421,19 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
           spellCheck={false}
         />
         <div style={CHIP_ROW} data-testid="search-chips">
-          <Chip
+          <FilterDropdown
             testId="search-chip-status"
-            label={STATUS_LABELS[status]}
-            active={status !== "any"}
-            onClick={() => setStatus((cur) => cycle(STATUS_ORDER, cur))}
+            options={STATUS_OPTIONS}
+            neutralKey="any"
+            value={status}
+            onChange={setStatus}
           />
-          <Chip
+          <FilterDropdown
             testId="search-chip-time"
-            label={TIME_LABELS[time]}
-            active={time !== "any"}
-            onClick={() => setTime((cur) => cycle(TIME_ORDER, cur))}
+            options={TIME_OPTIONS}
+            neutralKey="any"
+            value={time}
+            onChange={setTime}
           />
         </div>
         <div style={STATUS_ROW} data-testid="search-status">
@@ -422,29 +464,129 @@ export function SearchOverlay({ onClose, onSelect }: SearchOverlayProps): React.
   );
 }
 
-interface ChipProps {
+interface FilterDropdownProps<T extends string> {
   testId: string;
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  options: FilterOption<T>[];
+  /** The "neutral" / no-filter key — value === neutralKey renders inactive. */
+  neutralKey: T;
+  value: T;
+  onChange: (key: T) => void;
 }
 
-function Chip({ testId, label, active, onClick }: ChipProps): React.ReactElement {
-  const style: CSSProperties = {
+/**
+ * Pill that, when clicked, opens a popover with the full option list.
+ * Selecting an option closes the popover and applies the filter; the
+ * pill stays in the same visual language as the slice-3.2 cycle chip
+ * (rounded, accent-tinted when active) but adds a small `⌄` caret to
+ * signal that there's a menu behind it.
+ *
+ * Open-state lifecycle:
+ * - Clicking the pill toggles it.
+ * - Clicking an option closes it (the change is committed).
+ * - Clicking anywhere outside the pill+popover closes it.
+ * - Pressing `Escape` while open closes only the dropdown — the
+ *   handler is registered in the *capture* phase so it preempts
+ *   `SearchOverlay`'s bubble-phase Esc handler (which would otherwise
+ *   close the entire overlay).
+ */
+function FilterDropdown<T extends string>({
+  testId,
+  options,
+  neutralKey,
+  value,
+  onChange,
+}: FilterDropdownProps<T>): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const current = options.find((o) => o.key === value) ?? options[0];
+  const active = value !== neutralKey;
+
+  // Close on outside click. `mousedown` (not `click`) so the popover
+  // can re-act to a click on its own option in the same tick without
+  // racing the outside-detect logic.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent): void => {
+      const wrapper = wrapperRef.current;
+      if (wrapper !== null && !wrapper.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Esc closes the dropdown — registered in capture so it fires
+  // *before* the overlay-level Esc handler and can `stopImmediate-
+  // Propagation` to prevent that one from also seeing the event and
+  // closing the whole overlay underneath.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () => window.removeEventListener("keydown", handler, { capture: true });
+  }, [open]);
+
+  const pillStyle: CSSProperties = {
     ...CHIP_BASE,
     background: active ? "var(--accent-soft)" : "transparent",
     borderColor: active ? "var(--accent)" : "var(--border)",
     color: active ? "var(--fg)" : "var(--fg-dim)",
   };
+
   return (
-    <span
-      data-testid={testId}
-      data-active={active ? "true" : "false"}
-      style={style}
-      onClick={onClick}
-    >
-      {label}
-    </span>
+    <div ref={wrapperRef} style={{ position: "relative" }}>
+      <span
+        data-testid={testId}
+        data-active={active ? "true" : "false"}
+        data-open={open ? "true" : "false"}
+        style={pillStyle}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {current?.label ?? ""}
+        <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>
+          ⌄
+        </span>
+      </span>
+      {open && (
+        <div data-testid={`${testId}-popover`} style={POPOVER}>
+          {options.map((opt) => {
+            const selected = opt.key === value;
+            const itemStyle: CSSProperties = {
+              ...POPOVER_ITEM_BASE,
+              background: selected ? "var(--accent-soft)" : "transparent",
+              fontWeight: selected ? 600 : 400,
+            };
+            return (
+              <div
+                key={opt.key}
+                data-testid={`${testId}-option-${opt.key}`}
+                data-selected={selected ? "true" : "false"}
+                style={itemStyle}
+                onMouseEnter={(e) => {
+                  if (!selected) e.currentTarget.style.background = "var(--surface-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!selected) e.currentTarget.style.background = "transparent";
+                }}
+                onClick={() => {
+                  onChange(opt.key);
+                  setOpen(false);
+                }}
+              >
+                {opt.label}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

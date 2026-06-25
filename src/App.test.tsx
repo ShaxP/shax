@@ -560,21 +560,22 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     act(() => {
       fireEvent.keyDown(window, { key: "k", metaKey: true });
     });
-    // Don't type anything; just click the status chip to activate the filter.
+    // Don't type anything; open the status dropdown and pick "Failed".
     fireEvent.click(screen.getByTestId("search-chip-status"));
+    fireEvent.click(screen.getByTestId("search-chip-status-option-fail"));
     await vi.waitFor(() => {
       expect(mockSearchBlocks).toHaveBeenCalled();
     });
     const calls = mockSearchBlocks.mock.calls;
     const lastArg = calls[calls.length - 1]?.[0] as { query: string; status: string };
     expect(lastArg.query).toBe("");
-    expect(lastArg.status).toBe("ok");
+    expect(lastArg.status).toBe("fail");
     await vi.waitFor(() => {
       expect(screen.getByTestId("search-result")).toBeInTheDocument();
     });
   });
 
-  it("cycles the status chip and propagates it to searchBlocks", async () => {
+  it("opens the status dropdown and applies the chosen value", async () => {
     mockSearchBlocks.mockResolvedValue([]);
     render(<App />);
     act(() => {
@@ -584,14 +585,35 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     await vi.waitFor(() => {
       expect(mockSearchBlocks).toHaveBeenCalled();
     });
-    // First click → Ok, second → Fail.
+    // Open the popover; the option list appears.
     fireEvent.click(screen.getByTestId("search-chip-status"));
-    fireEvent.click(screen.getByTestId("search-chip-status"));
+    expect(screen.getByTestId("search-chip-status-popover")).toBeInTheDocument();
+    // Pick "Failed" — popover closes, search re-runs with status=fail.
+    fireEvent.click(screen.getByTestId("search-chip-status-option-fail"));
+    expect(screen.queryByTestId("search-chip-status-popover")).toBeNull();
     await vi.waitFor(() => {
       const calls = mockSearchBlocks.mock.calls;
       const last = calls[calls.length - 1]?.[0] as { status?: string };
       expect(last?.status).toBe("fail");
     });
+    // Active state reflected on the pill.
+    expect(screen.getByTestId("search-chip-status")).toHaveAttribute("data-active", "true");
+  });
+
+  it("Esc closes only the dropdown, not the whole overlay", () => {
+    mockSearchBlocks.mockResolvedValue([]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    fireEvent.click(screen.getByTestId("search-chip-status"));
+    expect(screen.getByTestId("search-chip-status-popover")).toBeInTheDocument();
+    act(() => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.queryByTestId("search-chip-status-popover")).toBeNull();
+    // The overlay itself stayed open.
+    expect(screen.getByTestId("search-overlay")).toBeInTheDocument();
   });
 
   it("↑ / ↓ moves the selection and Enter activates the focused row", async () => {
