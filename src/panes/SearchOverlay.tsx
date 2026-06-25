@@ -468,21 +468,25 @@ export function SearchOverlay({
         ]
       : []),
   ];
-  // Branch dropdown: union of (current pane branch) and (every branch
-  // that's appeared in history), de-duplicated, current branch on top
-  // so the most likely pick is one click away. Order of the rest is
-  // already most-recently-used-first from the backend.
-  const branchSet = new Set<string>();
-  const branchSeq: string[] = [];
-  if (currentBranch !== null && currentBranch.length > 0) {
-    branchSet.add(currentBranch);
-    branchSeq.push(currentBranch);
-  }
-  for (const b of historyBranches) {
-    if (!branchSet.has(b)) {
-      branchSet.add(b);
-      branchSeq.push(b);
-    }
+  // Branch dropdown: trust the faceted backend list verbatim. We
+  // used to union the active pane's `currentBranch` in front so the
+  // most likely pick was one click away, but with facets in play
+  // that's a bug — if the current branch has no blocks matching the
+  // active query / cwd / status / time, it isn't a valid pick and
+  // shouldn't appear. The backend already orders by
+  // most-recently-used so the user's current branch usually lands
+  // on top organically. `branchSeq` stays separate from
+  // `branchOptions` so the chip-visibility guard below can read
+  // `.length` directly.
+  // Make sure the currently-picked branch stays in the dropdown
+  // even if the new facet result no longer contains it (e.g. the
+  // user typed a new query that has zero hits on the picked branch).
+  // Otherwise the active filter would still be applied but the
+  // pill's only visible option would be "Any branch" — the user
+  // couldn't see what they had selected.
+  const branchSeq: string[] = historyBranches.slice();
+  if (branch !== "any" && !branchSeq.includes(branch)) {
+    branchSeq.unshift(branch);
   }
   const branchOptions: FilterOption<string>[] = [
     { key: "any", label: "Any branch" },
