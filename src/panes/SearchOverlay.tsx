@@ -20,7 +20,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { searchBlocks } from "../lib/ipc";
+import { listBranches, searchBlocks } from "../lib/ipc";
 import type { SearchHit, SearchStatus } from "../lib/ipc";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 
@@ -399,15 +399,17 @@ export function SearchOverlay({
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SearchStatus>("any");
   const [time, setTime] = useState<TimeBucket>("any");
-  // `cwd` / `branch` chips: "any" is the no-filter state; "here"
-  // resolves to `currentCwd` / `currentBranch` at search time. We
-  // store the key, not the resolved value, so the chip pill stays
-  // readable as "Here · <path>" without tying us to the actual
-  // string at render time.
+  // `cwd` chip: "any" is the no-filter state; "here" resolves to
+  // `currentCwd` at search time. We store the key, not the resolved
+  // value, so the chip pill stays readable as "Here · <path>".
   type CwdKey = "any" | "here";
-  type BranchKey = "any" | "here";
   const [cwd, setCwd] = useState<CwdKey>("any");
-  const [branch, setBranch] = useState<BranchKey>("any");
+  // `branch` chip: "any" or the literal branch name. The dropdown
+  // is populated from history (every branch the user has worked
+  // on), not just the active pane's current branch, so the user can
+  // filter for activity on branches they aren't currently on.
+  const [branch, setBranch] = useState<string>("any");
+  const [historyBranches, setHistoryBranches] = useState<string[]>([]);
   const [results, setResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(0);
@@ -417,6 +419,22 @@ export function SearchOverlay({
   // Autofocus the input on mount so the user can type immediately.
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  // Pull the full set of distinct branches from history once when the
+  // overlay opens. Cheap (one `SELECT DISTINCT … GROUP BY`) and the
+  // user can't add branches while the modal is up, so a one-shot fetch
+  // is enough. Failures are non-fatal — fall back to the empty list,
+  // which collapses the dropdown to just "Any branch" (plus the
+  // current pane's branch via the union below).
+  useEffect(() => {
+    let cancelled = false;
+    void listBranches().then((list) => {
+      if (!cancelled) setHistoryBranches(list);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // cwd / branch chip option lists. Built per-render from the
@@ -436,17 +454,29 @@ export function SearchOverlay({
         ]
       : []),
   ];
-  const branchOptions: FilterOption<"any" | "here">[] = [
+  // Branch dropdown: union of (current pane branch) and (every branch
+  // that's appeared in history), de-duplicated, current branch on top
+  // so the most likely pick is one click away. Order of the rest is
+  // already most-recently-used-first from the backend.
+  const branchSet = new Set<string>();
+  const branchSeq: string[] = [];
+  if (currentBranch !== null && currentBranch.length > 0) {
+    branchSet.add(currentBranch);
+    branchSeq.push(currentBranch);
+  }
+  for (const b of historyBranches) {
+    if (!branchSet.has(b)) {
+      branchSet.add(b);
+      branchSeq.push(b);
+    }
+  }
+  const branchOptions: FilterOption<string>[] = [
     { key: "any", label: "Any branch" },
-    ...(currentBranch !== null
-      ? [
-          {
-            key: "here" as const,
-            label: `⎇ ${currentBranch}`,
-            color: "var(--amber)",
-          },
-        ]
-      : []),
+    ...branchSeq.map((name) => ({
+      key: name,
+      label: `⎇ ${name}`,
+      color: "var(--amber)",
+    })),
   ];
 
   // Debounce the query so the user gets snappy keystrokes without the
@@ -462,7 +492,8 @@ export function SearchOverlay({
     // than silently filtering against an empty string (which would
     // match nothing).
     const resolvedCwd = cwd === "here" ? (currentCwd ?? undefined) : undefined;
-    const resolvedBranch = branch === "here" ? (currentBranch ?? undefined) : undefined;
+    // Branch state is "any" or the literal branch name from history.
+    const resolvedBranch = branch === "any" ? undefined : branch;
     const hasFilter =
       status !== "any" ||
       time !== "any" ||
@@ -610,7 +641,7 @@ export function SearchOverlay({
               onChange={setCwd}
             />
           )}
-          {currentBranch !== null && (
+          {branchSeq.length > 0 && (
             <FilterDropdown
               testId="search-chip-branch"
               options={branchOptions}

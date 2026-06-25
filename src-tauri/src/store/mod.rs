@@ -737,6 +737,30 @@ impl Store {
     }
 
     /// Return the most recent `limit` blocks across all panes, oldest-first
+    /// Distinct non-empty `git_branch` values across all persisted blocks,
+    /// ordered most-recently-used first (latest `started_at_ms` wins). Used
+    /// by the search overlay's branch chip to offer every branch the user
+    /// has ever worked on, not just the one the current pane sits on.
+    pub fn distinct_branches(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT git_branch
+              FROM blocks
+             WHERE git_branch IS NOT NULL
+               AND git_branch <> ''
+             GROUP BY git_branch
+             ORDER BY MAX(started_at_ms) DESC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// within the window (so the UI's chronological append order is preserved
     /// when seeding the BlockList on app boot).
     pub fn load_recent(&self, limit: usize) -> Result<Vec<BlockSummary>, StoreError> {
@@ -1422,6 +1446,47 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].block.git_branch.as_deref(), Some("feat/x"));
+    }
+
+    #[test]
+    fn distinct_branches_returns_each_branch_most_recent_first() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Two appearances of "main", one of "feat/x", one of "feat/old".
+        // The latest "main" timestamp (3000) is newer than "feat/x"'s
+        // (2000), which beats "feat/old" (500).
+        store
+            .insert_block(&make_block_with(pane, 500, "a", b"", "/tmp", "feat/old"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 1000, "b", b"", "/tmp", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "c", b"", "/tmp", "feat/x"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "d", b"", "/tmp", "main"))
+            .unwrap();
+        let branches = store.distinct_branches().unwrap();
+        assert_eq!(branches, vec!["main", "feat/x", "feat/old"]);
+    }
+
+    #[test]
+    fn distinct_branches_skips_null_and_empty_branches() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // The PersistedBlock constructor in `make_block_with` always
+        // sets a branch — bypass it by hand for the null / empty cases.
+        let mut nullish = make_block_with(pane, 1000, "a", b"", "/tmp", "main");
+        nullish.git_branch = None;
+        store.insert_block(&nullish).unwrap();
+        let mut empty = make_block_with(pane, 2000, "b", b"", "/tmp", "");
+        empty.git_branch = Some(String::new());
+        store.insert_block(&empty).unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "c", b"", "/tmp", "main"))
+            .unwrap();
+        assert_eq!(store.distinct_branches().unwrap(), vec!["main"]);
     }
 
     #[test]

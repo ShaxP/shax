@@ -310,6 +310,18 @@ export async function searchBlocks(opts: SearchOptions): Promise<SearchHit[]> {
 }
 
 /**
+ * All distinct non-empty git branches across persisted blocks, ordered
+ * most-recently-used first. Drives the search overlay's branch chip so the
+ * user can filter by any branch they've ever worked on, not just the one the
+ * current pane is sitting on.
+ */
+export async function listBranches(): Promise<string[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("list_branches");
+}
+
+/**
  * Fetch a block's captured bytes by id alone, straight from the store.
  * Used by the search-results viewer: hits are scoped to history, not to
  * any specific live pane, so we can't address the bytes by `(pty, block)`.
