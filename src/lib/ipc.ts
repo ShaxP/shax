@@ -275,6 +275,14 @@ export interface SearchOptions {
   status?: SearchStatus;
   /** Lower bound on `started_at_ms` (inclusive). Omit to skip. */
   since_ms?: number;
+  /**
+   * Narrow on the exact cwd the block ran in. The slice-3.3 "Here"
+   * chip passes the active pane's cwd verbatim. Free-form / glob
+   * filtering is a deferred M3 follow-up.
+   */
+  cwd?: string;
+  /** Narrow on the exact git branch the block ran on. */
+  git_branch?: string;
 }
 
 /**
@@ -299,6 +307,21 @@ export async function searchBlocks(opts: SearchOptions): Promise<SearchHit[]> {
   if (!isTauriContext()) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<SearchHit[]>("search_blocks", { opts });
+}
+
+/**
+ * Faceted branch list: distinct non-empty git branches that exist in
+ * the result set of `opts`, ordered most-recently-used first. Mirrors
+ * `searchBlocks(opts)` for the same query / cwd / status / since
+ * filters, but deliberately *ignores* `opts.git_branch` — picking a
+ * branch must not collapse the dropdown to just that one option.
+ *
+ * Empty query + no other filters reduces to "every branch in history".
+ */
+export async function listBranches(opts: SearchOptions): Promise<string[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("list_branches", { opts });
 }
 
 /**

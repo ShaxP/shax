@@ -651,6 +651,8 @@ export default function App(): React.ReactElement {
       <Statusline cwd={activeFocused?.cwd ?? null} branch={activeFocused?.branch ?? null} />
       {searchOpen && (
         <SearchOverlay
+          currentCwd={activeFocused?.cwd ?? null}
+          currentBranch={activeFocused?.branch ?? null}
           onClose={() => {
             setSearchOpen(false);
             refocusActivePane();

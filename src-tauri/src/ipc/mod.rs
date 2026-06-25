@@ -163,3 +163,22 @@ pub async fn search_blocks(
     };
     store.search(&opts).map_err(|e| e.to_string())
 }
+
+/// Faceted branch list: every distinct non-empty `git_branch` that
+/// appears in the result set defined by `opts`, ordered most-recently-
+/// used first. `opts.git_branch` is deliberately ignored — picking a
+/// branch must not collapse the dropdown to just that branch (standard
+/// facet rule). Empty query + no other filters reduces to "every
+/// branch in history". Returns an empty list when no store is attached.
+#[tauri::command]
+pub async fn list_branches(
+    opts: SearchOptions,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<Vec<String>, String> {
+    let Some(store) = manager.store() else {
+        return Ok(Vec::new());
+    };
+    store
+        .distinct_branches_for(&opts)
+        .map_err(|e| e.to_string())
+}

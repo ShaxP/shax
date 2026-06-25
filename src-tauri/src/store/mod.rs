@@ -57,6 +57,16 @@ pub struct SearchOptions {
     /// Lower bound on `started_at_ms` (inclusive). `None` skips the filter.
     #[serde(default)]
     pub since_ms: Option<u64>,
+    /// Narrow on the exact `cwd` the block ran in. `None` skips the
+    /// filter. Slice 3.3 only does exact-equality matching (the
+    /// "Here" chip passes the active pane's cwd verbatim); free-form
+    /// path / glob filtering is a deferred M3 follow-up.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Narrow on the exact git branch the block ran on. `None` skips
+    /// the filter. Exact-equality match, same shape as `cwd`.
+    #[serde(default)]
+    pub git_branch: Option<String>,
 }
 
 /// One search result: the matching block summary plus, when available,
@@ -468,7 +478,10 @@ impl Store {
     /// `<mark>…</mark>` around the matching tokens.
     pub fn search(&self, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
         let trimmed = opts.query.trim();
-        let has_filter = opts.status != SearchStatus::Any || opts.since_ms.is_some();
+        let has_filter = opts.status != SearchStatus::Any
+            || opts.since_ms.is_some()
+            || opts.cwd.is_some()
+            || opts.git_branch.is_some();
         if trimmed.is_empty() && !has_filter {
             // Empty query and no active filter → nothing to show. Keeps
             // the search overlay's initial state clean instead of
@@ -494,6 +507,12 @@ impl Store {
         }
         if opts.since_ms.is_some() {
             clauses.push("b.started_at_ms >= :since");
+        }
+        if opts.cwd.is_some() {
+            clauses.push("b.cwd = :cwd");
+        }
+        if opts.git_branch.is_some() {
+            clauses.push("b.git_branch = :branch");
         }
 
         let mut sql = String::from(
@@ -531,6 +550,12 @@ impl Store {
             ];
             if let Some(ref s) = since_i64 {
                 bind.push((":since", s));
+            }
+            if let Some(ref cwd) = opts.cwd {
+                bind.push((":cwd", cwd));
+            }
+            if let Some(ref branch) = opts.git_branch {
+                bind.push((":branch", branch));
             }
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(bind.as_slice(), |row| {
@@ -629,6 +654,12 @@ impl Store {
         if opts.since_ms.is_some() {
             clauses.push("started_at_ms >= :since");
         }
+        if opts.cwd.is_some() {
+            clauses.push("cwd = :cwd");
+        }
+        if opts.git_branch.is_some() {
+            clauses.push("git_branch = :branch");
+        }
 
         let mut sql = String::from(
             r#"
@@ -653,6 +684,12 @@ impl Store {
             vec![(":limit", &limit_i64), (":offset", &offset_i64)];
         if let Some(ref s) = since_i64 {
             bind.push((":since", s));
+        }
+        if let Some(ref cwd) = opts.cwd {
+            bind.push((":cwd", cwd));
+        }
+        if let Some(ref branch) = opts.git_branch {
+            bind.push((":branch", branch));
         }
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(bind.as_slice(), |row| {
@@ -700,6 +737,93 @@ impl Store {
     }
 
     /// Return the most recent `limit` blocks across all panes, oldest-first
+    /// Distinct non-empty `git_branch` values across the *result set* of
+    /// the given search options, ordered most-recently-used first. This
+    /// is the faceted-search version of `distinct_branches`: applies the
+    /// same query / cwd / status / since filters as `search`, but
+    /// deliberately *ignores* `opts.git_branch`. Excluding the branch
+    /// filter is the standard facet rule — otherwise picking a branch
+    /// would immediately collapse the dropdown to just that one option,
+    /// trapping the user.
+    ///
+    /// Empty query + no non-branch filter degenerates to "every branch
+    /// in history", matching the legacy `distinct_branches()` shape.
+    pub fn distinct_branches_for(&self, opts: &SearchOptions) -> Result<Vec<String>, StoreError> {
+        let trimmed = opts.query.trim();
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("b.aborted = 0 AND b.exit_code = 0"),
+            SearchStatus::Fail => clauses.push("b.aborted = 0 AND b.exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("b.aborted = 1"),
+        }
+        if opts.since_ms.is_some() {
+            clauses.push("b.started_at_ms >= :since");
+        }
+        if opts.cwd.is_some() {
+            clauses.push("b.cwd = :cwd");
+        }
+        // `opts.git_branch` is intentionally ignored — see doc comment.
+
+        let mut sql = if trimmed.is_empty() {
+            String::from(
+                r#"
+                SELECT b.git_branch
+                  FROM blocks b
+                 WHERE b.git_branch IS NOT NULL
+                   AND b.git_branch <> ''
+                "#,
+            )
+        } else {
+            String::from(
+                r#"
+                SELECT b.git_branch
+                  FROM blocks_fts
+                  JOIN blocks b ON b.id = blocks_fts.block_id
+                 WHERE blocks_fts MATCH :match
+                   AND b.git_branch IS NOT NULL
+                   AND b.git_branch <> ''
+                "#,
+            )
+        };
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" GROUP BY b.git_branch ORDER BY MAX(b.started_at_ms) DESC");
+
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let attempt = (|| -> Result<Vec<String>, rusqlite::Error> {
+            let since_i64 = opts.since_ms.map(|v| v as i64);
+            let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> = Vec::new();
+            if !trimmed.is_empty() {
+                bind.push((":match", &trimmed));
+            }
+            if let Some(ref s) = since_i64 {
+                bind.push((":since", s));
+            }
+            if let Some(ref cwd) = opts.cwd {
+                bind.push((":cwd", cwd));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(bind.as_slice(), |row| row.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })();
+        // Same swallow-on-FTS-syntax-error stance as `search`: a typed
+        // partial query shouldn't surface as a "search error" toast.
+        match attempt {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("syntax error") => {
+                Ok(Vec::new())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// within the window (so the UI's chronological append order is preserved
     /// when seeding the BlockList on app boot).
     pub fn load_recent(&self, limit: usize) -> Result<Vec<BlockSummary>, StoreError> {
@@ -810,12 +934,23 @@ mod tests {
         command: &str,
         output: &[u8],
     ) -> PersistedBlock {
+        make_block_with(pane_id, started_at_ms, command, output, "/tmp", "main")
+    }
+
+    fn make_block_with(
+        pane_id: PtyId,
+        started_at_ms: u64,
+        command: &str,
+        output: &[u8],
+        cwd: &str,
+        git_branch: &str,
+    ) -> PersistedBlock {
         PersistedBlock {
             id: BlockId(Uuid::new_v4()),
             pane_id,
             command: Some(command.to_owned()),
-            cwd: Some("/tmp".to_owned()),
-            git_branch: Some("main".to_owned()),
+            cwd: Some(cwd.to_owned()),
+            git_branch: Some(git_branch.to_owned()),
             started_at_ms,
             ended_at_ms: Some(started_at_ms + 100),
             exit_code: Some(0),
@@ -1300,6 +1435,254 @@ mod tests {
             .unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].block.command.as_deref(), Some("new kubectl"));
+    }
+
+    #[test]
+    fn search_filters_by_cwd_exact() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "kubectl get pods",
+                b"",
+                "/home/me/proj-a",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "kubectl get nodes",
+                b"",
+                "/home/me/proj-b",
+                "main",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                cwd: Some("/home/me/proj-a".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.cwd.as_deref(), Some("/home/me/proj-a"));
+    }
+
+    #[test]
+    fn search_filters_by_git_branch_exact() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "kubectl get pods",
+                b"",
+                "/tmp",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "kubectl get nodes",
+                b"",
+                "/tmp",
+                "feat/x",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                git_branch: Some("feat/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.git_branch.as_deref(), Some("feat/x"));
+    }
+
+    #[test]
+    fn distinct_branches_returns_each_branch_most_recent_first() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Two appearances of "main", one of "feat/x", one of "feat/old".
+        // The latest "main" timestamp (3000) is newer than "feat/x"'s
+        // (2000), which beats "feat/old" (500).
+        store
+            .insert_block(&make_block_with(pane, 500, "a", b"", "/tmp", "feat/old"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 1000, "b", b"", "/tmp", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "c", b"", "/tmp", "feat/x"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "d", b"", "/tmp", "main"))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions::default())
+            .unwrap();
+        assert_eq!(branches, vec!["main", "feat/x", "feat/old"]);
+    }
+
+    #[test]
+    fn distinct_branches_for_narrows_to_query_matches() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Two blocks mention "shax", on two branches.
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "cd repos/shax",
+                b"",
+                "/tmp",
+                "feat/a",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "ls repos/shax",
+                b"",
+                "/tmp",
+                "feat/b",
+            ))
+            .unwrap();
+        // A third block on `main` has nothing to do with "shax".
+        store
+            .insert_block(&make_block_with(
+                pane,
+                3000,
+                "cargo test",
+                b"",
+                "/tmp",
+                "main",
+            ))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        // `main` is excluded because no `main` block matches the query.
+        assert_eq!(branches, vec!["feat/b", "feat/a"]);
+    }
+
+    #[test]
+    fn distinct_branches_for_ignores_the_branch_filter_itself() {
+        // The faceted-search rule: picking a branch must not collapse
+        // the dropdown to just that branch.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane, 1000, "cd shax", b"", "/tmp", "feat/a",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane, 2000, "ls shax", b"", "/tmp", "feat/b",
+            ))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                git_branch: Some("feat/a".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        // Both still appear even though we picked `feat/a`.
+        assert!(branches.contains(&"feat/a".to_owned()));
+        assert!(branches.contains(&"feat/b".to_owned()));
+    }
+
+    #[test]
+    fn distinct_branches_for_composes_with_cwd_filter() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Same query word in different cwds on different branches.
+        store
+            .insert_block(&make_block_with(pane, 1000, "cd shax", b"", "/x", "feat/a"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "cd shax", b"", "/y", "feat/b"))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                cwd: Some("/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(branches, vec!["feat/a"]);
+    }
+
+    #[test]
+    fn distinct_branches_skips_null_and_empty_branches() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // The PersistedBlock constructor in `make_block_with` always
+        // sets a branch — bypass it by hand for the null / empty cases.
+        let mut nullish = make_block_with(pane, 1000, "a", b"", "/tmp", "main");
+        nullish.git_branch = None;
+        store.insert_block(&nullish).unwrap();
+        let mut empty = make_block_with(pane, 2000, "b", b"", "/tmp", "");
+        empty.git_branch = Some(String::new());
+        store.insert_block(&empty).unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "c", b"", "/tmp", "main"))
+            .unwrap();
+        assert_eq!(
+            store
+                .distinct_branches_for(&SearchOptions::default())
+                .unwrap(),
+            vec!["main"]
+        );
+    }
+
+    #[test]
+    fn search_empty_query_with_cwd_filter_browses_history() {
+        // Browse-by-filter path with cwd narrowing.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(pane, 1000, "a", b"", "/x", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "b", b"", "/y", "main"))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd: Some("/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.command.as_deref(), Some("a"));
+        assert!(hits[0].snippet.is_none());
     }
 
     #[test]

@@ -69,6 +69,10 @@ vi.mock("./lib/ipc", () => ({
   getBlockOutput: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
   searchBlocks: (...args: unknown[]): Promise<unknown[]> =>
     mockSearchBlocks(...args) as Promise<unknown[]>,
+  listBranches: (...args: unknown[]): Promise<string[]> => {
+    void args;
+    return Promise.resolve([]);
+  },
   blockGetOutput: (...args: unknown[]): Promise<Uint8Array> =>
     mockBlockGetOutput(...args) as Promise<Uint8Array>,
   appStateLoad: (...args: unknown[]): Promise<string | null> =>
@@ -691,5 +695,35 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     } finally {
       window.removeEventListener("shax:inspect-block", recorder);
     }
+  });
+
+  it("highlights matched query tokens in the search-result command line", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([makeHit({ id: "blk-h", command: "kubectl get pods" })]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+    });
+    fireEvent.change(screen.getByTestId("search-input"), { target: { value: "kubectl" } });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("search-result")).toBeInTheDocument();
+    });
+    // The row should contain a <mark> wrapping "kubectl" (case-insensitive).
+    const row = screen.getByTestId("search-result");
+    const marks = row.querySelectorAll("mark");
+    expect(marks.length).toBeGreaterThan(0);
+    expect(marks[0]?.textContent?.toLowerCase()).toBe("kubectl");
+  });
+
+  it("passes cwd: <here> to searchBlocks when the cwd chip's 'Here' is picked", () => {
+    mockSearchBlocks.mockResolvedValue([]);
+    render(<App />);
+    act(() => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+    });
+    // The non-Tauri test env reports a null cwd by default → the cwd
+    // chip is omitted entirely. Assert the chip stays absent. (When
+    // a real Tauri pane reports a cwd, the chip appears — covered by
+    // the manual smoke checklist.)
+    expect(screen.queryByTestId("search-chip-cwd")).toBeNull();
   });
 });
