@@ -310,15 +310,18 @@ export async function searchBlocks(opts: SearchOptions): Promise<SearchHit[]> {
 }
 
 /**
- * All distinct non-empty git branches across persisted blocks, ordered
- * most-recently-used first. Drives the search overlay's branch chip so the
- * user can filter by any branch they've ever worked on, not just the one the
- * current pane is sitting on.
+ * Faceted branch list: distinct non-empty git branches that exist in
+ * the result set of `opts`, ordered most-recently-used first. Mirrors
+ * `searchBlocks(opts)` for the same query / cwd / status / since
+ * filters, but deliberately *ignores* `opts.git_branch` — picking a
+ * branch must not collapse the dropdown to just that one option.
+ *
+ * Empty query + no other filters reduces to "every branch in history".
  */
-export async function listBranches(): Promise<string[]> {
+export async function listBranches(opts: SearchOptions): Promise<string[]> {
   if (!isTauriContext()) return [];
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string[]>("list_branches");
+  return invoke<string[]>("list_branches", { opts });
 }
 
 /**

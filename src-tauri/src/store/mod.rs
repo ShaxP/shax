@@ -737,28 +737,91 @@ impl Store {
     }
 
     /// Return the most recent `limit` blocks across all panes, oldest-first
-    /// Distinct non-empty `git_branch` values across all persisted blocks,
-    /// ordered most-recently-used first (latest `started_at_ms` wins). Used
-    /// by the search overlay's branch chip to offer every branch the user
-    /// has ever worked on, not just the one the current pane sits on.
-    pub fn distinct_branches(&self) -> Result<Vec<String>, StoreError> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT git_branch
-              FROM blocks
-             WHERE git_branch IS NOT NULL
-               AND git_branch <> ''
-             GROUP BY git_branch
-             ORDER BY MAX(started_at_ms) DESC
-            "#,
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
+    /// Distinct non-empty `git_branch` values across the *result set* of
+    /// the given search options, ordered most-recently-used first. This
+    /// is the faceted-search version of `distinct_branches`: applies the
+    /// same query / cwd / status / since filters as `search`, but
+    /// deliberately *ignores* `opts.git_branch`. Excluding the branch
+    /// filter is the standard facet rule — otherwise picking a branch
+    /// would immediately collapse the dropdown to just that one option,
+    /// trapping the user.
+    ///
+    /// Empty query + no non-branch filter degenerates to "every branch
+    /// in history", matching the legacy `distinct_branches()` shape.
+    pub fn distinct_branches_for(&self, opts: &SearchOptions) -> Result<Vec<String>, StoreError> {
+        let trimmed = opts.query.trim();
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("b.aborted = 0 AND b.exit_code = 0"),
+            SearchStatus::Fail => clauses.push("b.aborted = 0 AND b.exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("b.aborted = 1"),
         }
-        Ok(out)
+        if opts.since_ms.is_some() {
+            clauses.push("b.started_at_ms >= :since");
+        }
+        if opts.cwd.is_some() {
+            clauses.push("b.cwd = :cwd");
+        }
+        // `opts.git_branch` is intentionally ignored — see doc comment.
+
+        let mut sql = if trimmed.is_empty() {
+            String::from(
+                r#"
+                SELECT b.git_branch
+                  FROM blocks b
+                 WHERE b.git_branch IS NOT NULL
+                   AND b.git_branch <> ''
+                "#,
+            )
+        } else {
+            String::from(
+                r#"
+                SELECT b.git_branch
+                  FROM blocks_fts
+                  JOIN blocks b ON b.id = blocks_fts.block_id
+                 WHERE blocks_fts MATCH :match
+                   AND b.git_branch IS NOT NULL
+                   AND b.git_branch <> ''
+                "#,
+            )
+        };
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" GROUP BY b.git_branch ORDER BY MAX(b.started_at_ms) DESC");
+
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let attempt = (|| -> Result<Vec<String>, rusqlite::Error> {
+            let since_i64 = opts.since_ms.map(|v| v as i64);
+            let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> = Vec::new();
+            if !trimmed.is_empty() {
+                bind.push((":match", &trimmed));
+            }
+            if let Some(ref s) = since_i64 {
+                bind.push((":since", s));
+            }
+            if let Some(ref cwd) = opts.cwd {
+                bind.push((":cwd", cwd));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(bind.as_slice(), |row| row.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })();
+        // Same swallow-on-FTS-syntax-error stance as `search`: a typed
+        // partial query shouldn't surface as a "search error" toast.
+        match attempt {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("syntax error") => {
+                Ok(Vec::new())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// within the window (so the UI's chronological append order is preserved
@@ -1467,8 +1530,111 @@ mod tests {
         store
             .insert_block(&make_block_with(pane, 3000, "d", b"", "/tmp", "main"))
             .unwrap();
-        let branches = store.distinct_branches().unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions::default())
+            .unwrap();
         assert_eq!(branches, vec!["main", "feat/x", "feat/old"]);
+    }
+
+    #[test]
+    fn distinct_branches_for_narrows_to_query_matches() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Two blocks mention "shax", on two branches.
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "cd repos/shax",
+                b"",
+                "/tmp",
+                "feat/a",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "ls repos/shax",
+                b"",
+                "/tmp",
+                "feat/b",
+            ))
+            .unwrap();
+        // A third block on `main` has nothing to do with "shax".
+        store
+            .insert_block(&make_block_with(
+                pane,
+                3000,
+                "cargo test",
+                b"",
+                "/tmp",
+                "main",
+            ))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        // `main` is excluded because no `main` block matches the query.
+        assert_eq!(branches, vec!["feat/b", "feat/a"]);
+    }
+
+    #[test]
+    fn distinct_branches_for_ignores_the_branch_filter_itself() {
+        // The faceted-search rule: picking a branch must not collapse
+        // the dropdown to just that branch.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane, 1000, "cd shax", b"", "/tmp", "feat/a",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane, 2000, "ls shax", b"", "/tmp", "feat/b",
+            ))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                git_branch: Some("feat/a".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        // Both still appear even though we picked `feat/a`.
+        assert!(branches.contains(&"feat/a".to_owned()));
+        assert!(branches.contains(&"feat/b".to_owned()));
+    }
+
+    #[test]
+    fn distinct_branches_for_composes_with_cwd_filter() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Same query word in different cwds on different branches.
+        store
+            .insert_block(&make_block_with(pane, 1000, "cd shax", b"", "/x", "feat/a"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "cd shax", b"", "/y", "feat/b"))
+            .unwrap();
+        let branches = store
+            .distinct_branches_for(&SearchOptions {
+                query: "shax".into(),
+                limit: 50,
+                offset: 0,
+                cwd: Some("/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(branches, vec!["feat/a"]);
     }
 
     #[test]
@@ -1486,7 +1652,12 @@ mod tests {
         store
             .insert_block(&make_block_with(pane, 3000, "c", b"", "/tmp", "main"))
             .unwrap();
-        assert_eq!(store.distinct_branches().unwrap(), vec!["main"]);
+        assert_eq!(
+            store
+                .distinct_branches_for(&SearchOptions::default())
+                .unwrap(),
+            vec!["main"]
+        );
     }
 
     #[test]

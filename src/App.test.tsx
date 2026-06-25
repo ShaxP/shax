@@ -69,7 +69,10 @@ vi.mock("./lib/ipc", () => ({
   getBlockOutput: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
   searchBlocks: (...args: unknown[]): Promise<unknown[]> =>
     mockSearchBlocks(...args) as Promise<unknown[]>,
-  listBranches: (): Promise<string[]> => Promise.resolve([]),
+  listBranches: (...args: unknown[]): Promise<string[]> => {
+    void args;
+    return Promise.resolve([]);
+  },
   blockGetOutput: (...args: unknown[]): Promise<Uint8Array> =>
     mockBlockGetOutput(...args) as Promise<Uint8Array>,
   appStateLoad: (...args: unknown[]): Promise<string | null> =>

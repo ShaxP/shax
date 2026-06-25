@@ -421,21 +421,35 @@ export function SearchOverlay({
     inputRef.current?.focus();
   }, []);
 
-  // Pull the full set of distinct branches from history once when the
-  // overlay opens. Cheap (one `SELECT DISTINCT … GROUP BY`) and the
-  // user can't add branches while the modal is up, so a one-shot fetch
-  // is enough. Failures are non-fatal — fall back to the empty list,
-  // which collapses the dropdown to just "Any branch" (plus the
-  // current pane's branch via the union below).
+  // Faceted branch list: re-fetch whenever the query / non-branch
+  // filters change so the dropdown reflects "branches that exist in
+  // the current result set", not "every branch you've ever used".
+  // Picking a branch deliberately doesn't refetch — the facet must
+  // not collapse to the picked option (that's the standard rule, and
+  // the backend mirrors it by ignoring `opts.git_branch`). Same
+  // debounce as `searchBlocks` so the two requests fire together.
   useEffect(() => {
     let cancelled = false;
-    void listBranches().then((list) => {
-      if (!cancelled) setHistoryBranches(list);
-    });
+    const trimmed = query.trim();
+    const handle = setTimeout(() => {
+      const since = bucketToSinceMs(time, Date.now());
+      const resolvedCwd = cwd === "here" ? (currentCwd ?? undefined) : undefined;
+      void listBranches({
+        query: trimmed,
+        limit: RESULT_LIMIT,
+        offset: 0,
+        status,
+        since_ms: since,
+        cwd: resolvedCwd,
+      }).then((list) => {
+        if (!cancelled) setHistoryBranches(list);
+      });
+    }, DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      clearTimeout(handle);
     };
-  }, []);
+  }, [query, status, time, cwd, currentCwd]);
 
   // cwd / branch chip option lists. Built per-render from the
   // currentCwd / currentBranch props so the pill label can show the
