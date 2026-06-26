@@ -1017,13 +1017,14 @@ function SearchResultRow({
             style={{
               fontFamily: "var(--font-ui)",
               fontSize: 10,
-              color: "var(--fg-faint)",
-              border: "1px solid var(--border)",
+              color: "var(--fg-dim)",
+              border: "1px solid var(--border-strong)",
               borderRadius: 3,
-              padding: "0 4px",
+              padding: "1px 5px",
               flexShrink: 0,
               letterSpacing: 0.5,
               textTransform: "uppercase",
+              lineHeight: 1.4,
             }}
           >
             fuzzy
