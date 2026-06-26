@@ -58,11 +58,19 @@ pub struct SearchOptions {
     #[serde(default)]
     pub since_ms: Option<u64>,
     /// Narrow on the exact `cwd` the block ran in. `None` skips the
-    /// filter. Slice 3.3 only does exact-equality matching (the
-    /// "Here" chip passes the active pane's cwd verbatim); free-form
-    /// path / glob filtering is a deferred M3 follow-up.
+    /// filter. Used by the cwd chip's "Here" option and the faceted
+    /// history entries (each of which passes its literal path).
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Narrow to blocks whose `cwd` starts with this prefix. Drives
+    /// the cwd chip's "Repo · <root>" option — the frontend resolves
+    /// the worktree root via `git_root_for` and passes it here, so
+    /// any cwd inside that root matches (`/repo`, `/repo/src`,
+    /// `/repo/src/store`, …). Composes with `cwd` (both clauses
+    /// AND'd) for the rare case where both make sense. `None`
+    /// skips the filter.
+    #[serde(default)]
+    pub cwd_prefix: Option<String>,
     /// Narrow on the exact git branch the block ran on. `None` skips
     /// the filter. Exact-equality match, same shape as `cwd`.
     #[serde(default)]
@@ -481,6 +489,7 @@ impl Store {
         let has_filter = opts.status != SearchStatus::Any
             || opts.since_ms.is_some()
             || opts.cwd.is_some()
+            || opts.cwd_prefix.is_some()
             || opts.git_branch.is_some();
         if trimmed.is_empty() && !has_filter {
             // Empty query and no active filter → nothing to show. Keeps
@@ -510,6 +519,13 @@ impl Store {
         }
         if opts.cwd.is_some() {
             clauses.push("b.cwd = :cwd");
+        }
+        if opts.cwd_prefix.is_some() {
+            // Prefix match for "this repo". Two-arm OR so a prefix of
+            // `/repo/shax` matches the root and `/repo/shax/src/...`
+            // but *not* `/repo/shaxx` (which a naive `INSTR=1` would
+            // accidentally accept). No `LIKE` escape dance.
+            clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
         }
         if opts.git_branch.is_some() {
             clauses.push("b.git_branch = :branch");
@@ -553,6 +569,9 @@ impl Store {
             }
             if let Some(ref cwd) = opts.cwd {
                 bind.push((":cwd", cwd));
+            }
+            if let Some(ref prefix) = opts.cwd_prefix {
+                bind.push((":cwd_prefix", prefix));
             }
             if let Some(ref branch) = opts.git_branch {
                 bind.push((":branch", branch));
@@ -657,6 +676,9 @@ impl Store {
         if opts.cwd.is_some() {
             clauses.push("cwd = :cwd");
         }
+        if opts.cwd_prefix.is_some() {
+            clauses.push("(cwd = :cwd_prefix OR INSTR(cwd, :cwd_prefix || '/') = 1)");
+        }
         if opts.git_branch.is_some() {
             clauses.push("git_branch = :branch");
         }
@@ -687,6 +709,9 @@ impl Store {
         }
         if let Some(ref cwd) = opts.cwd {
             bind.push((":cwd", cwd));
+        }
+        if let Some(ref prefix) = opts.cwd_prefix {
+            bind.push((":cwd_prefix", prefix));
         }
         if let Some(ref branch) = opts.git_branch {
             bind.push((":branch", branch));
@@ -736,7 +761,90 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// Return the most recent `limit` blocks across all panes, oldest-first
+    /// Distinct non-empty `cwd` values across the *result set* of the
+    /// given search options, ordered most-recently-used first and
+    /// capped at 30 entries so the dropdown stays usable. Same
+    /// faceted-search rule as `distinct_branches_for`: applies every
+    /// filter except `cwd` and `cwd_prefix` themselves (otherwise
+    /// picking a directory would collapse the list to just that one
+    /// option).
+    pub fn distinct_cwds_for(&self, opts: &SearchOptions) -> Result<Vec<String>, StoreError> {
+        const MAX_CWDS: usize = 30;
+        let trimmed = opts.query.trim();
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("b.aborted = 0 AND b.exit_code = 0"),
+            SearchStatus::Fail => clauses.push("b.aborted = 0 AND b.exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("b.aborted = 1"),
+        }
+        if opts.since_ms.is_some() {
+            clauses.push("b.started_at_ms >= :since");
+        }
+        if opts.git_branch.is_some() {
+            clauses.push("b.git_branch = :branch");
+        }
+        // `opts.cwd` and `opts.cwd_prefix` are intentionally ignored —
+        // they're what this facet narrows. See the doc comment.
+
+        let mut sql = if trimmed.is_empty() {
+            String::from(
+                r#"
+                SELECT b.cwd
+                  FROM blocks b
+                 WHERE b.cwd IS NOT NULL
+                   AND b.cwd <> ''
+                "#,
+            )
+        } else {
+            String::from(
+                r#"
+                SELECT b.cwd
+                  FROM blocks_fts
+                  JOIN blocks b ON b.id = blocks_fts.block_id
+                 WHERE blocks_fts MATCH :match
+                   AND b.cwd IS NOT NULL
+                   AND b.cwd <> ''
+                "#,
+            )
+        };
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" GROUP BY b.cwd ORDER BY MAX(b.started_at_ms) DESC LIMIT :limit");
+
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let attempt = (|| -> Result<Vec<String>, rusqlite::Error> {
+            let since_i64 = opts.since_ms.map(|v| v as i64);
+            let limit_i64 = MAX_CWDS as i64;
+            let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> = vec![(":limit", &limit_i64)];
+            if !trimmed.is_empty() {
+                bind.push((":match", &trimmed));
+            }
+            if let Some(ref s) = since_i64 {
+                bind.push((":since", s));
+            }
+            if let Some(ref branch) = opts.git_branch {
+                bind.push((":branch", branch));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(bind.as_slice(), |row| row.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })();
+        match attempt {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("syntax error") => {
+                Ok(Vec::new())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Distinct non-empty `git_branch` values across the *result set* of
     /// the given search options, ordered most-recently-used first. This
     /// is the faceted-search version of `distinct_branches`: applies the
@@ -762,6 +870,9 @@ impl Store {
         }
         if opts.cwd.is_some() {
             clauses.push("b.cwd = :cwd");
+        }
+        if opts.cwd_prefix.is_some() {
+            clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
         }
         // `opts.git_branch` is intentionally ignored — see doc comment.
 
@@ -805,6 +916,9 @@ impl Store {
             if let Some(ref cwd) = opts.cwd {
                 bind.push((":cwd", cwd));
             }
+            if let Some(ref prefix) = opts.cwd_prefix {
+                bind.push((":cwd_prefix", prefix));
+            }
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(bind.as_slice(), |row| row.get::<_, String>(0))?;
             let mut out = Vec::new();
@@ -824,6 +938,7 @@ impl Store {
         }
     }
 
+    /// Return the most recent `limit` blocks across all panes, oldest-first
     /// within the window (so the UI's chronological append order is preserved
     /// when seeding the BlockList on app boot).
     pub fn load_recent(&self, limit: usize) -> Result<Vec<BlockSummary>, StoreError> {
@@ -1612,6 +1727,168 @@ mod tests {
         // Both still appear even though we picked `feat/a`.
         assert!(branches.contains(&"feat/a".to_owned()));
         assert!(branches.contains(&"feat/b".to_owned()));
+    }
+
+    #[test]
+    fn search_filters_by_cwd_prefix_match_repo_root() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        // Two blocks inside `/repo/proj` (one at root, one deeper);
+        // one outside.
+        store
+            .insert_block(&make_block_with(pane, 1000, "a", b"", "/repo/proj", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "b",
+                b"",
+                "/repo/proj/src/store",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                3000,
+                "c",
+                b"",
+                "/other/place",
+                "main",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd_prefix: Some("/repo/proj".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        // Both inside the repo are returned; the outside one isn't.
+        let cwds: Vec<&str> = hits
+            .iter()
+            .map(|h| h.block.cwd.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(cwds, vec!["/repo/proj/src/store", "/repo/proj"]);
+    }
+
+    #[test]
+    fn cwd_prefix_does_not_match_unrelated_dir_starting_the_same() {
+        // The OR clause `b.cwd = :prefix OR INSTR(b.cwd, :prefix||'/')
+        // = 1` matches the root + descendants but not a sibling that
+        // happens to start with the same letters. `/repo/shax` must
+        // NOT match `/repo/shaxx`.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "a",
+                b"",
+                "/repo/shaxx",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "b", b"", "/repo/shax", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                3000,
+                "c",
+                b"",
+                "/repo/shax/src",
+                "main",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd_prefix: Some("/repo/shax".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let cwds: Vec<&str> = hits.iter().filter_map(|h| h.block.cwd.as_deref()).collect();
+        // Root + descendant included; lookalike sibling excluded.
+        assert!(cwds.contains(&"/repo/shax"));
+        assert!(cwds.contains(&"/repo/shax/src"));
+        assert!(!cwds.contains(&"/repo/shaxx"));
+    }
+
+    #[test]
+    fn distinct_cwds_for_lists_unique_cwds_most_recent_first() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(pane, 1000, "a", b"", "/a", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "b", b"", "/b", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "c", b"", "/a", "main"))
+            .unwrap();
+        let cwds = store.distinct_cwds_for(&SearchOptions::default()).unwrap();
+        assert_eq!(cwds, vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn distinct_cwds_for_ignores_cwd_and_cwd_prefix_filters() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(pane, 1000, "a", b"", "/a", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "b", b"", "/b", "main"))
+            .unwrap();
+        // Filter to /a only — the facet must still list both.
+        let cwds = store
+            .distinct_cwds_for(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd: Some("/a".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(cwds.contains(&"/a".to_owned()));
+        assert!(cwds.contains(&"/b".to_owned()));
+    }
+
+    #[test]
+    fn distinct_cwds_for_narrows_to_query_matches() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "kubectl get pods",
+                b"",
+                "/a",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "echo hi", b"", "/b", "main"))
+            .unwrap();
+        let cwds = store
+            .distinct_cwds_for(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(cwds, vec!["/a"]);
     }
 
     #[test]

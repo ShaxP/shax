@@ -71,11 +71,10 @@ Split out of M1.5 once that milestone landed only the streaming-output half. M1.
 
 **Exit:** literal and metadata search across thousands of seeded blocks returns relevant results quickly; results jump back to the source block.
 
-**Slice status & follow-ups.** Slices 3.1 and 3.2 shipped basic FTS, the overlay, in-pane jump-or-inspect, and the status / time filter chips. Slice 3.3 adds cwd + branch quick-filters and inline matched-term highlight in the command line. Still owed inside M3 before the milestone closes:
+**Slice status & follow-ups.** Slices 3.1–3.4 shipped basic FTS, the overlay, in-pane jump-or-inspect, the status / time chips, cwd + branch quick-filters, inline matched-term highlight, the history-driven branch dropdown, and (3.4) the on-demand repo-root "this repo" filter plus the faceted cwd dropdown. Still owed inside M3 before the milestone closes:
 
 - **Fuzzy match** alongside literal FTS5 — the spec calls for "literal *and* fuzzy". Likely a trigram or edit-distance pass for command text, gated behind a small prefix length so it doesn't dominate cheap literal hits.
-- **Repo-root derivation** so a "this repo" cwd filter is possible — needs the backend to either capture the worktree root at block completion (next to `cwd` / `git_branch`) or compute it on demand by walking up from `cwd` looking for `.git`. Without it the cwd chip is limited to exact-cwd matching, which is too narrow once the user walks one level into a subdirectory.
-- **Free-form cwd / path filter input** (path glob, e.g. `~/project/**`). The "Here" chip handles the daily-driver case; this covers the spec example "Everything run in `~/project` this week" when the user isn't physically standing in that directory.
+- **Free-form cwd / path filter input** (path glob, e.g. `~/project/**`). The cwd dropdown's "Here", "Repo", and history entries cover the daily-driver cases; this covers the spec example "Everything run in `~/project` this week" when the user isn't physically standing in that directory and hasn't visited it recently.
 
 ## M4 File viewer and static formatters
 

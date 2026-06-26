@@ -73,6 +73,14 @@ vi.mock("./lib/ipc", () => ({
     void args;
     return Promise.resolve([]);
   },
+  listCwds: (...args: unknown[]): Promise<string[]> => {
+    void args;
+    return Promise.resolve([]);
+  },
+  gitRootFor: (...args: unknown[]): Promise<string | null> => {
+    void args;
+    return Promise.resolve(null);
+  },
   blockGetOutput: (...args: unknown[]): Promise<Uint8Array> =>
     mockBlockGetOutput(...args) as Promise<Uint8Array>,
   appStateLoad: (...args: unknown[]): Promise<string | null> =>
