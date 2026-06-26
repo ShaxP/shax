@@ -281,6 +281,14 @@ export interface SearchOptions {
    * filtering is a deferred M3 follow-up.
    */
   cwd?: string;
+  /**
+   * Narrow to blocks whose `cwd` starts with this prefix. Drives the
+   * cwd chip's "Repo · <root>" option — the frontend resolves the
+   * worktree root via `gitRootFor` and passes the result here. Exact
+   * byte-prefix matching (via SQL `INSTR` on the backend), so paths
+   * with `_` / `%` aren't surprise-matched.
+   */
+  cwd_prefix?: string;
   /** Narrow on the exact git branch the block ran on. */
   git_branch?: string;
 }
@@ -322,6 +330,29 @@ export async function listBranches(opts: SearchOptions): Promise<string[]> {
   if (!isTauriContext()) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string[]>("list_branches", { opts });
+}
+
+/**
+ * Faceted cwd list for the search overlay's cwd dropdown — same
+ * shape as `listBranches`, capped at the 30 most-recent directories.
+ * Skips `opts.cwd` and `opts.cwd_prefix` themselves so picking a
+ * directory doesn't collapse the list.
+ */
+export async function listCwds(opts: SearchOptions): Promise<string[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("list_cwds", { opts });
+}
+
+/**
+ * Walk up from `path` until a `.git` entry is found and return that
+ * directory — the worktree root. `null` if `path` isn't inside a git
+ * repo (or in any non-Tauri context).
+ */
+export async function gitRootFor(path: string): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("git_root_for", { path });
 }
 
 /**

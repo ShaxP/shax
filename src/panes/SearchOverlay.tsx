@@ -1,26 +1,28 @@
 /**
- * Block-search overlay (M3 slices 3.1 + 3.2).
+ * Block-search overlay (M3 slices 3.1 → 3.4).
  *
  * Centred modal over the pane area. A single FTS5-backed query input
  * drives a debounced search; a row of filter chips above it composes
- * status and time filters into the same request. Results are compact
- * block rows with a matched-output snippet underneath when the hit
- * landed in the captured output (vs. the command line).
+ * status, time, cwd, and branch filters into the same request.
+ * Results are compact block rows with a matched-output snippet
+ * underneath when the hit landed in the captured output (vs. the
+ * command line), plus inline `<mark>` highlight on the command text.
  *
  * Keyboard nav: `↑` / `↓` moves the highlighted result, `Enter`
  * activates it. Activation hands the hit off to the caller via
- * `onSelect`; App decides whether to jump to a still-alive pane or
- * fall back to the read-only viewer modal.
+ * `onSelect`; App jumps to a still-alive pane (select-block event)
+ * or "inspects" the hit in the current active pane (inspect-block).
  *
- * 3.3 will add cwd + branch text-filters and inline highlight of the
- * matched terms in the command line. Keep the chip row + result row
- * structure stable so those layer in.
+ * Filter chips are dropdown-driven popovers (portalled). Status and
+ * time use static option lists; cwd and branch are *faceted* — their
+ * dropdowns reflect only the values that exist in the current result
+ * set, refreshed alongside the search on every query / filter change.
  */
 
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { listBranches, searchBlocks } from "../lib/ipc";
+import { gitRootFor, listBranches, listCwds, searchBlocks } from "../lib/ipc";
 import type { SearchHit, SearchStatus } from "../lib/ipc";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 
@@ -282,6 +284,34 @@ function basename(path: string): string {
   return idx === -1 ? trimmed : trimmed.slice(idx + 1) || "/";
 }
 
+/**
+ * Resolve the cwd chip's current state into the pair of `SearchOptions`
+ * fields the backend understands:
+ *
+ *   - `"any"`           → no filter.
+ *   - `"here"`          → exact match on the active pane's cwd.
+ *   - `"repo"`          → prefix match on the resolved git worktree
+ *                          root (so any descendant directory matches).
+ *   - `<literal path>`  → exact match on that path (faceted history).
+ *
+ * Picks degrade to "no filter" when the underlying value is missing
+ * (e.g. `"here"` but the pane never reported a cwd).
+ */
+function resolveCwdFilter(
+  cwd: string,
+  currentCwd: string | null,
+  repoRoot: string | null,
+): { cwd?: string; cwd_prefix?: string } {
+  if (cwd === "any") return {};
+  if (cwd === "here") {
+    return currentCwd !== null && currentCwd.length > 0 ? { cwd: currentCwd } : {};
+  }
+  if (cwd === "repo") {
+    return repoRoot !== null && repoRoot.length > 0 ? { cwd_prefix: repoRoot } : {};
+  }
+  return { cwd };
+}
+
 function statusGlyph(b: SearchHit["block"]): string {
   if (b.aborted) return "·";
   if (b.exit_code === null) return "…";
@@ -399,11 +429,19 @@ export function SearchOverlay({
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SearchStatus>("any");
   const [time, setTime] = useState<TimeBucket>("any");
-  // `cwd` chip: "any" is the no-filter state; "here" resolves to
-  // `currentCwd` at search time. We store the key, not the resolved
-  // value, so the chip pill stays readable as "Here · <path>".
-  type CwdKey = "any" | "here";
-  const [cwd, setCwd] = useState<CwdKey>("any");
+  // `cwd` chip: widened in slice 3.4 to four shapes —
+  //   "any"            → no filter
+  //   "here"           → exact match on `currentCwd`
+  //   "repo"           → prefix match on the active pane's git
+  //                       worktree root (resolved via `gitRootFor`)
+  //   <literal path>   → exact match on a previously-used cwd from
+  //                       the faceted history dropdown
+  // Storing the *key* (not the resolved value) keeps the pill label
+  // readable as "Here · <basename>" or "Repo · <basename>" without
+  // pinning us to a specific string at render time.
+  const [cwd, setCwd] = useState<string>("any");
+  const [historyCwds, setHistoryCwds] = useState<string[]>([]);
+  const [repoRoot, setRepoRoot] = useState<string | null>(null);
   // `branch` chip: "any" or the literal branch name. The dropdown
   // is populated from history (every branch the user has worked
   // on), not just the active pane's current branch, so the user can
@@ -433,14 +471,14 @@ export function SearchOverlay({
     const trimmed = query.trim();
     const handle = setTimeout(() => {
       const since = bucketToSinceMs(time, Date.now());
-      const resolvedCwd = cwd === "here" ? (currentCwd ?? undefined) : undefined;
+      const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot);
       void listBranches({
         query: trimmed,
         limit: RESULT_LIMIT,
         offset: 0,
         status,
         since_ms: since,
-        cwd: resolvedCwd,
+        ...cwdFilter,
       }).then((list) => {
         if (!cancelled) setHistoryBranches(list);
       });
@@ -449,25 +487,101 @@ export function SearchOverlay({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [query, status, time, cwd, currentCwd]);
+  }, [query, status, time, cwd, currentCwd, repoRoot]);
 
-  // cwd / branch chip option lists. Built per-render from the
-  // currentCwd / currentBranch props so the pill label can show the
-  // basename of the actual path / the branch name. If the active
-  // pane never reported a cwd or branch the chip is omitted entirely
-  // — a no-op pill would be more noise than help.
-  const cwdOptions: FilterOption<"any" | "here">[] = [
-    { key: "any", label: "Any directory" },
-    ...(currentCwd !== null
-      ? [
-          {
-            key: "here" as const,
-            label: `Here · ${basename(currentCwd)}`,
-            color: "var(--cyan)",
-          },
-        ]
-      : []),
-  ];
+  // Faceted cwd list: same shape as the branch facet, narrowed to
+  // directories that exist in the current result set. Ignores
+  // `opts.cwd` / `opts.cwd_prefix` themselves so picking a directory
+  // doesn't collapse the dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    const trimmed = query.trim();
+    const handle = setTimeout(() => {
+      const since = bucketToSinceMs(time, Date.now());
+      void listCwds({
+        query: trimmed,
+        limit: RESULT_LIMIT,
+        offset: 0,
+        status,
+        since_ms: since,
+        git_branch: branch === "any" ? undefined : branch,
+      }).then((list) => {
+        if (!cancelled) setHistoryCwds(list);
+      });
+    }, DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [query, status, time, branch]);
+
+  // Resolve the repo root for the active pane once, when the overlay
+  // opens or `currentCwd` changes. Cheap fs walk on the backend; we
+  // cache the result so the "Repo · …" chip option is available
+  // synchronously while the popover is open.
+  useEffect(() => {
+    if (currentCwd === null || currentCwd.length === 0) {
+      setRepoRoot(null);
+      return;
+    }
+    let cancelled = false;
+    void gitRootFor(currentCwd).then((root) => {
+      if (!cancelled) setRepoRoot(root);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCwd]);
+
+  // cwd dropdown (slice 3.4):
+  //   - Any directory
+  //   - Here · <basename of currentCwd>           (when a cwd exists)
+  //   - Repo · <basename of repo root>            (when in a git worktree
+  //                                                and the root differs
+  //                                                from `currentCwd`)
+  //   - …faceted history entries                  (most-recent first,
+  //                                                capped server-side at 30)
+  //
+  // We dedupe so the same directory doesn't show twice when, e.g., the
+  // "Here" cwd is also in the history list. The currently-picked value
+  // is preserved even if it's no longer in the facets — same rationale
+  // as the branch dropdown: an active filter must remain visible so
+  // the user can clear it.
+  const cwdSeen = new Set<string>();
+  const cwdOptions: FilterOption<string>[] = [{ key: "any", label: "Any directory" }];
+  if (currentCwd !== null && currentCwd.length > 0) {
+    cwdOptions.push({
+      key: "here",
+      label: `Here · ${basename(currentCwd)}`,
+      color: "var(--cyan)",
+    });
+    cwdSeen.add(currentCwd);
+  }
+  if (
+    repoRoot !== null &&
+    repoRoot.length > 0 &&
+    repoRoot !== currentCwd &&
+    !cwdSeen.has(repoRoot)
+  ) {
+    cwdOptions.push({
+      key: "repo",
+      label: `Repo · ${basename(repoRoot)}`,
+      color: "var(--cyan)",
+    });
+    cwdSeen.add(repoRoot);
+  }
+  for (const path of historyCwds) {
+    if (!cwdSeen.has(path)) {
+      cwdOptions.push({ key: path, label: path, color: "var(--cyan)" });
+      cwdSeen.add(path);
+    }
+  }
+  // Keep the currently-picked literal path in the list even if the
+  // facets dropped it (e.g. the user typed a query with zero hits on
+  // that directory). `any`/`here`/`repo` are already handled above.
+  if (cwd !== "any" && cwd !== "here" && cwd !== "repo" && !cwdSeen.has(cwd)) {
+    cwdOptions.splice(1, 0, { key: cwd, label: cwd, color: "var(--cyan)" });
+  }
   // Branch dropdown: trust the faceted backend list verbatim. We
   // used to union the active pane's `currentBranch` in front so the
   // most likely pick was one click away, but with facets in play
@@ -505,17 +619,14 @@ export function SearchOverlay({
   // without a text query.
   useEffect(() => {
     const trimmed = query.trim();
-    // "Here" resolves at search time. If the chip is on "here" but the
-    // pane reported no cwd / branch, the chip behaves as "any" rather
-    // than silently filtering against an empty string (which would
-    // match nothing).
-    const resolvedCwd = cwd === "here" ? (currentCwd ?? undefined) : undefined;
+    const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot);
     // Branch state is "any" or the literal branch name from history.
     const resolvedBranch = branch === "any" ? undefined : branch;
     const hasFilter =
       status !== "any" ||
       time !== "any" ||
-      resolvedCwd !== undefined ||
+      cwdFilter.cwd !== undefined ||
+      cwdFilter.cwd_prefix !== undefined ||
       resolvedBranch !== undefined;
     if (trimmed === "" && !hasFilter) {
       setResults([]);
@@ -531,7 +642,7 @@ export function SearchOverlay({
         offset: 0,
         status,
         since_ms: since,
-        cwd: resolvedCwd,
+        ...cwdFilter,
         git_branch: resolvedBranch,
       }).then((hits) => {
         setResults(hits);
@@ -540,7 +651,7 @@ export function SearchOverlay({
       });
     }, DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [query, status, time, cwd, branch, currentCwd, currentBranch]);
+  }, [query, status, time, cwd, branch, currentCwd, currentBranch, repoRoot]);
 
   // Keyboard handling — scoped to the window while the overlay is up.
   // Refs let the listener observe the latest results/selected without
@@ -650,7 +761,7 @@ export function SearchOverlay({
             value={time}
             onChange={setTime}
           />
-          {currentCwd !== null && (
+          {cwdOptions.length > 1 && (
             <FilterDropdown
               testId="search-chip-cwd"
               options={cwdOptions}

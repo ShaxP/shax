@@ -11,8 +11,9 @@ mod vt;
 use std::sync::Arc;
 
 use ipc::{
-    app_state_load, app_state_save, block_get_output, list_branches, pty_get_block_output,
-    pty_kill, pty_list_blocks, pty_resize, pty_spawn, pty_write, search_blocks,
+    app_state_load, app_state_save, block_get_output, git_root_for, list_branches, list_cwds,
+    pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_spawn, pty_write,
+    search_blocks,
 };
 use pty::PtyManager;
 use store::{default_db_path, Store};
@@ -61,6 +62,8 @@ pub fn run() {
             app_state_save,
             search_blocks,
             list_branches,
+            list_cwds,
+            git_root_for,
             block_get_output,
         ])
         .build(tauri::generate_context!())

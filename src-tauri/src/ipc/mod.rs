@@ -182,3 +182,42 @@ pub async fn list_branches(
         .distinct_branches_for(&opts)
         .map_err(|e| e.to_string())
 }
+
+/// Faceted cwd list: same shape as `list_branches` but for the cwd
+/// dropdown. Skips `opts.cwd` and `opts.cwd_prefix` themselves (those
+/// are what this facet narrows) and caps at the 30 most-recent
+/// directories so the popover stays usable.
+#[tauri::command]
+pub async fn list_cwds(
+    opts: SearchOptions,
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<Vec<String>, String> {
+    let Some(store) = manager.store() else {
+        return Ok(Vec::new());
+    };
+    store.distinct_cwds_for(&opts).map_err(|e| e.to_string())
+}
+
+/// Resolve the git worktree root containing `path` by walking up until
+/// a `.git` entry is found (regular dir for a normal clone, file for a
+/// worktree). Returns `None` if no `.git` exists anywhere on the way
+/// up to the filesystem root, or if `path` is empty / not absolute.
+/// Pure fs op — no `git` subprocess; safe to call on every search.
+#[tauri::command]
+pub async fn git_root_for(path: String) -> Result<Option<String>, String> {
+    if path.is_empty() {
+        return Ok(None);
+    }
+    let start = std::path::Path::new(&path);
+    if !start.is_absolute() {
+        return Ok(None);
+    }
+    let mut current: Option<&std::path::Path> = Some(start);
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return Ok(Some(dir.to_string_lossy().into_owned()));
+        }
+        current = dir.parent();
+    }
+    Ok(None)
+}
