@@ -91,6 +91,13 @@ pub struct SearchHit {
     /// frontend escapes the surrounding text and renders `<mark>` /
     /// `</mark>` literally as marker tokens.
     pub snippet: Option<String>,
+    /// `true` if this hit came from the trigram (fuzzy) index alone —
+    /// the literal-token index had no match for this row. Lets the UI
+    /// flag forgiving-match rows so the user knows why a row with no
+    /// obvious occurrence of their query showed up. Default `false`
+    /// for the common literal-hit case.
+    #[serde(default)]
+    pub fuzzy: bool,
 }
 
 /// Cap how much of a block's stripped output we feed into the FTS5 index.
@@ -256,6 +263,39 @@ fn backfill_fts(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Backfill the trigram index from the `blocks` table. Only the
+/// `command` column is indexed — output isn't, to keep storage cost
+/// down (trigram indexes are ~3× the source text). Idempotent: skips
+/// ids already present.
+fn backfill_fts_trigram(conn: &Connection) -> Result<(), StoreError> {
+    let rows: Vec<(String, Option<String>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, command FROM blocks
+             WHERE id NOT IN (SELECT block_id FROM blocks_fts_trigram)",
+        )?;
+        let collected: Vec<(String, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        collected
+    };
+    if rows.is_empty() {
+        return Ok(());
+    }
+    tracing::info!(
+        count = rows.len(),
+        "backfilling blocks_fts_trigram from blocks"
+    );
+    let tx = conn.unchecked_transaction()?;
+    for (id, command) in rows {
+        tx.execute(
+            "INSERT INTO blocks_fts_trigram (block_id, command) VALUES (?1, ?2)",
+            params![id, command],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 impl Store {
     /// Open or create the database at `path`, applying the schema if needed.
     /// Intermediate directories are created.
@@ -374,7 +414,32 @@ impl Store {
             backfill_fts(conn)?;
         }
 
-        conn.pragma_update(None, "user_version", 3)?;
+        // v4: a second FTS index over the command text only, this time
+        // with the `trigram` tokenizer. Trigrams split each token into
+        // overlapping 3-char windows, so a query of `kubctl` matches
+        // a stored `kubectl` (their trigram sets share `kub`, `ubc`,
+        // and `ctl` — close enough for the user to see what they
+        // meant). The literal index stays the primary; trigram fills
+        // the fuzzy-match gap.
+        //
+        // Indexing only `command` (not `output`) keeps the database
+        // footprint manageable. Trigram indexes are roughly 3× the
+        // raw text size; output bytes are the long tail of storage
+        // already.
+        if version < 4 {
+            conn.execute_batch(
+                r#"
+                CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts_trigram USING fts5(
+                    block_id UNINDEXED,
+                    command,
+                    tokenize = 'trigram'
+                );
+                "#,
+            )?;
+            backfill_fts_trigram(conn)?;
+        }
+
+        conn.pragma_update(None, "user_version", 4)?;
 
         // One-shot dedup: an earlier build of the FTS-insert path didn't
         // delete prior rows before inserting, so re-running `insert_block`
@@ -467,6 +532,17 @@ impl Store {
             "INSERT INTO blocks_fts (block_id, command, output)
              VALUES (?1, ?2, ?3)",
             params![id_str, block.command, fts_output],
+        )?;
+        // Mirror the same delete-then-insert into the trigram index so
+        // command-text edits stay searchable from both paths. Trigram
+        // only indexes `command` — output isn't tokenized here.
+        tx.execute(
+            "DELETE FROM blocks_fts_trigram WHERE block_id = ?1",
+            params![id_str],
+        )?;
+        tx.execute(
+            "INSERT INTO blocks_fts_trigram (block_id, command) VALUES (?1, ?2)",
+            params![id_str, block.command],
         )?;
         tx.commit()?;
         Ok(())
@@ -617,17 +693,180 @@ impl Store {
                     },
                     pane_id,
                     snippet: snippet.filter(|s| !s.is_empty()),
+                    fuzzy: false,
                 })
             })?;
             rows.collect::<Result<_, _>>()
         })();
-        match attempt {
-            Ok(v) => Ok(v),
+        let literal: Vec<SearchHit> = match attempt {
+            Ok(v) => v,
             Err(e) => {
                 tracing::debug!("search query rejected by FTS5: {e}");
-                Ok(Vec::new())
+                Vec::new()
             }
+        };
+
+        // Fuzzy pass: trigram-tokenized FTS5 over the command column.
+        // Trigrams give us substring matching (`bectl` finds `kubectl`)
+        // that the porter tokenizer can't — porter requires
+        // word-boundary or prefix-* matches. Edit-distance ("kubctl"
+        // → "kubectl") is *not* covered by FTS5 trigrams; that's an
+        // M7 polish item.
+        //
+        // Drop the connection lock here so the inner method can
+        // reacquire it without deadlocking. Mutex is std (non-
+        // reentrant) so we *must* release before recursing.
+        drop(conn);
+        let fuzzy_extra = self.fuzzy_search(opts, &literal)?;
+
+        let mut combined = literal;
+        combined.extend(fuzzy_extra);
+        Ok(combined)
+    }
+
+    /// Trigram-substring sibling of `search`. Runs the same filter set
+    /// against `blocks_fts_trigram` (command column only) and returns
+    /// only those hits whose block id isn't already in `literal_hits`
+    /// — the literal pass takes precedence so a row matched both ways
+    /// keeps its proper snippet and rank.
+    fn fuzzy_search(
+        &self,
+        opts: &SearchOptions,
+        literal_hits: &[SearchHit],
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let trimmed = opts.query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
         }
+        // Trigram tokenizer requires at least 3 chars to produce any
+        // trigrams — a 1- or 2-char query would match *everything*
+        // (or nothing, depending on FTS5 internals). Skip the fuzzy
+        // pass below that threshold and let the literal results
+        // stand alone.
+        if trimmed.chars().count() < 3 {
+            return Ok(Vec::new());
+        }
+
+        let mut clauses: Vec<&'static str> = Vec::new();
+        match opts.status {
+            SearchStatus::Any => {}
+            SearchStatus::Ok => clauses.push("b.aborted = 0 AND b.exit_code = 0"),
+            SearchStatus::Fail => clauses.push("b.aborted = 0 AND b.exit_code != 0"),
+            SearchStatus::Aborted => clauses.push("b.aborted = 1"),
+        }
+        if opts.since_ms.is_some() {
+            clauses.push("b.started_at_ms >= :since");
+        }
+        if opts.cwd.is_some() {
+            clauses.push("b.cwd = :cwd");
+        }
+        if opts.cwd_prefix.is_some() {
+            clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
+        }
+        if opts.git_branch.is_some() {
+            clauses.push("b.git_branch = :branch");
+        }
+
+        let mut sql = String::from(
+            r#"
+            SELECT b.id, b.pane_id, b.command, b.cwd, b.git_branch,
+                   b.started_at_ms, b.ended_at_ms, b.exit_code,
+                   b.duration_ms, b.aborted, b.interactive
+            FROM blocks_fts_trigram
+            JOIN blocks b ON b.id = blocks_fts_trigram.block_id
+            WHERE blocks_fts_trigram MATCH :match
+            "#,
+        );
+        for clause in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(clause);
+        }
+        sql.push_str(" ORDER BY b.started_at_ms DESC LIMIT :limit OFFSET :offset");
+
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let attempt = (|| -> Result<Vec<SearchHit>, rusqlite::Error> {
+            let limit_i64 = opts.limit as i64;
+            let offset_i64 = opts.offset as i64;
+            let since_i64 = opts.since_ms.map(|v| v as i64);
+            let mut bind: Vec<(&str, &dyn rusqlite::ToSql)> = vec![
+                (":match", &trimmed),
+                (":limit", &limit_i64),
+                (":offset", &offset_i64),
+            ];
+            if let Some(ref s) = since_i64 {
+                bind.push((":since", s));
+            }
+            if let Some(ref cwd) = opts.cwd {
+                bind.push((":cwd", cwd));
+            }
+            if let Some(ref prefix) = opts.cwd_prefix {
+                bind.push((":cwd_prefix", prefix));
+            }
+            if let Some(ref branch) = opts.git_branch {
+                bind.push((":branch", branch));
+            }
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(bind.as_slice(), |row| {
+                let id_str: String = row.get(0)?;
+                let id = BlockId::parse(&id_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    )
+                })?;
+                let pane_id_str: String = row.get(1)?;
+                let pane_uuid = uuid::Uuid::parse_str(&pane_id_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    )
+                })?;
+                let pane_id = PtyId(pane_uuid);
+                let started_at_ms: i64 = row.get(5)?;
+                let ended_at_ms: Option<i64> = row.get(6)?;
+                let exit_code: Option<i32> = row.get(7)?;
+                let duration_ms: Option<i64> = row.get(8)?;
+                let aborted_int: i32 = row.get(9)?;
+                let interactive_int: i32 = row.get(10)?;
+                Ok(SearchHit {
+                    block: BlockSummary {
+                        id,
+                        command: row.get(2)?,
+                        cwd: row.get(3)?,
+                        git_branch: row.get(4)?,
+                        started_at_ms: started_at_ms as u64,
+                        ended_at_ms: ended_at_ms.map(|v| v as u64),
+                        exit_code,
+                        duration_ms: duration_ms.map(|v| v as u64),
+                        aborted: aborted_int != 0,
+                        interactive: interactive_int != 0,
+                    },
+                    pane_id,
+                    snippet: None,
+                    fuzzy: true,
+                })
+            })?;
+            rows.collect::<Result<_, _>>()
+        })();
+        let trigram_hits: Vec<SearchHit> = match attempt {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!("fuzzy query rejected by FTS5 trigram: {e}");
+                Vec::new()
+            }
+        };
+
+        // Drop rows the literal pass already returned — those keep
+        // their proper snippet and ordering.
+        let seen: std::collections::HashSet<BlockId> =
+            literal_hits.iter().map(|h| h.block.id).collect();
+        let extra: Vec<SearchHit> = trigram_hits
+            .into_iter()
+            .filter(|h| !seen.contains(&h.block.id))
+            .collect();
+        Ok(extra)
     }
 
     /// Load the persisted app-state JSON blob (tabs + layout + focus),
@@ -756,6 +995,7 @@ impl Store {
                 },
                 pane_id,
                 snippet: None,
+                fuzzy: false,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -1074,6 +1314,18 @@ mod tests {
             interactive: false,
             output: output.to_vec(),
         }
+    }
+
+    #[test]
+    fn fts5_trigram_tokenizer_is_available() {
+        // Slice 3.5 relies on FTS5's `trigram` tokenizer for the fuzzy
+        // search index. It ships with sqlite ≥ 3.34 when
+        // `SQLITE_ENABLE_FTS5_TRIGRAM` is compiled in — true for the
+        // `rusqlite` bundled build we use. Fail loud if a future
+        // sqlite bump drops it so we don't ship a broken fuzzy path.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE VIRTUAL TABLE probe USING fts5(c, tokenize = 'trigram');")
+            .expect("FTS5 trigram tokenizer must be available");
     }
 
     #[test]
@@ -1960,6 +2212,118 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].block.command.as_deref(), Some("a"));
         assert!(hits[0].snippet.is_none());
+    }
+
+    #[test]
+    fn fuzzy_finds_substring_matches_porter_misses() {
+        // Porter tokenizer doesn't match `bectl` inside `kubectl` —
+        // they're not at a word boundary and there's no `*` prefix.
+        // The trigram fuzzy pass should pick it up.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl get pods", b""))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "bectl".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].fuzzy, "should be flagged as a fuzzy hit");
+        assert_eq!(hits[0].block.command.as_deref(), Some("kubectl get pods"));
+    }
+
+    #[test]
+    fn literal_hits_outrank_fuzzy_hits_in_combined_result() {
+        // A query that is both a literal token match and a trigram
+        // substring match on different rows: literal should appear
+        // first, fuzzy after, and the literal row should NOT also
+        // appear as a fuzzy duplicate.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl describe", b""))
+            .unwrap();
+        store
+            .insert_block(&make_block(pane, 2000, "kubectl get", b""))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "kubectl".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        // Both rows match literally on "kubectl" — neither should be
+        // flagged fuzzy, and we should see no duplicates.
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| !h.fuzzy));
+    }
+
+    #[test]
+    fn fuzzy_skip_below_three_char_query() {
+        // Trigram needs ≥3 chars to produce trigrams at all. A 2-char
+        // query should not pull in spurious fuzzy hits.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block(pane, 1000, "kubectl get pods", b""))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "be".into(),
+                limit: 10,
+                offset: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        // Porter has no match for "be" against this command, and the
+        // fuzzy pass is gated off — so zero hits.
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn fuzzy_pass_respects_cwd_and_branch_filters() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "kubectl get pods",
+                b"",
+                "/a",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "kubectl get pods",
+                b"",
+                "/b",
+                "feat/x",
+            ))
+            .unwrap();
+        // Trigram-substring query that won't tokenize literally.
+        let hits = store
+            .search(&SearchOptions {
+                query: "bectl".into(),
+                limit: 10,
+                offset: 0,
+                cwd: Some("/a".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.cwd.as_deref(), Some("/a"));
+        assert!(hits[0].fuzzy);
     }
 
     #[test]

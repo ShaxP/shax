@@ -71,10 +71,13 @@ Split out of M1.5 once that milestone landed only the streaming-output half. M1.
 
 **Exit:** literal and metadata search across thousands of seeded blocks returns relevant results quickly; results jump back to the source block.
 
-**Slice status & follow-ups.** Slices 3.1–3.4 shipped basic FTS, the overlay, in-pane jump-or-inspect, the status / time chips, cwd + branch quick-filters, inline matched-term highlight, the history-driven branch dropdown, and (3.4) the on-demand repo-root "this repo" filter plus the faceted cwd dropdown. Still owed inside M3 before the milestone closes:
+**Slice status & follow-ups.** Slices 3.1–3.5 shipped basic FTS, the overlay, in-pane jump-or-inspect, the status / time chips, cwd + branch quick-filters with their faceted dropdowns, inline matched-term highlight, the repo-root "this repo" filter, and (3.5) trigram-substring fuzzy matching alongside the literal index. Remaining in M3:
 
-- **Fuzzy match** alongside literal FTS5 — the spec calls for "literal *and* fuzzy". Likely a trigram or edit-distance pass for command text, gated behind a small prefix length so it doesn't dominate cheap literal hits.
 - **Free-form cwd / path filter input** (path glob, e.g. `~/project/**`). The cwd dropdown's "Here", "Repo", and history entries cover the daily-driver cases; this covers the spec example "Everything run in `~/project` this week" when the user isn't physically standing in that directory and hasn't visited it recently.
+
+Polished further in M7:
+
+- **Edit-distance fuzzy** (e.g. `kubctl` → `kubectl`). 3.5's trigram pass catches substring matches but not transposition / missing-letter typos. SQLite's `spellfix1` or a custom Levenshtein function via rusqlite would cover that gap; deferred because it needs a separate index + scoring pass that's distinct from the FTS5 plumbing.
 
 ## M4 File viewer and static formatters
 

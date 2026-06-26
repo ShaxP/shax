@@ -302,6 +302,13 @@ export interface SearchHit {
   block: BlockSummary;
   pane_id: PtyId;
   snippet: string | null;
+  /**
+   * `true` when this row was matched only by the trigram (substring)
+   * fuzzy index — the literal-token search didn't find it. The UI
+   * tags these rows so the user can tell at a glance why a result
+   * with no obvious match showed up. Defaults to `false`.
+   */
+  fuzzy?: boolean;
 }
 
 /**

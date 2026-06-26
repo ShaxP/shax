@@ -1000,6 +1000,7 @@ function SearchResultRow({
       data-index={index}
       data-block-id={block.id}
       data-selected={selected ? "true" : "false"}
+      data-fuzzy={hit.fuzzy === true ? "true" : "false"}
       style={style}
       onClick={onSelect}
       onMouseEnter={onHover}
@@ -1009,6 +1010,26 @@ function SearchResultRow({
         <span style={COMMAND_TEXT}>
           {block.command !== null ? highlightCommand(block.command, query) : "(no command)"}
         </span>
+        {hit.fuzzy === true && (
+          <span
+            data-testid="search-result-fuzzy-badge"
+            title="Fuzzy match — the query appears as a substring, not a whole word."
+            style={{
+              fontFamily: "var(--font-ui)",
+              fontSize: 10,
+              color: "var(--fg-dim)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 3,
+              padding: "1px 5px",
+              flexShrink: 0,
+              letterSpacing: 0.5,
+              textTransform: "uppercase",
+              lineHeight: 1.4,
+            }}
+          >
+            fuzzy
+          </span>
+        )}
         <span
           style={{ ...TIMESTAMP, display: "inline-flex", alignItems: "center", gap: 4 }}
           title={new Date(block.started_at_ms).toLocaleString()}
