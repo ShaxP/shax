@@ -1,5 +1,5 @@
 /**
- * Block-search overlay (M3 slices 3.1 → 3.4).
+ * Block-search overlay (M3 slices 3.1 → 3.6).
  *
  * Centred modal over the pane area. A single FTS5-backed query input
  * drives a debounced search; a row of filter chips above it composes
@@ -301,13 +301,17 @@ function resolveCwdFilter(
   cwd: string,
   currentCwd: string | null,
   repoRoot: string | null,
-): { cwd?: string; cwd_prefix?: string } {
+  glob: string,
+): { cwd?: string; cwd_prefix?: string; cwd_glob?: string } {
   if (cwd === "any") return {};
   if (cwd === "here") {
     return currentCwd !== null && currentCwd.length > 0 ? { cwd: currentCwd } : {};
   }
   if (cwd === "repo") {
     return repoRoot !== null && repoRoot.length > 0 ? { cwd_prefix: repoRoot } : {};
+  }
+  if (cwd === "glob") {
+    return glob.length > 0 ? { cwd_glob: glob } : {};
   }
   return { cwd };
 }
@@ -434,6 +438,8 @@ export function SearchOverlay({
   //   "here"           → exact match on `currentCwd`
   //   "repo"           → prefix match on the active pane's git
   //                       worktree root (resolved via `gitRootFor`)
+  //   "glob"           → shell-glob match against `cwdGlobInput`
+  //                       (slice 3.6 free-form path/glob input)
   //   <literal path>   → exact match on a previously-used cwd from
   //                       the faceted history dropdown
   // Storing the *key* (not the resolved value) keeps the pill label
@@ -442,6 +448,10 @@ export function SearchOverlay({
   const [cwd, setCwd] = useState<string>("any");
   const [historyCwds, setHistoryCwds] = useState<string[]>([]);
   const [repoRoot, setRepoRoot] = useState<string | null>(null);
+  // Free-form glob the user typed into the cwd dropdown footer. The
+  // `cwd` state above is set to "glob" when this commits via Enter,
+  // and reset to "any" if the user picks any other option.
+  const [cwdGlobInput, setCwdGlobInput] = useState<string>("");
   // `branch` chip: "any" or the literal branch name. The dropdown
   // is populated from history (every branch the user has worked
   // on), not just the active pane's current branch, so the user can
@@ -471,7 +481,7 @@ export function SearchOverlay({
     const trimmed = query.trim();
     const handle = setTimeout(() => {
       const since = bucketToSinceMs(time, Date.now());
-      const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot);
+      const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot, cwdGlobInput);
       void listBranches({
         query: trimmed,
         limit: RESULT_LIMIT,
@@ -487,7 +497,7 @@ export function SearchOverlay({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [query, status, time, cwd, currentCwd, repoRoot]);
+  }, [query, status, time, cwd, currentCwd, repoRoot, cwdGlobInput]);
 
   // Faceted cwd list: same shape as the branch facet, narrowed to
   // directories that exist in the current result set. Ignores
@@ -576,10 +586,22 @@ export function SearchOverlay({
       cwdSeen.add(path);
     }
   }
+  // When a free-form glob is the active filter, show it as a
+  // top-of-list entry labelled `Path · <glob>`. Lets the user see
+  // (and clear) the active pattern from the same popover the
+  // history entries live in.
+  if (cwd === "glob" && cwdGlobInput.length > 0) {
+    cwdOptions.splice(1, 0, {
+      key: "glob",
+      label: `Path · ${cwdGlobInput}`,
+      color: "var(--cyan)",
+    });
+  }
   // Keep the currently-picked literal path in the list even if the
   // facets dropped it (e.g. the user typed a query with zero hits on
-  // that directory). `any`/`here`/`repo` are already handled above.
-  if (cwd !== "any" && cwd !== "here" && cwd !== "repo" && !cwdSeen.has(cwd)) {
+  // that directory). `any`/`here`/`repo`/`glob` are already handled
+  // above.
+  if (cwd !== "any" && cwd !== "here" && cwd !== "repo" && cwd !== "glob" && !cwdSeen.has(cwd)) {
     cwdOptions.splice(1, 0, { key: cwd, label: cwd, color: "var(--cyan)" });
   }
   // Branch dropdown: trust the faceted backend list verbatim. We
@@ -619,7 +641,7 @@ export function SearchOverlay({
   // without a text query.
   useEffect(() => {
     const trimmed = query.trim();
-    const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot);
+    const cwdFilter = resolveCwdFilter(cwd, currentCwd, repoRoot, cwdGlobInput);
     // Branch state is "any" or the literal branch name from history.
     const resolvedBranch = branch === "any" ? undefined : branch;
     const hasFilter =
@@ -627,6 +649,7 @@ export function SearchOverlay({
       time !== "any" ||
       cwdFilter.cwd !== undefined ||
       cwdFilter.cwd_prefix !== undefined ||
+      cwdFilter.cwd_glob !== undefined ||
       resolvedBranch !== undefined;
     if (trimmed === "" && !hasFilter) {
       setResults([]);
@@ -651,7 +674,7 @@ export function SearchOverlay({
       });
     }, DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [query, status, time, cwd, branch, currentCwd, currentBranch, repoRoot]);
+  }, [query, status, time, cwd, branch, currentCwd, currentBranch, repoRoot, cwdGlobInput]);
 
   // Keyboard handling — scoped to the window while the overlay is up.
   // Refs let the listener observe the latest results/selected without
@@ -767,7 +790,29 @@ export function SearchOverlay({
               options={cwdOptions}
               neutralKey="any"
               value={cwd}
-              onChange={setCwd}
+              onChange={(next) => {
+                // Picking a non-glob option clears the typed glob
+                // input so it doesn't reappear when the user toggles
+                // back through the dropdown later.
+                if (next !== "glob") setCwdGlobInput("");
+                setCwd(next);
+              }}
+              renderFooter={(close) => (
+                <CwdGlobInput
+                  value={cwdGlobInput}
+                  onCommit={(v) => {
+                    const trimmed = v.trim();
+                    if (trimmed.length === 0) {
+                      setCwdGlobInput("");
+                      setCwd("any");
+                    } else {
+                      setCwdGlobInput(trimmed);
+                      setCwd("glob");
+                    }
+                    close();
+                  }}
+                />
+              )}
             />
           )}
           {branchSeq.length > 0 && (
@@ -816,6 +861,13 @@ interface FilterDropdownProps<T extends string> {
   neutralKey: T;
   value: T;
   onChange: (key: T) => void;
+  /**
+   * Optional content rendered at the bottom of the popover, after the
+   * regular option list. The cwd chip uses this for its free-form
+   * "Path: …" input. Receives a callback to close the popover when
+   * the footer commits a value.
+   */
+  renderFooter?: (close: () => void) => React.ReactNode;
 }
 
 /**
@@ -840,6 +892,7 @@ function FilterDropdown<T extends string>({
   neutralKey,
   value,
   onChange,
+  renderFooter,
 }: FilterDropdownProps<T>): React.ReactElement {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -946,6 +999,23 @@ function FilterDropdown<T extends string>({
             </div>
           );
         })}
+        {renderFooter !== undefined && (
+          <div
+            data-testid={`${testId}-popover-footer`}
+            style={{
+              borderTop: "1px solid var(--border)",
+              marginTop: 4,
+              paddingTop: 4,
+            }}
+            onClick={(e) => {
+              // Don't bubble to the popover root's outside-click
+              // logic; the footer is intentionally interactive.
+              e.stopPropagation();
+            }}
+          >
+            {renderFooter(() => setOpen(false))}
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -966,6 +1036,55 @@ function FilterDropdown<T extends string>({
       </span>
       {popover !== null && createPortal(popover, document.body)}
     </>
+  );
+}
+
+/**
+ * Inline glob input rendered at the bottom of the cwd dropdown
+ * popover. Commits on Enter (passes the trimmed value up via
+ * `onCommit`, which also closes the popover). Esc clears focus
+ * but does *not* close the popover or commit — that's `FilterDropdown`'s
+ * own Esc handler at the window-capture layer.
+ */
+interface CwdGlobInputProps {
+  value: string;
+  onCommit: (value: string) => void;
+}
+
+function CwdGlobInput({ value, onCommit }: CwdGlobInputProps): React.ReactElement {
+  const [draft, setDraft] = useState(value);
+  // Keep the local draft in sync if an external pick (Any / Here / …)
+  // resets the parent glob to empty.
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  return (
+    <div style={{ padding: "4px 6px 2px 6px" }}>
+      <input
+        data-testid="search-chip-cwd-glob-input"
+        type="text"
+        value={draft}
+        placeholder="Path or glob, e.g. ~/dev/*-server"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onCommit(draft);
+          }
+        }}
+        style={{
+          width: "100%",
+          background: "var(--pane)",
+          color: "var(--fg)",
+          border: "1px solid var(--border-strong)",
+          borderRadius: 3,
+          padding: "3px 6px",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11.5,
+          outline: "none",
+        }}
+      />
+    </div>
   );
 }
 

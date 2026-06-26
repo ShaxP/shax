@@ -71,9 +71,7 @@ Split out of M1.5 once that milestone landed only the streaming-output half. M1.
 
 **Exit:** literal and metadata search across thousands of seeded blocks returns relevant results quickly; results jump back to the source block.
 
-**Slice status & follow-ups.** Slices 3.1–3.5 shipped basic FTS, the overlay, in-pane jump-or-inspect, the status / time chips, cwd + branch quick-filters with their faceted dropdowns, inline matched-term highlight, the repo-root "this repo" filter, and (3.5) trigram-substring fuzzy matching alongside the literal index. Remaining in M3:
-
-- **Free-form cwd / path filter input** (path glob, e.g. `~/project/**`). The cwd dropdown's "Here", "Repo", and history entries cover the daily-driver cases; this covers the spec example "Everything run in `~/project` this week" when the user isn't physically standing in that directory and hasn't visited it recently.
+**Slice status.** Slices 3.1–3.6 close M3: basic FTS + overlay, in-pane jump-or-inspect, status / time chips, cwd + branch quick-filters with faceted dropdowns, inline matched-term highlight, the repo-root "this repo" filter, trigram-substring fuzzy matching, and (3.6) the free-form path/glob input on the cwd dropdown.
 
 Polished further in M7:
 
