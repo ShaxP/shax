@@ -289,6 +289,13 @@ export interface SearchOptions {
    * with `_` / `%` aren't surprise-matched.
    */
   cwd_prefix?: string;
+  /**
+   * Narrow to blocks whose `cwd` matches this shell-style glob
+   * pattern (`*`, `?`, `[…]`). Drives the cwd dropdown's free-form
+   * "Path: …" input. Without wildcards the glob behaves as an
+   * exact match, so a bare path filters to itself.
+   */
+  cwd_glob?: string;
   /** Narrow on the exact git branch the block ran on. */
   git_branch?: string;
 }

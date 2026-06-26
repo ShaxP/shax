@@ -71,6 +71,15 @@ pub struct SearchOptions {
     /// skips the filter.
     #[serde(default)]
     pub cwd_prefix: Option<String>,
+    /// Narrow to blocks whose `cwd` matches this shell-style glob
+    /// pattern. `*` matches any run of characters within a path
+    /// segment, `?` matches one character, `[…]` a char class — the
+    /// usual GLOB semantics. Drives the cwd dropdown's free-form
+    /// "Path: …" input so the user can filter by a path they
+    /// haven't visited recently (e.g. `~/dev/*-server`). `None`
+    /// skips the filter.
+    #[serde(default)]
+    pub cwd_glob: Option<String>,
     /// Narrow on the exact git branch the block ran on. `None` skips
     /// the filter. Exact-equality match, same shape as `cwd`.
     #[serde(default)]
@@ -566,6 +575,7 @@ impl Store {
             || opts.since_ms.is_some()
             || opts.cwd.is_some()
             || opts.cwd_prefix.is_some()
+            || opts.cwd_glob.is_some()
             || opts.git_branch.is_some();
         if trimmed.is_empty() && !has_filter {
             // Empty query and no active filter → nothing to show. Keeps
@@ -602,6 +612,12 @@ impl Store {
             // but *not* `/repo/shaxx` (which a naive `INSTR=1` would
             // accidentally accept). No `LIKE` escape dance.
             clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
+        }
+        if opts.cwd_glob.is_some() {
+            // Shell-glob match (`*`, `?`, `[…]`) for the free-form cwd
+            // input. SQLite's GLOB operator is case-sensitive and
+            // takes no escape dance, unlike LIKE.
+            clauses.push("b.cwd GLOB :cwd_glob");
         }
         if opts.git_branch.is_some() {
             clauses.push("b.git_branch = :branch");
@@ -648,6 +664,9 @@ impl Store {
             }
             if let Some(ref prefix) = opts.cwd_prefix {
                 bind.push((":cwd_prefix", prefix));
+            }
+            if let Some(ref glob) = opts.cwd_glob {
+                bind.push((":cwd_glob", glob));
             }
             if let Some(ref branch) = opts.git_branch {
                 bind.push((":branch", branch));
@@ -763,6 +782,9 @@ impl Store {
         if opts.cwd_prefix.is_some() {
             clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
         }
+        if opts.cwd_glob.is_some() {
+            clauses.push("b.cwd GLOB :cwd_glob");
+        }
         if opts.git_branch.is_some() {
             clauses.push("b.git_branch = :branch");
         }
@@ -801,6 +823,9 @@ impl Store {
             }
             if let Some(ref prefix) = opts.cwd_prefix {
                 bind.push((":cwd_prefix", prefix));
+            }
+            if let Some(ref glob) = opts.cwd_glob {
+                bind.push((":cwd_glob", glob));
             }
             if let Some(ref branch) = opts.git_branch {
                 bind.push((":branch", branch));
@@ -918,6 +943,9 @@ impl Store {
         if opts.cwd_prefix.is_some() {
             clauses.push("(cwd = :cwd_prefix OR INSTR(cwd, :cwd_prefix || '/') = 1)");
         }
+        if opts.cwd_glob.is_some() {
+            clauses.push("cwd GLOB :cwd_glob");
+        }
         if opts.git_branch.is_some() {
             clauses.push("git_branch = :branch");
         }
@@ -951,6 +979,9 @@ impl Store {
         }
         if let Some(ref prefix) = opts.cwd_prefix {
             bind.push((":cwd_prefix", prefix));
+        }
+        if let Some(ref glob) = opts.cwd_glob {
+            bind.push((":cwd_glob", glob));
         }
         if let Some(ref branch) = opts.git_branch {
             bind.push((":branch", branch));
@@ -1024,8 +1055,9 @@ impl Store {
         if opts.git_branch.is_some() {
             clauses.push("b.git_branch = :branch");
         }
-        // `opts.cwd` and `opts.cwd_prefix` are intentionally ignored —
-        // they're what this facet narrows. See the doc comment.
+        // `opts.cwd`, `opts.cwd_prefix`, and `opts.cwd_glob` are
+        // intentionally ignored — they're what this facet narrows.
+        // See the doc comment.
 
         let mut sql = if trimmed.is_empty() {
             String::from(
@@ -1114,6 +1146,9 @@ impl Store {
         if opts.cwd_prefix.is_some() {
             clauses.push("(b.cwd = :cwd_prefix OR INSTR(b.cwd, :cwd_prefix || '/') = 1)");
         }
+        if opts.cwd_glob.is_some() {
+            clauses.push("b.cwd GLOB :cwd_glob");
+        }
         // `opts.git_branch` is intentionally ignored — see doc comment.
 
         let mut sql = if trimmed.is_empty() {
@@ -1158,6 +1193,9 @@ impl Store {
             }
             if let Some(ref prefix) = opts.cwd_prefix {
                 bind.push((":cwd_prefix", prefix));
+            }
+            if let Some(ref glob) = opts.cwd_glob {
+                bind.push((":cwd_glob", glob));
             }
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(bind.as_slice(), |row| row.get::<_, String>(0))?;
@@ -1979,6 +2017,146 @@ mod tests {
         // Both still appear even though we picked `feat/a`.
         assert!(branches.contains(&"feat/a".to_owned()));
         assert!(branches.contains(&"feat/b".to_owned()));
+    }
+
+    #[test]
+    fn search_filters_by_cwd_glob() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "a",
+                b"",
+                "/dev/api-server",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "b",
+                b"",
+                "/dev/web-server",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 3000, "c", b"", "/dev/notes", "main"))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd_glob: Some("/dev/*-server".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let cwds: Vec<&str> = hits.iter().filter_map(|h| h.block.cwd.as_deref()).collect();
+        assert_eq!(cwds, vec!["/dev/web-server", "/dev/api-server"]);
+    }
+
+    #[test]
+    fn cwd_glob_handles_literal_path_no_wildcards() {
+        // A bare path with no glob chars should match exactly that
+        // path (and only that path), not its siblings.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "a",
+                b"",
+                "/proj/alpha",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "b",
+                b"",
+                "/proj/alphabet",
+                "main",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd_glob: Some("/proj/alpha".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let cwds: Vec<&str> = hits.iter().filter_map(|h| h.block.cwd.as_deref()).collect();
+        assert_eq!(cwds, vec!["/proj/alpha"]);
+    }
+
+    #[test]
+    fn cwd_glob_composes_with_fts_query() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                1000,
+                "cargo build",
+                b"",
+                "/dev/api-server",
+                "main",
+            ))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(
+                pane,
+                2000,
+                "cargo test",
+                b"",
+                "/dev/notes",
+                "main",
+            ))
+            .unwrap();
+        let hits = store
+            .search(&SearchOptions {
+                query: "cargo".into(),
+                limit: 10,
+                offset: 0,
+                cwd_glob: Some("/dev/*-server".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].block.command.as_deref(), Some("cargo build"));
+    }
+
+    #[test]
+    fn distinct_cwds_for_ignores_cwd_glob_filter() {
+        // Faceted facet must not collapse when the glob is set.
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        store
+            .insert_block(&make_block_with(pane, 1000, "a", b"", "/x", "main"))
+            .unwrap();
+        store
+            .insert_block(&make_block_with(pane, 2000, "b", b"", "/y", "main"))
+            .unwrap();
+        let cwds = store
+            .distinct_cwds_for(&SearchOptions {
+                query: "".into(),
+                limit: 10,
+                offset: 0,
+                cwd_glob: Some("/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(cwds.contains(&"/x".to_owned()));
+        assert!(cwds.contains(&"/y".to_owned()));
     }
 
     #[test]
