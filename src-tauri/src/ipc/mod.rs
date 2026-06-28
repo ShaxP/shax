@@ -151,6 +151,146 @@ pub async fn read_file_bytes(path: String) -> Result<String, String> {
     Ok(B64.encode(&bytes))
 }
 
+/// Authoritative metadata for one entry inside a directory.
+/// Returned by `read_dir_entries`; used by the `ls` formatter to
+/// render rows without parsing what the shell happened to print.
+/// Per spec §07 rule 2 — "probe, don't screen-scrape" — every
+/// classification is from the filesystem, not from SGR colours.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirEntryKind {
+    /// Regular directory.
+    Dir,
+    /// Regular file. `is_executable` carries the perm bit.
+    File,
+    /// Symlink (either dangling or live). `symlink_target` is the
+    /// raw target string, exactly as `readlink` would return it.
+    Symlink,
+    /// Block / character device.
+    Device,
+    /// Unix-domain socket.
+    Socket,
+    /// Named pipe (FIFO).
+    Fifo,
+    /// Anything else / classification failed.
+    Other,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub kind: DirEntryKind,
+    pub size: u64,
+    /// Unix-epoch milliseconds. `None` if the platform doesn't
+    /// expose a usable mtime for this entry.
+    pub modified_ms: Option<u64>,
+    pub is_executable: bool,
+    /// `None` unless `kind == Symlink`.
+    pub symlink_target: Option<String>,
+}
+
+/// Read a directory's entries with enough metadata for the `ls`
+/// formatter to render rows authoritatively. Refuses to follow
+/// symlinks when stat-ing (`symlink_metadata` not `metadata`) so
+/// dangling links don't surface as ENOENT errors.
+///
+/// Errors propagate as strings (no usable path, permission
+/// denied, not a directory). The formatter falls back to RAW.
+#[tauri::command]
+pub async fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
+    let mut entries: Vec<DirEntry> = Vec::new();
+    let mut dir = tokio::fs::read_dir(&path)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    while let Some(entry) = dir.next_entry().await.map_err(|e| format!("{e}"))? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // `symlink_metadata` so a broken symlink doesn't error
+        // out the whole read — we still want to list it.
+        let meta = match entry.path().symlink_metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("read_dir_entries: stat failed for {name}: {e}");
+                continue;
+            }
+        };
+        let kind = classify_file_type(&meta);
+        // For symlinks the size is the *link* size, not the
+        // target's. ls reports it the same way.
+        let size = meta.len();
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
+        let is_executable = matches!(kind, DirEntryKind::File) && is_executable_perm(&meta);
+        let symlink_target = if matches!(kind, DirEntryKind::Symlink) {
+            tokio::fs::read_link(entry.path())
+                .await
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        entries.push(DirEntry {
+            name,
+            kind,
+            size,
+            modified_ms,
+            is_executable,
+            symlink_target,
+        });
+    }
+    Ok(entries)
+}
+
+#[cfg(unix)]
+fn classify_file_type(meta: &std::fs::Metadata) -> DirEntryKind {
+    use std::os::unix::fs::FileTypeExt;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        DirEntryKind::Symlink
+    } else if ft.is_dir() {
+        DirEntryKind::Dir
+    } else if ft.is_file() {
+        DirEntryKind::File
+    } else if ft.is_block_device() || ft.is_char_device() {
+        DirEntryKind::Device
+    } else if ft.is_socket() {
+        DirEntryKind::Socket
+    } else if ft.is_fifo() {
+        DirEntryKind::Fifo
+    } else {
+        DirEntryKind::Other
+    }
+}
+
+#[cfg(not(unix))]
+fn classify_file_type(meta: &std::fs::Metadata) -> DirEntryKind {
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        DirEntryKind::Symlink
+    } else if ft.is_dir() {
+        DirEntryKind::Dir
+    } else if ft.is_file() {
+        DirEntryKind::File
+    } else {
+        DirEntryKind::Other
+    }
+}
+
+#[cfg(unix)]
+fn is_executable_perm(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    (meta.permissions().mode() & 0o111) != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable_perm(_meta: &std::fs::Metadata) -> bool {
+    // Windows: ls formatter falls back to filename-extension
+    // heuristics on the frontend (`.exe` / `.bat` / `.cmd`).
+    false
+}
+
 /// Load the persisted app-state JSON (tabs + layout tree + focused pane),
 /// or `null` if the user has no prior session yet. The frontend hydrates
 /// its tab reducer from this on mount; if the store isn't attached (rare,

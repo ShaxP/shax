@@ -15,11 +15,15 @@
 
 import { register } from "./registry";
 import { batFormatter, catFormatter } from "./cat";
+import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
 
 // Side-effect registration on first import. Idempotent: `register`
 // no-ops on duplicate `name`.
 register(catFormatter);
 register(batFormatter);
+register(lsFormatter);
+register(ezaFormatter);
+register(exaFormatter);
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";

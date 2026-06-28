@@ -13,7 +13,7 @@ use std::sync::Arc;
 use ipc::{
     app_state_load, app_state_save, block_get_output, git_root_for, list_branches, list_cwds,
     pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_spawn, pty_write,
-    read_file_bytes, search_blocks,
+    read_dir_entries, read_file_bytes, search_blocks,
 };
 use pty::PtyManager;
 use store::{default_db_path, Store};
@@ -66,6 +66,7 @@ pub fn run() {
             git_root_for,
             block_get_output,
             read_file_bytes,
+            read_dir_entries,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
