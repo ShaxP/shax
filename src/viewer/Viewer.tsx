@@ -163,14 +163,14 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
       search({ top: true }),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap]),
       oneDark,
-      // `EditorState.readOnly` is the *correct* read-only flag for our
-      // case: it makes the document immutable but leaves the editor
-      // element editable (i.e. `contentEditable`) so it still
-      // receives keyboard focus. Setting `EditorView.editable.of(false)`
-      // *also* strips `contentEditable` from the host — which would
-      // silently break the vim plugin (no keys reach it) and ⌘F (no
-      // editor focus). One we want, the other we don't.
-      EditorState.readOnly.of(true),
+      // We want the *document* to be immutable but the *editor* to
+      // behave as editable so the vim plugin doesn't refuse to enter
+      // insert mode (it bails on `EditorState.readOnly`). A
+      // transaction filter that drops any change-bearing transaction
+      // gives us both: insert mode opens, the pill flips, but any
+      // character typing produces a transaction that's silently
+      // discarded before it touches the document.
+      EditorState.transactionFilter.of((tr) => (tr.docChanged ? [] : tr)),
       languageExtension(language),
     ];
     const state = EditorState.create({ doc: cleanText, extensions });
