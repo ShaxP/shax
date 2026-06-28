@@ -394,3 +394,34 @@ export async function readFileBytes(path: string): Promise<Uint8Array> {
   const b64 = await invoke<string>("read_file_bytes", { path });
   return base64Decode(b64);
 }
+
+/** One directory entry, as classified by the backend. The string
+ *  enum mirrors the Rust `DirEntryKind` with `serde(rename_all =
+ *  "snake_case")`. */
+export type DirEntryKind = "dir" | "file" | "symlink" | "device" | "socket" | "fifo" | "other";
+
+export interface DirEntry {
+  name: string;
+  kind: DirEntryKind;
+  size: number;
+  /** Unix-epoch milliseconds; null if the platform can't report. */
+  modified_ms: number | null;
+  is_executable: boolean;
+  /** Set only when `kind === "symlink"`. */
+  symlink_target: string | null;
+}
+
+/**
+ * Authoritative directory listing for the `ls` formatter
+ * (slice 4.4). Re-probes the filesystem so colours / icons /
+ * sizes come from `stat`, not from parsing the colour codes the
+ * shell happened to print.
+ *
+ * Rejects with the OS-level error string on ENOENT / EACCES /
+ * ENOTDIR. The formatter falls back to RAW silently.
+ */
+export async function readDirEntries(path: string): Promise<DirEntry[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DirEntry[]>("read_dir_entries", { path });
+}
