@@ -163,13 +163,21 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
       search({ top: true }),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap]),
       oneDark,
-      EditorView.editable.of(false),
+      // `EditorState.readOnly` is the *correct* read-only flag for our
+      // case: it makes the document immutable but leaves the editor
+      // element editable (i.e. `contentEditable`) so it still
+      // receives keyboard focus. Setting `EditorView.editable.of(false)`
+      // *also* strips `contentEditable` from the host — which would
+      // silently break the vim plugin (no keys reach it) and ⌘F (no
+      // editor focus). One we want, the other we don't.
       EditorState.readOnly.of(true),
       languageExtension(language),
     ];
     const state = EditorState.create({ doc: cleanText, extensions });
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
+    // Focus the editor so vim keys + ⌘F land here instead of body.
+    view.focus();
     return () => {
       view.destroy();
       viewRef.current = null;

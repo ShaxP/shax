@@ -445,6 +445,12 @@ export default function App(): React.ReactElement {
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+  // Ref so the capture-phase keydown handler can read the latest
+  // viewer-open state without re-registering on every render. The
+  // handler skips ⌘F when the viewer is open so the editor's own
+  // in-buffer search keymap (from @codemirror/search) handles it.
+  const viewerOpenRef = useRef(false);
+  viewerOpenRef.current = viewerTarget !== null;
 
   const handleNew = useCallback((): void => {
     dispatch({ type: "add_tab" });
@@ -536,6 +542,12 @@ export default function App(): React.ReactElement {
         // see the keystroke before xterm's textarea translates it
         // into `^F` (readline forward-char) and writes a byte to
         // the PTY.
+        //
+        // *Except* when the block viewer modal is open: the user is
+        // inside CodeMirror, which has its own ⌘F bound to the
+        // in-buffer search panel via `searchKeymap`. Skip our
+        // handler so the editor's wins.
+        if (viewerOpenRef.current) return;
         e.preventDefault();
         setSearchOpen(true);
         return;
