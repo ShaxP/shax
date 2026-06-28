@@ -87,6 +87,10 @@ Polished further in M7:
 
 **Exit:** completed output renders richly with a working raw toggle; the viewer opens files; a formatter that throws falls back to raw with no visible breakage; the sandbox blocks ambient access.
 
+**Deferred follow-up (M5/M6 polish, not gating):**
+
+- **ANSI / SGR colour rendering inside the viewer.** Slice 4.1 strips ANSI before feeding text to CodeMirror because CM6 doesn't understand SGR codes — viewing `ls --color` / `git log --color` / `cargo build` output through the viewer therefore shows clean text without the colours the bytes carry. The structured formatters (`ls`, `git status`, `git diff`, JSON) paint their own colour from probes / parsing, so the gap only appears for blocks that have ANSI but no registered formatter. Close by parsing SGR runs into CodeMirror range decorations (cleanest, stays vim-navigable) or by adding a generic "ANSI-coloured text" formatter that catches that bucket. Bytes are already preserved end-to-end; this is purely a rendering enhancement.
+
 ## M5 Interactive widgets
 
 **Goal:** explorable git diff, git status, and ls. **Lead:** frontend, with safety review from ai.
