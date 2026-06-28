@@ -126,6 +126,26 @@ describe("BlockRow / copy action", () => {
   });
 });
 
+describe("BlockRow / view action (M4 slice 4.1)", () => {
+  it("dispatches a `shax:open-viewer` event when the view icon is clicked", () => {
+    const handler = vi.fn();
+    window.addEventListener("shax:open-viewer", handler);
+    try {
+      render(<BlockRow pty="pty-9" block={makeBlock({ command: "cat README.md" })} />);
+      fireEvent.click(screen.getByTestId("block-view"));
+      expect(handler).toHaveBeenCalled();
+      const detail = (handler.mock.calls[0]?.[0] as CustomEvent).detail as {
+        pty: string;
+        block: { command: string | null };
+      };
+      expect(detail.pty).toBe("pty-9");
+      expect(detail.block.command).toBe("cat README.md");
+    } finally {
+      window.removeEventListener("shax:open-viewer", handler);
+    }
+  });
+});
+
 describe("BlockRow / expand", () => {
   it("fetches output on first expand, decodes bytes, and does not refetch", async () => {
     const getOutput = vi.fn().mockResolvedValue(new TextEncoder().encode("captured bytes"));

@@ -36,6 +36,8 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
+import { BlockViewerModal } from "./viewer";
+import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
@@ -421,6 +423,14 @@ export default function App(): React.ReactElement {
   // Search overlay. Top-level so the keybindings can open it regardless
   // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
+  // Block viewer modal target (M4 slice 4.1). Driven by a window-level
+  // `shax:open-viewer` event so BlockRow doesn't need a deep prop chain.
+  // `pty` is null when the block originated in a pane that's no longer
+  // alive — the modal then fetches by block id from the store.
+  const [viewerTarget, setViewerTarget] = useState<{
+    pty: PtyId | null;
+    block: BlockSummary;
+  } | null>(null);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -575,6 +585,19 @@ export default function App(): React.ReactElement {
     return () => window.removeEventListener("keydown", handler, true);
   }, []);
 
+  // Block viewer open event. BlockRow's "view" icon dispatches a
+  // `shax:open-viewer` CustomEvent with `{ pty, block }`; we store
+  // it as the viewer target and render the modal below.
+  useEffect(() => {
+    const onOpen = (e: Event): void => {
+      const detail = (e as CustomEvent<{ pty: PtyId | null; block: BlockSummary }>).detail;
+      if (detail?.block === undefined) return;
+      setViewerTarget(detail);
+    };
+    window.addEventListener("shax:open-viewer", onOpen);
+    return () => window.removeEventListener("shax:open-viewer", onOpen);
+  }, []);
+
   const titleTabs: TabDescriptor[] = useMemo(
     () =>
       tabs.map((t) => ({
@@ -703,6 +726,16 @@ export default function App(): React.ReactElement {
                 );
               }
             }, 0);
+          }}
+        />
+      )}
+      {viewerTarget !== null && (
+        <BlockViewerModal
+          block={viewerTarget.block}
+          pty={viewerTarget.pty}
+          onClose={() => {
+            setViewerTarget(null);
+            refocusActivePane();
           }}
         />
       )}

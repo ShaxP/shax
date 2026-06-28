@@ -510,6 +510,25 @@ function BlockRowInner({
               ⧉
             </span>
             <span
+              title="open in viewer"
+              data-testid="block-view"
+              style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                // App listens at window level — keeps BlockRow free of
+                // a deep prop chain. The detail carries enough for the
+                // viewer to fetch bytes by both live-pane and
+                // historical (store) paths.
+                window.dispatchEvent(
+                  new CustomEvent("shax:open-viewer", {
+                    detail: { pty, block },
+                  }),
+                );
+              }}
+            >
+              {"\uF06E"}
+            </span>
+            <span
               title="rerun"
               style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
               onClick={(e) => e.stopPropagation()}
