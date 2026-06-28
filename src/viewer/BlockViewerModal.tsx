@@ -16,7 +16,10 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { blockGetOutput, getBlockOutput, type BlockSummary, type PtyId } from "../lib/ipc";
+import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
+import { ImageView } from "./ImageView";
+import { MarkdownView } from "./MarkdownView";
 import { Viewer } from "./Viewer";
 
 export interface BlockViewerModalProps {
@@ -116,7 +119,7 @@ export function BlockViewerModal({
   pty,
   onClose,
 }: BlockViewerModalProps): React.ReactElement {
-  const [text, setText] = useState<string | null>(null);
+  const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -143,9 +146,9 @@ export function BlockViewerModal({
     let cancelled = false;
     const fetch = pty !== null ? getBlockOutput(pty, block.id) : blockGetOutput(block.id);
     fetch.then(
-      (bytes) => {
+      (b) => {
         if (cancelled) return;
-        setText(TEXT_DECODER.decode(bytes));
+        setBytes(b);
       },
       (e) => {
         if (cancelled) return;
@@ -158,10 +161,34 @@ export function BlockViewerModal({
     };
   }, [block.id, pty]);
 
+  // Tokenised argv from the block's command. Cheap; memoise so
+  // the render-time detection passes get a stable input.
+  const argv = useMemo(() => tokenizeCommand(block.command), [block.command]);
+
+  // Decode bytes to text *only* when we know we'll need a text
+  // renderer. Image bytes never get decoded — utf-8 over a PNG
+  // would just produce mojibake and waste CPU.
+  const contentType = useMemo(() => {
+    if (bytes === null) return "code" as const;
+    // SVG sniff needs at least the head of the bytes as text, so
+    // we peek at the first KiB only.
+    const headBytes = bytes.subarray(0, 1024);
+    const headText = TEXT_DECODER.decode(headBytes);
+    return detectContentType({ bytes, text: headText, argv });
+  }, [bytes, argv]);
+
+  const text = useMemo(() => {
+    if (bytes === null) return null;
+    if (contentType === "image") return null;
+    return TEXT_DECODER.decode(bytes);
+  }, [bytes, contentType]);
+
   const language = useMemo(() => {
     if (text === null) return "plaintext" as const;
-    return detectLanguage(text, tokenizeCommand(block.command));
-  }, [text, block.command]);
+    return detectLanguage(text, argv);
+  }, [text, argv]);
+
+  const filenameHint = useMemo(() => firstFilenameArg(argv), [argv]);
 
   return (
     <div
@@ -190,12 +217,18 @@ export function BlockViewerModal({
           <div style={STATUS_LINE} data-testid="block-viewer-error">
             Couldn't load output: {error}
           </div>
-        ) : text === null ? (
+        ) : bytes === null ? (
           <div style={STATUS_LINE} data-testid="block-viewer-loading">
             Loading…
           </div>
+        ) : contentType === "image" ? (
+          <ImageView bytes={bytes} kind="raster" filenameHint={filenameHint} style={{ flex: 1 }} />
+        ) : contentType === "svg" ? (
+          <ImageView bytes={bytes} kind="svg" style={{ flex: 1 }} />
+        ) : contentType === "markdown" && text !== null ? (
+          <MarkdownView text={text} style={{ flex: 1 }} />
         ) : (
-          <Viewer text={text} language={language} style={{ flex: 1 }} />
+          <Viewer text={text ?? ""} language={language} style={{ flex: 1 }} />
         )}
       </div>
     </div>
