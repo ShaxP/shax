@@ -15,7 +15,7 @@
  * selection border that follows a search jump.
  */
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -106,6 +106,25 @@ export function BlockList({
     };
   }, []);
 
+  // Track the pane's visible height so formatters can cap their
+  // own rendering at it. The CSS variable `--block-pane-height`
+  // is set on the scroll container; any descendant (e.g. the
+  // `ls` formatter's scroll body) can read it with
+  // `max-height: var(--block-pane-height)`. Content that fits in
+  // less than the pane sizes naturally; content that overflows
+  // gets bounded to the pane and scrolls inside.
+  const [paneHeightPx, setPaneHeightPx] = useState<number>(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    const measure = (): void => setPaneHeightPx(el.clientHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Whenever the selection moves (search jump), scroll the selected row
   // into view. `block: "center"` keeps the row near the middle so the
   // border-with-rounded-corners highlight reads clearly even for blocks
@@ -121,18 +140,22 @@ export function BlockList({
     }
   }, [selectedBlockId]);
 
+  // The CSS variable on the scroll container lets descendants
+  // (formatters) read the pane's visible height without a prop
+  // chain. The `& as CSSProperties` cast is because React's type
+  // for `style` doesn't enumerate custom properties — only the
+  // standard CSS ones — but the DOM accepts `--*` keys fine.
+  const containerStyle = {
+    flex: 1,
+    minWidth: 0,
+    background: "var(--pane2)",
+    overflowY: "auto",
+    color: "var(--fg)",
+    "--block-pane-height": `${paneHeightPx}px`,
+  } as CSSProperties;
+
   return (
-    <aside
-      ref={scrollRef}
-      data-testid="block-list"
-      style={{
-        flex: 1,
-        minWidth: 0,
-        background: "var(--pane2)",
-        overflowY: "auto",
-        color: "var(--fg)",
-      }}
-    >
+    <aside ref={scrollRef} data-testid="block-list" style={containerStyle}>
       <div ref={contentRef}>
         <header
           style={{

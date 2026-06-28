@@ -24,7 +24,12 @@ import { PASS, type Formatter, type FormatterContext } from "./types";
 const HOST: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  height: 320,
+  // The viewer needs *some* fixed height for vim's `j` / `k`
+  // movement and the search panel to feel right, but the cap
+  // should track the pane height the user sees. The CSS
+  // variable comes from BlockList's scroll container; fallback
+  // covers test / detached usage where it's not set.
+  height: "min(var(--block-pane-height, 60vh), 100vh)",
   margin: "8px 0 0 0",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius-sm)",
