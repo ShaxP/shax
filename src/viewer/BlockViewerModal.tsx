@@ -15,8 +15,18 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { blockGetOutput, getBlockOutput, type BlockSummary, type PtyId } from "../lib/ipc";
+import {
+  blockGetOutput,
+  getBlockOutput,
+  readFileBytes,
+  type BlockSummary,
+  type PtyId,
+} from "../lib/ipc";
+import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
+import { ImageView } from "./ImageView";
+import { MarkdownView } from "./MarkdownView";
+import { stripAnsi } from "./stripAnsi";
 import { Viewer } from "./Viewer";
 
 export interface BlockViewerModalProps {
@@ -100,15 +110,117 @@ const STATUS_LINE: CSSProperties = {
  * pipelines (`cat foo | jq .`) — for those, the formatter system
  * (4.3) will pick up via a richer matcher.
  */
+/**
+ * Resolve the filename argument from a block's command into an
+ * absolute path the backend can read. Absolute filenames are
+ * passed through verbatim; relative filenames are joined with
+ * the block's `cwd`. `~` expansion is not handled here (the
+ * shell would have already expanded it before the command ran),
+ * but a leading `~` is treated as relative.
+ *
+ * Returns `null` if we can't form a path — the modal then leaves
+ * the captured (likely corrupted) bytes in place rather than
+ * showing an empty view.
+ */
+// Exported for unit tests; not part of the module's public API.
+export const __testing = { tokenizeCommand };
+
+function resolveBlockPath(filename: string, cwd: string | null): string | null {
+  if (filename.length === 0) return null;
+  if (filename.startsWith("/")) return filename;
+  if (cwd === null || cwd.length === 0) return null;
+  // Trim a trailing slash from cwd so we don't produce `//x`.
+  const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
+  return `${base}/${filename}`;
+}
+
+/**
+ * Shell-style word splitter. Honours the three sources of
+ * whitespace-with-spaces-in-it the user actually types:
+ *
+ *   `cat foo\ bar.gif`         → ["cat", "foo bar.gif"]
+ *   `cat "foo bar.gif"`        → ["cat", "foo bar.gif"]
+ *   `cat 'foo bar.gif'`        → ["cat", "foo bar.gif"]
+ *
+ * Inside single quotes nothing is special (POSIX rule). Inside
+ * double quotes `\` only escapes `\ " $ ` ` \n`. Outside quotes,
+ * `\` escapes any single following character (including a
+ * space, which is the case the slice-4.2 bug surfaced — a GIF
+ * filename `Chainsaw\ Man\ GIF.gif` was being split into three
+ * tokens by the previous whitespace-only splitter, so the modal
+ * tried to read the file `Chainsaw\\` and got ENOENT).
+ *
+ * Not a full shell parser: pipelines, redirects, command
+ * substitution, `$VAR` expansion are intentionally ignored —
+ * the modal only needs the first filename, not a faithful
+ * argv reconstruction.
+ */
 function tokenizeCommand(command: string | null): string[] {
   if (command === null || command.length === 0) return [];
-  // Trim surrounding quotes off each token; leave embedded quotes
-  // alone since we're only using this for path extraction.
-  return command
-    .trim()
-    .split(/\s+/)
-    .map((tok) => tok.replace(/^['"]/, "").replace(/['"]$/, ""))
-    .filter((tok) => tok.length > 0);
+  const tokens: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i] ?? "";
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        current += ch;
+      }
+      i++;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\" && i + 1 < command.length) {
+        const next = command[i + 1] ?? "";
+        if (next === '"' || next === "\\" || next === "$" || next === "`" || next === "\n") {
+          current += next;
+          i += 2;
+        } else {
+          current += ch;
+          i++;
+        }
+      } else if (ch === '"') {
+        inDouble = false;
+        i++;
+      } else {
+        current += ch;
+        i++;
+      }
+      continue;
+    }
+    // Outside any quotes.
+    if (ch === "\\" && i + 1 < command.length) {
+      current += command[i + 1] ?? "";
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      i++;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+      i++;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  if (current.length > 0) tokens.push(current);
+  return tokens;
 }
 
 export function BlockViewerModal({
@@ -116,7 +228,7 @@ export function BlockViewerModal({
   pty,
   onClose,
 }: BlockViewerModalProps): React.ReactElement {
-  const [text, setText] = useState<string | null>(null);
+  const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -143,9 +255,9 @@ export function BlockViewerModal({
     let cancelled = false;
     const fetch = pty !== null ? getBlockOutput(pty, block.id) : blockGetOutput(block.id);
     fetch.then(
-      (bytes) => {
+      (b) => {
         if (cancelled) return;
-        setText(TEXT_DECODER.decode(bytes));
+        setBytes(b);
       },
       (e) => {
         if (cancelled) return;
@@ -158,10 +270,93 @@ export function BlockViewerModal({
     };
   }, [block.id, pty]);
 
+  // Tokenised argv from the block's command. Cheap; memoise so
+  // the render-time detection passes get a stable input.
+  const argv = useMemo(() => tokenizeCommand(block.command), [block.command]);
+
+  // Decode bytes to text *only* when we know we'll need a text
+  // renderer. Image bytes never get decoded — utf-8 over a PNG
+  // would just produce mojibake and waste CPU.
+  const contentType = useMemo(() => {
+    if (bytes === null) return "code" as const;
+    // SVG sniff needs at least the head of the bytes as text, so
+    // we peek at the first KiB only.
+    const headBytes = bytes.subarray(0, 1024);
+    const headText = TEXT_DECODER.decode(headBytes);
+    return detectContentType({ bytes, text: headText, argv });
+  }, [bytes, argv]);
+
+  const filenameHint = useMemo(() => firstFilenameArg(argv), [argv]);
+
+  // Disk-read override (defined further down in the file). Declare
+  // here so the `text` / `language` memos can read from it.
+  const [overrideBytes, setOverrideBytes] = useState<Uint8Array | null>(null);
+  const renderBytes = overrideBytes ?? bytes;
+
+  const text = useMemo(() => {
+    if (renderBytes === null) return null;
+    if (contentType === "image") return null;
+    // Prefer the disk-read override (clean file bytes) over the
+    // captured stdout (which carries zsh's missing-newline
+    // indicator `%` and other shell artifacts). ANSI stripping
+    // still applies for the captured-fallback path.
+    return stripAnsi(TEXT_DECODER.decode(renderBytes));
+  }, [renderBytes, contentType]);
+
   const language = useMemo(() => {
     if (text === null) return "plaintext" as const;
-    return detectLanguage(text, tokenizeCommand(block.command));
-  }, [text, block.command]);
+    return detectLanguage(text, argv);
+  }, [text, argv]);
+
+  // Whenever we can resolve a filename, prefer reading it
+  // straight from disk over the captured stdout — for *every*
+  // detected content type, not just images. The captured-stdout
+  // path has two failure modes that affect the viewer:
+  //
+  //   1. PTY line discipline (default ONLCR) converts `\n` →
+  //      `\r\n` on the way out, corrupting binary content
+  //      (PNG / JPEG / GIF signatures, internal length fields).
+  //   2. Shell prompt artifacts leak in — zsh's
+  //      "no-trailing-newline" indicator (`%` in inverse video)
+  //      ends up at the end of any command whose stdout doesn't
+  //      end with `\n`. ANSI stripping cleans the styling but
+  //      the literal `%` survives, polluting Markdown / source
+  //      file views.
+  //
+  // Disk bytes are authoritative. Falls back to the captured
+  // path silently when there's no filename to read (`ls`, piped
+  // commands, `echo …`) or when the read fails (file moved,
+  // permission denied, file too large).
+  //
+  // Kept as a separate state (`overrideBytes`, declared with the
+  // text memo above) so the initial render uses the captured
+  // bytes until the async disk read resolves — avoids a
+  // "loading…" double-flash for blocks whose captured bytes
+  // were already adequate.
+  useEffect(() => {
+    setOverrideBytes(null);
+    if (filenameHint === null) return;
+    const path = resolveBlockPath(filenameHint, block.cwd);
+    if (path === null) return;
+    let cancelled = false;
+    void readFileBytes(path).then(
+      (fileBytes) => {
+        if (cancelled) return;
+        if (fileBytes.length > 0) setOverrideBytes(fileBytes);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        // Fallback to captured bytes is silent for the user, but
+        // log so a developer can tell when the size-cap / perms
+        // / path-resolution dropped us here.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`viewer: read_file_bytes(${path}) failed: ${msg}`);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [contentType, filenameHint, block.cwd]);
 
   return (
     <div
@@ -190,12 +385,23 @@ export function BlockViewerModal({
           <div style={STATUS_LINE} data-testid="block-viewer-error">
             Couldn't load output: {error}
           </div>
-        ) : text === null ? (
+        ) : bytes === null ? (
           <div style={STATUS_LINE} data-testid="block-viewer-loading">
             Loading…
           </div>
+        ) : contentType === "image" ? (
+          <ImageView
+            bytes={renderBytes ?? bytes}
+            kind="raster"
+            filenameHint={filenameHint}
+            style={{ flex: 1 }}
+          />
+        ) : contentType === "svg" ? (
+          <ImageView bytes={renderBytes ?? bytes} kind="svg" style={{ flex: 1 }} />
+        ) : contentType === "markdown" && text !== null ? (
+          <MarkdownView text={text} style={{ flex: 1 }} />
         ) : (
-          <Viewer text={text} language={language} style={{ flex: 1 }} />
+          <Viewer text={text ?? ""} language={language} style={{ flex: 1 }} />
         )}
       </div>
     </div>

@@ -1,0 +1,97 @@
+/*
+ * Styling for the rendered Markdown body. The highlight.js theme
+ * (`atom-one-dark`) handles syntax colours inside `.hljs`; this
+ * file adds the structural styling around code blocks plus a
+ * handful of typography niceties.
+ */
+
+.markdown-rendered pre {
+  margin: 12px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: auto;
+}
+
+.markdown-rendered pre code,
+.markdown-rendered pre code.hljs {
+  display: block;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: transparent;
+}
+
+/* Inline code (outside a <pre>) — keep it close to the surrounding
+ * text but visually distinguishable. */
+.markdown-rendered code:not(.hljs) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--pane2);
+  border: 1px solid var(--border);
+}
+
+.markdown-rendered :where(h1, h2, h3, h4, h5, h6) {
+  margin: 18px 0 8px;
+  line-height: 1.25;
+}
+
+.markdown-rendered h1 {
+  font-size: 1.6em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.markdown-rendered h2 {
+  font-size: 1.3em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+}
+
+.markdown-rendered p {
+  margin: 8px 0;
+}
+
+.markdown-rendered :where(ul, ol) {
+  padding-left: 24px;
+  margin: 8px 0;
+}
+
+.markdown-rendered blockquote {
+  margin: 12px 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--fg-dim);
+  background: var(--pane2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.markdown-rendered table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.markdown-rendered table :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+}
+
+.markdown-rendered table th {
+  background: var(--pane2);
+}
+
+.markdown-rendered hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+.markdown-rendered a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.markdown-rendered a:hover {
+  text-decoration: underline;
+}

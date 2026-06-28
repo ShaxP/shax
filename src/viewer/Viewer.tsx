@@ -33,6 +33,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { vim, Vim } from "@replit/codemirror-vim";
 
 import { languageExtension, type LanguageId } from "./detectLanguage";
+import { stripAnsi } from "./stripAnsi";
 
 /**
  * The viewer is a read-only navigator: a user pressing `i` to enter
@@ -115,58 +116,6 @@ const MODE_PILL_STYLE: CSSProperties = {
   background: "var(--surface)",
   fontWeight: 600,
 };
-
-/**
- * Strip ANSI / CSI / OSC escape sequences so terminal control
- * bytes don't clutter the viewer. The block's raw bytes path
- * keeps the originals; the viewer is a "lens" per the fidelity
- * contract — clean text is the point.
- */
-function stripAnsi(input: string): string {
-  let out = "";
-  let i = 0;
-  while (i < input.length) {
-    const ch = input.charCodeAt(i);
-    if (ch !== 0x1b) {
-      out += input[i];
-      i++;
-      continue;
-    }
-    const next = input.charCodeAt(i + 1);
-    if (next === 0x5b /* [ */) {
-      let j = i + 2;
-      while (j < input.length) {
-        const c = input.charCodeAt(j);
-        if (c >= 0x40 && c <= 0x7e) {
-          j++;
-          break;
-        }
-        j++;
-      }
-      i = j;
-      continue;
-    }
-    if (next === 0x5d /* ] */) {
-      let j = i + 2;
-      while (j < input.length) {
-        const c = input.charCodeAt(j);
-        if (c === 0x07) {
-          j++;
-          break;
-        }
-        if (c === 0x1b && input.charCodeAt(j + 1) === 0x5c /* \ */) {
-          j += 2;
-          break;
-        }
-        j++;
-      }
-      i = j;
-      continue;
-    }
-    i += 2;
-  }
-  return out;
-}
 
 export function Viewer({ text, language = "plaintext", style }: ViewerProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
