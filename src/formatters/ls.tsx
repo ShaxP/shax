@@ -266,39 +266,24 @@ export function formatLsMtime(ms: number | null, nowMs: number = Date.now()): st
 
 // ─── view ────────────────────────────────────────────────────────────────────
 
+// No surrounding border, no header bar — the block row already
+// frames the output. The formatter just paints the entries,
+// bounded by a max-height so long listings don't take over the
+// pane.
 const SHELL = {
-  margin: "8px 0 0 0",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius-sm)",
-  overflow: "hidden",
+  margin: "4px 0 0 0",
 } as const satisfies CSSProperties;
 
 const STATUS_LINE: CSSProperties = {
-  padding: "8px 12px",
+  padding: "4px 0",
   fontFamily: "var(--font-mono)",
   fontSize: 12,
   color: "var(--fg-faint)",
 };
 
-const HEADER: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  background: "var(--pane2)",
-  borderBottom: "1px solid var(--border)",
-  fontFamily: "var(--font-ui)",
-  fontSize: 11,
-  color: "var(--fg-faint)",
-  letterSpacing: 0.4,
-  textTransform: "uppercase",
-};
-
 const SCROLL_HOST: CSSProperties = {
   maxHeight: 320,
   overflowY: "auto",
-  padding: "8px 12px",
-  background: "var(--pane)",
   fontFamily: "var(--font-mono)",
   fontSize: 12.5,
 };
@@ -374,12 +359,6 @@ function LsView({ ctx }: LsViewProps): React.ReactElement {
 
   return (
     <div data-testid="formatter-ls" style={SHELL}>
-      <div style={HEADER}>
-        <span>ls · {target}</span>
-        <span style={{ marginLeft: "auto" }}>
-          {view.length} entr{view.length === 1 ? "y" : "ies"}
-        </span>
-      </div>
       <div style={SCROLL_HOST}>
         {flags.long || flags.onePerLine ? (
           view.map((e) => <LsLongRow key={e.name} entry={e} />)
