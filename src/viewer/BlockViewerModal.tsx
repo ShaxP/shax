@@ -22,6 +22,7 @@ import {
   type BlockSummary,
   type PtyId,
 } from "../lib/ipc";
+import { shellTokenize } from "../lib/shellTokenize";
 import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
 import { ImageView } from "./ImageView";
@@ -122,9 +123,6 @@ const STATUS_LINE: CSSProperties = {
  * the captured (likely corrupted) bytes in place rather than
  * showing an empty view.
  */
-// Exported for unit tests; not part of the module's public API.
-export const __testing = { tokenizeCommand };
-
 function resolveBlockPath(filename: string, cwd: string | null): string | null {
   if (filename.length === 0) return null;
   if (filename.startsWith("/")) return filename;
@@ -132,95 +130,6 @@ function resolveBlockPath(filename: string, cwd: string | null): string | null {
   // Trim a trailing slash from cwd so we don't produce `//x`.
   const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
   return `${base}/${filename}`;
-}
-
-/**
- * Shell-style word splitter. Honours the three sources of
- * whitespace-with-spaces-in-it the user actually types:
- *
- *   `cat foo\ bar.gif`         → ["cat", "foo bar.gif"]
- *   `cat "foo bar.gif"`        → ["cat", "foo bar.gif"]
- *   `cat 'foo bar.gif'`        → ["cat", "foo bar.gif"]
- *
- * Inside single quotes nothing is special (POSIX rule). Inside
- * double quotes `\` only escapes `\ " $ ` ` \n`. Outside quotes,
- * `\` escapes any single following character (including a
- * space, which is the case the slice-4.2 bug surfaced — a GIF
- * filename `Chainsaw\ Man\ GIF.gif` was being split into three
- * tokens by the previous whitespace-only splitter, so the modal
- * tried to read the file `Chainsaw\\` and got ENOENT).
- *
- * Not a full shell parser: pipelines, redirects, command
- * substitution, `$VAR` expansion are intentionally ignored —
- * the modal only needs the first filename, not a faithful
- * argv reconstruction.
- */
-function tokenizeCommand(command: string | null): string[] {
-  if (command === null || command.length === 0) return [];
-  const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
-  while (i < command.length) {
-    const ch = command[i] ?? "";
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        current += ch;
-      }
-      i++;
-      continue;
-    }
-    if (inDouble) {
-      if (ch === "\\" && i + 1 < command.length) {
-        const next = command[i + 1] ?? "";
-        if (next === '"' || next === "\\" || next === "$" || next === "`" || next === "\n") {
-          current += next;
-          i += 2;
-        } else {
-          current += ch;
-          i++;
-        }
-      } else if (ch === '"') {
-        inDouble = false;
-        i++;
-      } else {
-        current += ch;
-        i++;
-      }
-      continue;
-    }
-    // Outside any quotes.
-    if (ch === "\\" && i + 1 < command.length) {
-      current += command[i + 1] ?? "";
-      i += 2;
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      i++;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      i++;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = "";
-      }
-      i++;
-      continue;
-    }
-    current += ch;
-    i++;
-  }
-  if (current.length > 0) tokens.push(current);
-  return tokens;
 }
 
 export function BlockViewerModal({
@@ -272,7 +181,7 @@ export function BlockViewerModal({
 
   // Tokenised argv from the block's command. Cheap; memoise so
   // the render-time detection passes get a stable input.
-  const argv = useMemo(() => tokenizeCommand(block.command), [block.command]);
+  const argv = useMemo(() => shellTokenize(block.command), [block.command]);
 
   // Decode bytes to text *only* when we know we'll need a text
   // renderer. Image bytes never get decoded — utf-8 over a PNG
