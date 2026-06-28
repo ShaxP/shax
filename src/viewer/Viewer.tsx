@@ -34,6 +34,40 @@ import { vim, Vim } from "@replit/codemirror-vim";
 
 import { languageExtension, type LanguageId } from "./detectLanguage";
 
+/**
+ * The viewer is a read-only navigator: a user pressing `i` to enter
+ * insert mode in an immutable buffer would only flip the mode pill
+ * to `insert` without being able to type anything, which is a worse
+ * UX than not having the mode at all. Remap every insert-entering
+ * normal-mode command to `<Nop>` so the editor stays in `normal` /
+ * `visual` / `replace` modes only.
+ *
+ * `Vim` is a process-wide singleton (the replit plugin doesn't yet
+ * expose per-instance keymaps), so this runs once at module load.
+ * The viewer is the only surface that activates vim in this app, so
+ * the global remap is fine.
+ */
+const INSERT_ENTRY_KEYS = [
+  "i",
+  "I",
+  "a",
+  "A",
+  "o",
+  "O",
+  "s",
+  "S",
+  "c",
+  "C",
+  "r",
+  "R",
+  // Vim's `gi` and `gI` also enter insert at the last edit point.
+  "gi",
+  "gI",
+];
+for (const key of INSERT_ENTRY_KEYS) {
+  Vim.noremap(key, "<Nop>", "normal");
+}
+
 export interface ViewerProps {
   /** Text to display. Re-creating the editor on every change is fine
    *  for the read-only "open a captured block" use case. */
