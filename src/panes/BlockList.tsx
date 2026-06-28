@@ -15,7 +15,7 @@
  * selection border that follows a search jump.
  */
 
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -63,11 +63,48 @@ export function BlockList({
   // mid-stream to read earlier output will be pulled back to the bottom on
   // the next chunk. A "scroll-lock" affordance is a polish item for later.
   const scrollRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
     el.scrollTop = el.scrollHeight;
   }, [blocks, liveOutputs]);
+
+  // "Sticky bottom" — when the inner content grows (formatter
+  // async-loaded a probe result, an image finished decoding, a
+  // live block streamed more bytes), snap back to the bottom
+  // *if* the user was already there. If they'd scrolled up to
+  // read earlier output we leave them alone.
+  //
+  // ResizeObserver fires on layout changes the React deps array
+  // can't see — particularly the `ls` formatter, which paints
+  // a small "Probing…" placeholder first and then a 300-px
+  // entry list a tick later. The dep-driven scroll above only
+  // snaps on `blocks` / `liveOutputs` changes, so without this
+  // the user would land mid-block.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (scroller === null || content === null) return;
+    // jsdom (vitest env) doesn't ship ResizeObserver; the
+    // dep-driven scroll above is enough for tests.
+    if (typeof ResizeObserver === "undefined") return;
+    let stickToBottom = true;
+    const NEAR_BOTTOM_PX = 40;
+    const onScroll = (): void => {
+      const dist = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      stickToBottom = dist < NEAR_BOTTOM_PX;
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => {
+      if (stickToBottom) scroller.scrollTop = scroller.scrollHeight;
+    });
+    ro.observe(content);
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, []);
 
   // Whenever the selection moves (search jump), scroll the selected row
   // into view. `block: "center"` keeps the row near the middle so the
@@ -96,76 +133,78 @@ export function BlockList({
         color: "var(--fg)",
       }}
     >
-      <header
-        style={{
-          padding: "8px 10px",
-          borderBottom: "1px solid var(--border)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
-          color: "var(--fg-faint)",
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
-        }}
-      >
-        blocks · {blocks.length}
-      </header>
-      {inspectedBlock !== null && !blocks.some((b) => b.id === inspectedBlock.id) && (
-        <div data-testid="block-list-inspected">
-          <div
-            style={{
-              padding: "6px 12px",
-              fontSize: 10,
-              color: "var(--fg-faint)",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              background: "var(--surface)",
-              borderBottom: "1px solid var(--border)",
-            }}
-          >
-            from history
-          </div>
-          {pty !== null && (
-            <BlockRow
-              key={`inspected-${inspectedBlock.id}`}
-              pty={pty}
-              block={inspectedBlock}
-              liveOutput={liveOutputs?.get(inspectedBlock.id)}
-              getOutput={getOutput}
-              selected={inspectedBlock.id === selectedBlockId}
-              onSelect={() => onSelectBlock?.(inspectedBlock.id)}
-            />
-          )}
-        </div>
-      )}
-      {blocks.length === 0
-        ? inspectedBlock === null && (
+      <div ref={contentRef}>
+        <header
+          style={{
+            padding: "8px 10px",
+            borderBottom: "1px solid var(--border)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: "var(--fg-faint)",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          blocks · {blocks.length}
+        </header>
+        {inspectedBlock !== null && !blocks.some((b) => b.id === inspectedBlock.id) && (
+          <div data-testid="block-list-inspected">
             <div
-              data-testid="block-list-empty"
               style={{
-                padding: 16,
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
+                padding: "6px 12px",
+                fontSize: 10,
                 color: "var(--fg-faint)",
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                background: "var(--surface)",
+                borderBottom: "1px solid var(--border)",
               }}
             >
-              Run a command to see it captured here.
+              from history
             </div>
-          )
-        : // pty is set together with the first block; once we have blocks we
-          // always have a pty id, so the non-null assertion is sound.
-          blocks.map((block) =>
-            pty === null ? null : (
+            {pty !== null && (
               <BlockRow
-                key={block.id}
+                key={`inspected-${inspectedBlock.id}`}
                 pty={pty}
-                block={block}
-                liveOutput={liveOutputs?.get(block.id)}
+                block={inspectedBlock}
+                liveOutput={liveOutputs?.get(inspectedBlock.id)}
                 getOutput={getOutput}
-                selected={block.id === selectedBlockId}
-                onSelect={() => onSelectBlock?.(block.id)}
+                selected={inspectedBlock.id === selectedBlockId}
+                onSelect={() => onSelectBlock?.(inspectedBlock.id)}
               />
-            ),
-          )}
+            )}
+          </div>
+        )}
+        {blocks.length === 0
+          ? inspectedBlock === null && (
+              <div
+                data-testid="block-list-empty"
+                style={{
+                  padding: 16,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 12,
+                  color: "var(--fg-faint)",
+                }}
+              >
+                Run a command to see it captured here.
+              </div>
+            )
+          : // pty is set together with the first block; once we have blocks we
+            // always have a pty id, so the non-null assertion is sound.
+            blocks.map((block) =>
+              pty === null ? null : (
+                <BlockRow
+                  key={block.id}
+                  pty={pty}
+                  block={block}
+                  liveOutput={liveOutputs?.get(block.id)}
+                  getOutput={getOutput}
+                  selected={block.id === selectedBlockId}
+                  onSelect={() => onSelectBlock?.(block.id)}
+                />
+              ),
+            )}
+      </div>
     </aside>
   );
 }
