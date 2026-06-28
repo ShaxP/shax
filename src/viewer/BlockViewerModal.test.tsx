@@ -11,7 +11,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
-import { BlockViewerModal, __testing } from "./BlockViewerModal";
+import { shellTokenize } from "../lib/shellTokenize";
+import { BlockViewerModal } from "./BlockViewerModal";
 
 const mockGetBlockOutput = vi.fn().mockResolvedValue(new Uint8Array());
 const mockBlockGetOutput = vi.fn().mockResolvedValue(new Uint8Array());
@@ -107,8 +108,8 @@ describe("BlockViewerModal", () => {
   });
 });
 
-describe("BlockViewerModal · tokenizeCommand", () => {
-  const tokenize = __testing.tokenizeCommand;
+describe("shellTokenize (used by the modal to extract argv)", () => {
+  const tokenize = shellTokenize;
 
   it("splits on plain whitespace", () => {
     expect(tokenize("cat README.md")).toEqual(["cat", "README.md"]);

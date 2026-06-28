@@ -30,9 +30,11 @@
  * re-rendering was starving the main thread.
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
+import { shellTokenize } from "../lib/shellTokenize";
+import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
@@ -290,6 +292,11 @@ function BlockRowInner({
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [fetchedOutput, setFetchedOutput] = useState<string | null>(null);
   const [fetched, setFetched] = useState<boolean>(false);
+  // FMT/RAW user toggle. `null` = follow the natural default
+  // (FMT when a formatter applies, RAW otherwise). Once the user
+  // explicitly picks a side, we honour it for the lifetime of
+  // the row.
+  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | null>(null);
 
   const status = statusFor(block);
   const isRunning = status === "running";
@@ -308,6 +315,49 @@ function BlockRowInner({
   const liveText = liveOutput !== undefined ? TEXT_DECODER.decode(liveOutput) : null;
   const rawText = liveText ?? fetchedOutput;
   const outputText = rawText !== null ? stripAnsi(rawText) : null;
+
+  // Formatter resolution. The argv is tokenised from the block's
+  // command; cwd / exit / duration come from the block summary;
+  // stdout is the ANSI-stripped captured text, rawAnsi the
+  // unstripped version. stderr + env are placeholders (the
+  // backend doesn't separate them yet, see `FormatterContext`
+  // header notes).
+  const argv = useMemo(() => shellTokenize(block.command), [block.command]);
+  const formatterCtx: FormatterContext | null = useMemo(() => {
+    if (outputText === null || rawText === null) return null;
+    return {
+      argv,
+      cwd: block.cwd,
+      env: {},
+      exitCode: block.exit_code,
+      durationMs: block.duration_ms,
+      stdout: outputText,
+      stderr: "",
+      rawAnsi: rawText,
+      paneId: pty,
+    };
+  }, [argv, block.cwd, block.exit_code, block.duration_ms, outputText, rawText, pty]);
+  const formatter = useMemo(
+    () => (formatterCtx === null ? null : findFormatter(formatterCtx)),
+    [formatterCtx],
+  );
+  // The "natural" mode: FMT when a formatter applies, else RAW.
+  // Per spec §02 the highest-tier render is the default; the user
+  // toggle can flip it.
+  const effectiveMode: "raw" | "fmt" = formatMode ?? (formatter !== null ? "fmt" : "raw");
+  // Render the formatter output once when we're in FMT mode + a
+  // formatter is registered. The invoke wrapper turns any throw
+  // into PASS, which we then treat identically to "no formatter"
+  // and fall back to RAW.
+  const formatterOutput = useMemo(() => {
+    if (effectiveMode !== "fmt") return null;
+    if (formatter === null || formatterCtx === null) return null;
+    const result = invokeFormatter(formatter, formatterCtx);
+    return isPass(result) ? null : result;
+  }, [effectiveMode, formatter, formatterCtx]);
+  // The RAW fallback chain: if the user picked FMT but the
+  // formatter declined / threw, we still need to show *something*.
+  const showFormatted = formatterOutput !== null;
 
   // Interactive blocks (vim, htop, less, …) never expand into an output
   // view — their bytes are cursor / grid manipulation, not flow text,
@@ -482,18 +532,35 @@ function BlockRowInner({
                 <button
                   type="button"
                   data-testid="block-fmt-pill"
-                  style={FMT_PILL_OFF}
-                  // FMT is inert until M4 brings real formatters. The pill
-                  // surface stays so the toggle is discoverable.
-                  onClick={(e) => e.stopPropagation()}
+                  // Disabled visually when no formatter applies — RAW
+                  // is the only option for that block. Still
+                  // rendered (consistent layout across rows).
+                  style={effectiveMode === "fmt" && formatter !== null ? FMT_PILL_ON : FMT_PILL_OFF}
+                  disabled={formatter === null}
+                  data-active={effectiveMode === "fmt" ? "true" : "false"}
+                  data-available={formatter !== null ? "true" : "false"}
+                  title={
+                    formatter === null
+                      ? "no formatter for this command"
+                      : `formatter: ${formatter.name}`
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (formatter === null) return;
+                    setFormatMode("fmt");
+                  }}
                 >
                   FMT
                 </button>
                 <button
                   type="button"
                   data-testid="block-raw-pill"
-                  style={FMT_PILL_ON}
-                  onClick={(e) => e.stopPropagation()}
+                  style={effectiveMode === "raw" ? FMT_PILL_ON : FMT_PILL_OFF}
+                  data-active={effectiveMode === "raw" ? "true" : "false"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFormatMode("raw");
+                  }}
                 >
                   RAW
                 </button>
@@ -598,7 +665,8 @@ function BlockRowInner({
             interactive session
           </div>
         )}
-        {open && (
+        {open && showFormatted && <div data-testid="block-formatter-output">{formatterOutput}</div>}
+        {open && !showFormatted && (
           <pre
             data-testid="block-output"
             style={{
