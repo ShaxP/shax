@@ -15,7 +15,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { blockGetOutput, getBlockOutput, type BlockSummary, type PtyId } from "../lib/ipc";
+import {
+  blockGetOutput,
+  getBlockOutput,
+  readFileBytes,
+  type BlockSummary,
+  type PtyId,
+} from "../lib/ipc";
 import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
 import { ImageView } from "./ImageView";
@@ -104,6 +110,27 @@ const STATUS_LINE: CSSProperties = {
  * pipelines (`cat foo | jq .`) — for those, the formatter system
  * (4.3) will pick up via a richer matcher.
  */
+/**
+ * Resolve the filename argument from a block's command into an
+ * absolute path the backend can read. Absolute filenames are
+ * passed through verbatim; relative filenames are joined with
+ * the block's `cwd`. `~` expansion is not handled here (the
+ * shell would have already expanded it before the command ran),
+ * but a leading `~` is treated as relative.
+ *
+ * Returns `null` if we can't form a path — the modal then leaves
+ * the captured (likely corrupted) bytes in place rather than
+ * showing an empty view.
+ */
+function resolveBlockPath(filename: string, cwd: string | null): string | null {
+  if (filename.length === 0) return null;
+  if (filename.startsWith("/")) return filename;
+  if (cwd === null || cwd.length === 0) return null;
+  // Trim a trailing slash from cwd so we don't produce `//x`.
+  const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
+  return `${base}/${filename}`;
+}
+
 function tokenizeCommand(command: string | null): string[] {
   if (command === null || command.length === 0) return [];
   // Trim surrounding quotes off each token; leave embedded quotes
@@ -197,6 +224,43 @@ export function BlockViewerModal({
 
   const filenameHint = useMemo(() => firstFilenameArg(argv), [argv]);
 
+  // For image content the *captured* bytes are unreliable — the
+  // PTY's line discipline (default ONLCR) mangles every `\n` in
+  // binary data into `\r\n`, breaking PNG / JPEG / GIF signatures
+  // and every internal length field. Bypass the capture by
+  // reading the file straight from disk via the dedicated IPC
+  // command. Falls back to captured bytes on read failure (path
+  // moved, permission denied, file too large, no filename hint).
+  //
+  // We keep this as a *separate state* (`overrideBytes`) so the
+  // initial render still uses the captured path until the disk
+  // read resolves — that way text-content viewers don't wait on
+  // a fs op they'll never use.
+  const [overrideBytes, setOverrideBytes] = useState<Uint8Array | null>(null);
+  useEffect(() => {
+    setOverrideBytes(null);
+    if (contentType !== "image" && contentType !== "svg") return;
+    if (filenameHint === null) return;
+    const path = resolveBlockPath(filenameHint, block.cwd);
+    if (path === null) return;
+    let cancelled = false;
+    void readFileBytes(path).then(
+      (fileBytes) => {
+        if (cancelled) return;
+        if (fileBytes.length > 0) setOverrideBytes(fileBytes);
+      },
+      () => {
+        // Silent fallback to captured bytes — the user still
+        // sees *something* even if disk read fails.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [contentType, filenameHint, block.cwd]);
+
+  const renderBytes = overrideBytes ?? bytes;
+
   return (
     <div
       data-testid="block-viewer-modal"
@@ -229,9 +293,14 @@ export function BlockViewerModal({
             Loading…
           </div>
         ) : contentType === "image" ? (
-          <ImageView bytes={bytes} kind="raster" filenameHint={filenameHint} style={{ flex: 1 }} />
+          <ImageView
+            bytes={renderBytes ?? bytes}
+            kind="raster"
+            filenameHint={filenameHint}
+            style={{ flex: 1 }}
+          />
         ) : contentType === "svg" ? (
-          <ImageView bytes={bytes} kind="svg" style={{ flex: 1 }} />
+          <ImageView bytes={renderBytes ?? bytes} kind="svg" style={{ flex: 1 }} />
         ) : contentType === "markdown" && text !== null ? (
           <MarkdownView text={text} style={{ flex: 1 }} />
         ) : (

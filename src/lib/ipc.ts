@@ -380,3 +380,17 @@ export async function blockGetOutput(blockId: BlockId): Promise<Uint8Array> {
   const b64 = await invoke<string>("block_get_output", { blockId });
   return base64Decode(b64);
 }
+
+/**
+ * Read a file's raw bytes from disk. The viewer modal uses this for
+ * binary content (images) because the PTY's line discipline corrupts
+ * binary captured-stdout bytes (`\n` → `\r\n` mangles every PNG signature).
+ * Rejects (with the OS-level error string) on missing file, permission
+ * denied, or files over 32 MiB. Empty Uint8Array in non-Tauri contexts.
+ */
+export async function readFileBytes(path: string): Promise<Uint8Array> {
+  if (!isTauriContext()) return new Uint8Array();
+  const { invoke } = await import("@tauri-apps/api/core");
+  const b64 = await invoke<string>("read_file_bytes", { path });
+  return base64Decode(b64);
+}

@@ -112,6 +112,45 @@ pub async fn block_get_output(
     Ok(B64.encode(&bytes))
 }
 
+/// Read raw file bytes from disk, base64-encoded for IPC transit.
+///
+/// Why this exists: when a user runs `cat photo.png` in the terminal,
+/// the bytes that reach our OSC 133 capture have already passed
+/// through the PTY's line discipline — by default ONLCR converts
+/// every `\n` (0x0A) into `\r\n` (0x0D 0x0A), corrupting any
+/// binary file. PNG files have lots of 0x0A bytes (the signature
+/// itself is `89 50 4E 47 0D 0A 1A 0A`), so the captured output
+/// can't be decoded as PNG.
+///
+/// The viewer modal therefore reads image files straight from
+/// disk via this command instead of using the captured stdout.
+/// Per spec §07 rule 2 — "probe, don't screen-scrape" — bytes on
+/// disk are authoritative; what the shell happened to print is
+/// just a noisy lens.
+///
+/// Refuses paths outside the user's home + system roots? No —
+/// the user typed the command into their shell; if they can
+/// `cat` it they can view it. Standard fs permissions enforce.
+/// We *do* cap the file size to keep a multi-GB read from
+/// blowing memory.
+const MAX_VIEWER_FILE_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+
+#[tauri::command]
+pub async fn read_file_bytes(path: String) -> Result<String, String> {
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    if metadata.len() as usize > MAX_VIEWER_FILE_BYTES {
+        return Err(format!(
+            "file too large: {} bytes (cap {} bytes)",
+            metadata.len(),
+            MAX_VIEWER_FILE_BYTES
+        ));
+    }
+    let bytes = tokio::fs::read(&path).await.map_err(|e| format!("{e}"))?;
+    Ok(B64.encode(&bytes))
+}
+
 /// Load the persisted app-state JSON (tabs + layout tree + focused pane),
 /// or `null` if the user has no prior session yet. The frontend hydrates
 /// its tab reducer from this on mount; if the store isn't attached (rare,
