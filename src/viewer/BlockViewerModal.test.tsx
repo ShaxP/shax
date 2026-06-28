@@ -11,7 +11,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
-import { BlockViewerModal } from "./BlockViewerModal";
+import { BlockViewerModal, __testing } from "./BlockViewerModal";
 
 const mockGetBlockOutput = vi.fn().mockResolvedValue(new Uint8Array());
 const mockBlockGetOutput = vi.fn().mockResolvedValue(new Uint8Array());
@@ -100,5 +100,38 @@ describe("BlockViewerModal", () => {
     mockGetBlockOutput.mockReturnValueOnce(new Promise<Uint8Array>(() => undefined));
     render(<BlockViewerModal block={makeBlock()} pty="pty-1" onClose={() => undefined} />);
     expect(screen.getByTestId("block-viewer-loading")).toBeInTheDocument();
+  });
+});
+
+describe("BlockViewerModal · tokenizeCommand", () => {
+  const tokenize = __testing.tokenizeCommand;
+
+  it("splits on plain whitespace", () => {
+    expect(tokenize("cat README.md")).toEqual(["cat", "README.md"]);
+    expect(tokenize("bat --paging=never src/lib.rs")).toEqual([
+      "bat",
+      "--paging=never",
+      "src/lib.rs",
+    ]);
+  });
+
+  it("honours backslash-escaped spaces (the GIF-with-spaces bug)", () => {
+    expect(tokenize("cat Chainsaw\\ Man\\ GIF.gif")).toEqual(["cat", "Chainsaw Man GIF.gif"]);
+  });
+
+  it("honours single-quoted strings (no escapes inside)", () => {
+    expect(tokenize("cat 'foo bar.txt'")).toEqual(["cat", "foo bar.txt"]);
+    expect(tokenize("cat 'foo\\nbar.txt'")).toEqual(["cat", "foo\\nbar.txt"]);
+  });
+
+  it("honours double-quoted strings (with escape for the closer)", () => {
+    expect(tokenize('cat "foo bar.txt"')).toEqual(["cat", "foo bar.txt"]);
+    expect(tokenize('cat "say \\"hi\\".txt"')).toEqual(["cat", 'say "hi".txt']);
+  });
+
+  it("handles empty / null / whitespace-only inputs", () => {
+    expect(tokenize(null)).toEqual([]);
+    expect(tokenize("")).toEqual([]);
+    expect(tokenize("   ")).toEqual([]);
   });
 });
