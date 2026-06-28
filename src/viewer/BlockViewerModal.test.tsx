@@ -15,17 +15,21 @@ import { BlockViewerModal, __testing } from "./BlockViewerModal";
 
 const mockGetBlockOutput = vi.fn().mockResolvedValue(new Uint8Array());
 const mockBlockGetOutput = vi.fn().mockResolvedValue(new Uint8Array());
+const mockReadFileBytes = vi.fn().mockRejectedValue(new Error("ENOENT"));
 
 vi.mock("../lib/ipc", () => ({
   getBlockOutput: (...args: unknown[]): Promise<Uint8Array> =>
     mockGetBlockOutput(...args) as Promise<Uint8Array>,
   blockGetOutput: (...args: unknown[]): Promise<Uint8Array> =>
     mockBlockGetOutput(...args) as Promise<Uint8Array>,
+  readFileBytes: (...args: unknown[]): Promise<Uint8Array> =>
+    mockReadFileBytes(...args) as Promise<Uint8Array>,
 }));
 
 afterEach(() => {
   mockGetBlockOutput.mockClear();
   mockBlockGetOutput.mockClear();
+  mockReadFileBytes.mockClear();
 });
 
 function makeBlock(overrides: Partial<{ id: string; command: string }> = {}): {

@@ -286,41 +286,55 @@ export function BlockViewerModal({
     return detectContentType({ bytes, text: headText, argv });
   }, [bytes, argv]);
 
+  const filenameHint = useMemo(() => firstFilenameArg(argv), [argv]);
+
+  // Disk-read override (defined further down in the file). Declare
+  // here so the `text` / `language` memos can read from it.
+  const [overrideBytes, setOverrideBytes] = useState<Uint8Array | null>(null);
+  const renderBytes = overrideBytes ?? bytes;
+
   const text = useMemo(() => {
-    if (bytes === null) return null;
+    if (renderBytes === null) return null;
     if (contentType === "image") return null;
-    // Strip ANSI / OSC at the modal layer so every text-based
-    // renderer downstream (Viewer, MarkdownView) gets clean
-    // input. zsh's missing-newline indicator
-    // (`\x1b[1m\x1b[7m%\x1b[27m…`) is the most common source of
-    // these in captured block bytes; without stripping here, the
-    // markdown renderer would surface them as literal text.
-    return stripAnsi(TEXT_DECODER.decode(bytes));
-  }, [bytes, contentType]);
+    // Prefer the disk-read override (clean file bytes) over the
+    // captured stdout (which carries zsh's missing-newline
+    // indicator `%` and other shell artifacts). ANSI stripping
+    // still applies for the captured-fallback path.
+    return stripAnsi(TEXT_DECODER.decode(renderBytes));
+  }, [renderBytes, contentType]);
 
   const language = useMemo(() => {
     if (text === null) return "plaintext" as const;
     return detectLanguage(text, argv);
   }, [text, argv]);
 
-  const filenameHint = useMemo(() => firstFilenameArg(argv), [argv]);
-
-  // For image content the *captured* bytes are unreliable — the
-  // PTY's line discipline (default ONLCR) mangles every `\n` in
-  // binary data into `\r\n`, breaking PNG / JPEG / GIF signatures
-  // and every internal length field. Bypass the capture by
-  // reading the file straight from disk via the dedicated IPC
-  // command. Falls back to captured bytes on read failure (path
-  // moved, permission denied, file too large, no filename hint).
+  // Whenever we can resolve a filename, prefer reading it
+  // straight from disk over the captured stdout — for *every*
+  // detected content type, not just images. The captured-stdout
+  // path has two failure modes that affect the viewer:
   //
-  // We keep this as a *separate state* (`overrideBytes`) so the
-  // initial render still uses the captured path until the disk
-  // read resolves — that way text-content viewers don't wait on
-  // a fs op they'll never use.
-  const [overrideBytes, setOverrideBytes] = useState<Uint8Array | null>(null);
+  //   1. PTY line discipline (default ONLCR) converts `\n` →
+  //      `\r\n` on the way out, corrupting binary content
+  //      (PNG / JPEG / GIF signatures, internal length fields).
+  //   2. Shell prompt artifacts leak in — zsh's
+  //      "no-trailing-newline" indicator (`%` in inverse video)
+  //      ends up at the end of any command whose stdout doesn't
+  //      end with `\n`. ANSI stripping cleans the styling but
+  //      the literal `%` survives, polluting Markdown / source
+  //      file views.
+  //
+  // Disk bytes are authoritative. Falls back to the captured
+  // path silently when there's no filename to read (`ls`, piped
+  // commands, `echo …`) or when the read fails (file moved,
+  // permission denied, file too large).
+  //
+  // Kept as a separate state (`overrideBytes`, declared with the
+  // text memo above) so the initial render uses the captured
+  // bytes until the async disk read resolves — avoids a
+  // "loading…" double-flash for blocks whose captured bytes
+  // were already adequate.
   useEffect(() => {
     setOverrideBytes(null);
-    if (contentType !== "image" && contentType !== "svg") return;
     if (filenameHint === null) return;
     const path = resolveBlockPath(filenameHint, block.cwd);
     if (path === null) return;
@@ -334,8 +348,7 @@ export function BlockViewerModal({
         if (cancelled) return;
         // Fallback to captured bytes is silent for the user, but
         // log so a developer can tell when the size-cap / perms
-        // / path-resolution dropped us here (the captured bytes
-        // are PTY-mangled for binary content).
+        // / path-resolution dropped us here.
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`viewer: read_file_bytes(${path}) failed: ${msg}`);
       },
@@ -344,8 +357,6 @@ export function BlockViewerModal({
       cancelled = true;
     };
   }, [contentType, filenameHint, block.cwd]);
-
-  const renderBytes = overrideBytes ?? bytes;
 
   return (
     <div
