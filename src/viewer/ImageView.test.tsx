@@ -11,20 +11,46 @@ import { describe, expect, it } from "vitest";
 import { ImageView } from "./ImageView";
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00, 0x00, 0x00]);
+const GIF_BYTES = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00]);
 
 describe("ImageView · raster", () => {
-  it("renders an <img> with a data URL using the right MIME", () => {
+  it("renders a PNG with image/png MIME (from magic bytes)", () => {
     render(<ImageView bytes={PNG_BYTES} kind="raster" filenameHint="photo.png" />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
     expect(img.src.startsWith("data:image/png;base64,")).toBe(true);
   });
 
-  it("picks JPEG MIME from a `.jpg` hint", () => {
-    render(<ImageView bytes={PNG_BYTES} kind="raster" filenameHint="cat.jpg" />);
+  it("renders a JPEG with image/jpeg MIME from magic bytes", () => {
+    render(<ImageView bytes={JPEG_BYTES} kind="raster" filenameHint={null} />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
     expect(img.src.startsWith("data:image/jpeg;base64,")).toBe(true);
+  });
+
+  it("renders a GIF with image/gif MIME from magic bytes — required for the browser to animate", () => {
+    render(<ImageView bytes={GIF_BYTES} kind="raster" filenameHint={null} />);
+    const img = screen.getByTestId("image-view-img");
+    if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
+    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
+  });
+
+  it("magic bytes win over a misleading filename hint", () => {
+    // Hint says `.png` but bytes are a GIF — the bytes are
+    // authoritative. Otherwise some browsers refuse animation.
+    render(<ImageView bytes={GIF_BYTES} kind="raster" filenameHint="lies.png" />);
+    const img = screen.getByTestId("image-view-img");
+    if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
+    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
+  });
+
+  it("falls back to the filename hint when bytes don't match a known format", () => {
+    const unknown = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+    render(<ImageView bytes={unknown} kind="raster" filenameHint="cat.gif" />);
+    const img = screen.getByTestId("image-view-img");
+    if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
+    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
   });
 });
 
