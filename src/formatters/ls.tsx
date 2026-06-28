@@ -282,12 +282,7 @@ const STATUS_LINE: CSSProperties = {
 };
 
 const SCROLL_HOST: CSSProperties = {
-  // Content-fit by default; cap at the pane's visible height
-  // (set as `--block-pane-height` on BlockList's scroll
-  // container). Short listings sit at their natural size; long
-  // ones cap to the pane and scroll inside. Fallback for
-  // surfaces that don't set the variable.
-  maxHeight: "var(--block-pane-height, 70vh)",
+  maxHeight: 320,
   overflowY: "auto",
   fontFamily: "var(--font-mono)",
   fontSize: 12.5,
