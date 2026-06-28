@@ -36,6 +36,8 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
+import { BlockViewerModal } from "./viewer";
+import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
 import {
   cycleFocus,
@@ -421,6 +423,14 @@ export default function App(): React.ReactElement {
   // Search overlay. Top-level so the keybindings can open it regardless
   // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
+  // Block viewer modal target (M4 slice 4.1). Driven by a window-level
+  // `shax:open-viewer` event so BlockRow doesn't need a deep prop chain.
+  // `pty` is null when the block originated in a pane that's no longer
+  // alive — the modal then fetches by block id from the store.
+  const [viewerTarget, setViewerTarget] = useState<{
+    pty: PtyId | null;
+    block: BlockSummary;
+  } | null>(null);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -435,6 +445,12 @@ export default function App(): React.ReactElement {
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+  // Ref so the capture-phase keydown handler can read the latest
+  // viewer-open state without re-registering on every render. The
+  // handler skips ⌘F when the viewer is open so the editor's own
+  // in-buffer search keymap (from @codemirror/search) handles it.
+  const viewerOpenRef = useRef(false);
+  viewerOpenRef.current = viewerTarget !== null;
 
   const handleNew = useCallback((): void => {
     dispatch({ type: "add_tab" });
@@ -526,6 +542,12 @@ export default function App(): React.ReactElement {
         // see the keystroke before xterm's textarea translates it
         // into `^F` (readline forward-char) and writes a byte to
         // the PTY.
+        //
+        // *Except* when the block viewer modal is open: the user is
+        // inside CodeMirror, which has its own ⌘F bound to the
+        // in-buffer search panel via `searchKeymap`. Skip our
+        // handler so the editor's wins.
+        if (viewerOpenRef.current) return;
         e.preventDefault();
         setSearchOpen(true);
         return;
@@ -573,6 +595,19 @@ export default function App(): React.ReactElement {
     // along for symmetry.
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+
+  // Block viewer open event. BlockRow's "view" icon dispatches a
+  // `shax:open-viewer` CustomEvent with `{ pty, block }`; we store
+  // it as the viewer target and render the modal below.
+  useEffect(() => {
+    const onOpen = (e: Event): void => {
+      const detail = (e as CustomEvent<{ pty: PtyId | null; block: BlockSummary }>).detail;
+      if (detail?.block === undefined) return;
+      setViewerTarget(detail);
+    };
+    window.addEventListener("shax:open-viewer", onOpen);
+    return () => window.removeEventListener("shax:open-viewer", onOpen);
   }, []);
 
   const titleTabs: TabDescriptor[] = useMemo(
@@ -703,6 +738,16 @@ export default function App(): React.ReactElement {
                 );
               }
             }, 0);
+          }}
+        />
+      )}
+      {viewerTarget !== null && (
+        <BlockViewerModal
+          block={viewerTarget.block}
+          pty={viewerTarget.pty}
+          onClose={() => {
+            setViewerTarget(null);
+            refocusActivePane();
           }}
         />
       )}
