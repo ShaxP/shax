@@ -19,6 +19,9 @@ import { useMemo, useState, type CSSProperties } from "react";
 import { renderToString } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/atom-one-dark.css";
+import "./MarkdownView.css";
 import DOMPurify, { type Config as PurifyConfig } from "dompurify";
 import { Viewer } from "./Viewer";
 
@@ -104,7 +107,11 @@ export function MarkdownView({ text, style }: MarkdownViewProps): React.ReactEle
   // sanitise cost when we switch back to "rendered".
   const safeHtml = useMemo(() => {
     if (mode !== "rendered") return "";
-    const dirty = renderToString(<ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>);
+    const dirty = renderToString(
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+        {text}
+      </ReactMarkdown>,
+    );
     return DOMPurify.sanitize(dirty, PURIFY_CONFIG);
   }, [text, mode]);
 

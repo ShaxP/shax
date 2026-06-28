@@ -18,6 +18,18 @@ describe("MarkdownView", () => {
     expect(out.querySelector("p")?.textContent).toBe("world");
   });
 
+  it("syntax-highlights fenced code blocks (rehype-highlight)", () => {
+    const md = '```rust\nfn main() { println!("hi"); }\n```';
+    render(<MarkdownView text={md} />);
+    const code = screen.getByTestId("markdown-rendered").querySelector("pre code");
+    // rehype-highlight tags the <code> with `hljs` and a
+    // `language-<lang>` class; the token spans inside carry
+    // `hljs-keyword` / `hljs-string` / etc. Assert on the
+    // outer marker and one syntax-class token.
+    expect(code?.className ?? "").toMatch(/\bhljs\b/);
+    expect(code?.querySelector(".hljs-keyword")).not.toBeNull();
+  });
+
   it("renders GFM tables (remark-gfm)", () => {
     const md = "| a | b |\n|---|---|\n| 1 | 2 |";
     render(<MarkdownView text={md} />);
