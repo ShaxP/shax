@@ -184,25 +184,36 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
     };
   }, [text, language]);
 
-  // Listen for vim mode changes. The replit-codemirror-vim plugin
-  // exposes a `Vim.onDispatch`-style hook indirectly via the
-  // global `Vim` object's status-bar dispatcher; the canonical way
-  // is to read the mode out of the CM6 state through its facet,
-  // but the plugin doesn't expose that. We poll on a small
-  // interval as a pragmatic fallback — `@replit/codemirror-vim`
-  // doesn't yet expose a public event for this.
+  // Listen for vim mode changes. `@replit/codemirror-vim` emits a
+  // `"vim-mode-change"` event on the CM5-shim `cm` object it
+  // attaches to the EditorView. The event payload is
+  // `{ mode, subMode? }` where `mode` is one of "normal" /
+  // "insert" / "visual" / "replace" and `subMode` (for visual)
+  // is "linewise" / "blockwise". We map that to our pill label.
   useEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
-    const handle = window.setInterval(() => {
-      // The plugin attaches a `cm` object on the view that carries
-      // the current vim state. Defensive about types because the
-      // plugin's `.d.ts` doesn't surface it.
-      const cm = (view as unknown as { cm?: { state?: { vim?: { mode?: string } } } }).cm;
-      const next = cm?.state?.vim?.mode ?? "normal";
-      setMode((prev) => (prev === next ? prev : next));
-    }, 60);
-    return () => window.clearInterval(handle);
+    type VimEvent = { mode: string; subMode?: string };
+    type VimCM = {
+      on: (event: string, handler: (e: VimEvent) => void) => void;
+      off: (event: string, handler: (e: VimEvent) => void) => void;
+    };
+    const cm = (view as unknown as { cm?: VimCM }).cm;
+    if (cm === undefined) return;
+    const handler = (e: VimEvent): void => {
+      const base = e.mode ?? "normal";
+      const next =
+        base === "visual"
+          ? e.subMode === "linewise"
+            ? "visualline"
+            : e.subMode === "blockwise"
+              ? "visualblock"
+              : "visual"
+          : base;
+      setMode(next);
+    };
+    cm.on("vim-mode-change", handler);
+    return () => cm.off("vim-mode-change", handler);
   }, [text, language]);
 
   // Stop key events propagating to the window-level keybindings
