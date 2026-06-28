@@ -15,7 +15,7 @@
  *     would bypass our sanitiser.
  */
 
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import DOMPurify, { type Config as PurifyConfig } from "dompurify";
 
 export type ImageKind = "raster" | "svg";
@@ -83,20 +83,17 @@ const SVG_HOST: CSSProperties = {
 };
 
 /**
- * Browser-side base64 encoder. The shared helper in `lib/ipc.ts`
- * is the right thing for IPC payloads but lives behind the
- * Tauri-context check there; importing it works in tests too
- * since we re-export it as a pure function.
+ * Build a same-document URL the `<img>` element can fetch from
+ * without blowing the data-URL size limit (some webviews cap at
+ * a few MB, which a large animated GIF easily exceeds).
+ * `URL.createObjectURL` produces a `blob:` URL with no size cap.
+ * Caller is responsible for revoking it on unmount.
  */
-function bytesToBase64(bytes: Uint8Array): string {
-  // Chunked to avoid blowing the call stack with very large
-  // images. 8 KiB chunks tested fine for tens of MB.
-  const CHUNK = 8192;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
+function makeBlobUrl(bytes: Uint8Array, mime: string): string {
+  // Copy into a fresh ArrayBuffer so the Blob owns the storage
+  // — passing the Uint8Array directly would still work, but the
+  // Blob can outlive React's render cycle for the bytes.
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
 
 /**
@@ -165,10 +162,16 @@ export function ImageView({
   filenameHint,
   style,
 }: ImageViewProps): React.ReactElement {
-  const dataUrl = useMemo(() => {
-    if (kind !== "raster") return "";
-    const mime = rasterMime(bytes, filenameHint);
-    return `data:${mime};base64,${bytesToBase64(bytes)}`;
+  // Build a Blob URL for the raster path. data: URLs have a
+  // per-browser size limit (~2 MB in some webviews) that a
+  // large animated GIF easily blows; Blob URLs don't. Revoke
+  // on unmount or when bytes change so we don't leak.
+  const [blobUrl, setBlobUrl] = useState<string>("");
+  useEffect(() => {
+    if (kind !== "raster") return;
+    const url = makeBlobUrl(bytes, rasterMime(bytes, filenameHint));
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
   }, [bytes, kind, filenameHint]);
 
   const safeSvg = useMemo(() => {
@@ -182,7 +185,7 @@ export function ImageView({
       <div style={HEADER}>{kind === "svg" ? "svg · sanitised" : "image"}</div>
       <div style={BODY}>
         {kind === "raster" ? (
-          <img data-testid="image-view-img" alt="block output" src={dataUrl} style={IMAGE_STYLE} />
+          <img data-testid="image-view-img" alt="block output" src={blobUrl} style={IMAGE_STYLE} />
         ) : (
           <div
             data-testid="image-view-svg"

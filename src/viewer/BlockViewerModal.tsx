@@ -249,9 +249,14 @@ export function BlockViewerModal({
         if (cancelled) return;
         if (fileBytes.length > 0) setOverrideBytes(fileBytes);
       },
-      () => {
-        // Silent fallback to captured bytes — the user still
-        // sees *something* even if disk read fails.
+      (err: unknown) => {
+        if (cancelled) return;
+        // Fallback to captured bytes is silent for the user, but
+        // log so a developer can tell when the size-cap / perms
+        // / path-resolution dropped us here (the captured bytes
+        // are PTY-mangled for binary content).
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`viewer: read_file_bytes(${path}) failed: ${msg}`);
       },
     );
     return () => {

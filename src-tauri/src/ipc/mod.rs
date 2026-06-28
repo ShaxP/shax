@@ -133,7 +133,7 @@ pub async fn block_get_output(
 /// `cat` it they can view it. Standard fs permissions enforce.
 /// We *do* cap the file size to keep a multi-GB read from
 /// blowing memory.
-const MAX_VIEWER_FILE_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+const MAX_VIEWER_FILE_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
 
 #[tauri::command]
 pub async fn read_file_bytes(path: String) -> Result<String, String> {

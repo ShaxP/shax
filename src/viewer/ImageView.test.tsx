@@ -19,21 +19,21 @@ describe("ImageView · raster", () => {
     render(<ImageView bytes={PNG_BYTES} kind="raster" filenameHint="photo.png" />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
-    expect(img.src.startsWith("data:image/png;base64,")).toBe(true);
+    expect(img.src.startsWith("blob:")).toBe(true);
   });
 
   it("renders a JPEG with image/jpeg MIME from magic bytes", () => {
     render(<ImageView bytes={JPEG_BYTES} kind="raster" filenameHint={null} />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
-    expect(img.src.startsWith("data:image/jpeg;base64,")).toBe(true);
+    expect(img.src.startsWith("blob:")).toBe(true);
   });
 
   it("renders a GIF with image/gif MIME from magic bytes — required for the browser to animate", () => {
     render(<ImageView bytes={GIF_BYTES} kind="raster" filenameHint={null} />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
-    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
+    expect(img.src.startsWith("blob:")).toBe(true);
   });
 
   it("magic bytes win over a misleading filename hint", () => {
@@ -42,7 +42,7 @@ describe("ImageView · raster", () => {
     render(<ImageView bytes={GIF_BYTES} kind="raster" filenameHint="lies.png" />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
-    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
+    expect(img.src.startsWith("blob:")).toBe(true);
   });
 
   it("falls back to the filename hint when bytes don't match a known format", () => {
@@ -50,7 +50,7 @@ describe("ImageView · raster", () => {
     render(<ImageView bytes={unknown} kind="raster" filenameHint="cat.gif" />);
     const img = screen.getByTestId("image-view-img");
     if (!(img instanceof HTMLImageElement)) throw new Error("expected <img>");
-    expect(img.src.startsWith("data:image/gif;base64,")).toBe(true);
+    expect(img.src.startsWith("blob:")).toBe(true);
   });
 });
 
