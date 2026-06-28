@@ -20,6 +20,7 @@ import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
+import { stripAnsi } from "./stripAnsi";
 import { Viewer } from "./Viewer";
 
 export interface BlockViewerModalProps {
@@ -180,7 +181,13 @@ export function BlockViewerModal({
   const text = useMemo(() => {
     if (bytes === null) return null;
     if (contentType === "image") return null;
-    return TEXT_DECODER.decode(bytes);
+    // Strip ANSI / OSC at the modal layer so every text-based
+    // renderer downstream (Viewer, MarkdownView) gets clean
+    // input. zsh's missing-newline indicator
+    // (`\x1b[1m\x1b[7m%\x1b[27m…`) is the most common source of
+    // these in captured block bytes; without stripping here, the
+    // markdown renderer would surface them as literal text.
+    return stripAnsi(TEXT_DECODER.decode(bytes));
   }, [bytes, contentType]);
 
   const language = useMemo(() => {
