@@ -17,6 +17,9 @@ import { BlockViewerModal } from "./BlockViewerModal";
 const mockGetBlockOutput = vi.fn().mockResolvedValue(new Uint8Array());
 const mockBlockGetOutput = vi.fn().mockResolvedValue(new Uint8Array());
 const mockReadFileBytes = vi.fn().mockRejectedValue(new Error("ENOENT"));
+const mockReadDirEntries = vi.fn().mockResolvedValue([]);
+const mockGitStatusPorcelain = vi.fn().mockResolvedValue("");
+const mockGitDiff = vi.fn().mockResolvedValue("");
 
 vi.mock("../lib/ipc", () => ({
   getBlockOutput: (...args: unknown[]): Promise<Uint8Array> =>
@@ -25,12 +28,20 @@ vi.mock("../lib/ipc", () => ({
     mockBlockGetOutput(...args) as Promise<Uint8Array>,
   readFileBytes: (...args: unknown[]): Promise<Uint8Array> =>
     mockReadFileBytes(...args) as Promise<Uint8Array>,
+  readDirEntries: (...args: unknown[]): Promise<unknown[]> =>
+    mockReadDirEntries(...args) as Promise<unknown[]>,
+  gitStatusPorcelain: (...args: unknown[]): Promise<string> =>
+    mockGitStatusPorcelain(...args) as Promise<string>,
+  gitDiff: (...args: unknown[]): Promise<string> => mockGitDiff(...args) as Promise<string>,
 }));
 
 afterEach(() => {
   mockGetBlockOutput.mockClear();
   mockBlockGetOutput.mockClear();
   mockReadFileBytes.mockClear();
+  mockReadDirEntries.mockClear();
+  mockGitStatusPorcelain.mockClear();
+  mockGitDiff.mockClear();
 });
 
 function makeBlock(overrides: Partial<{ id: string; command: string }> = {}): {
@@ -105,6 +116,69 @@ describe("BlockViewerModal", () => {
     mockGetBlockOutput.mockReturnValueOnce(new Promise<Uint8Array>(() => undefined));
     render(<BlockViewerModal block={makeBlock()} pty="pty-1" onClose={() => undefined} />);
     expect(screen.getByTestId("block-viewer-loading")).toBeInTheDocument();
+  });
+
+  it("does not show a FMT/RAW toggle for blocks without a formatter", async () => {
+    // `echo hi` has no formatter; the toggle should not appear.
+    mockGetBlockOutput.mockResolvedValueOnce(new TextEncoder().encode("hi\n"));
+    render(
+      <BlockViewerModal
+        block={makeBlock({ command: "echo hi" })}
+        pty="pty-1"
+        onClose={() => undefined}
+      />,
+    );
+    // Wait a microtask for the bytes-fetch effect to resolve.
+    await act(() => Promise.resolve());
+    expect(screen.queryByTestId("block-viewer-fmt-raw")).toBeNull();
+  });
+
+  it("hides the FMT/RAW toggle for cat blocks (useInModal: false)", async () => {
+    mockGetBlockOutput.mockResolvedValueOnce(new TextEncoder().encode("# title\n"));
+    render(
+      <BlockViewerModal
+        block={makeBlock({ command: "cat README.md" })}
+        pty="pty-1"
+        onClose={() => undefined}
+      />,
+    );
+    await act(() => Promise.resolve());
+    expect(screen.queryByTestId("block-viewer-fmt-raw")).toBeNull();
+  });
+
+  it("shows the FMT/RAW toggle and renders the formatter for ls blocks", async () => {
+    mockGetBlockOutput.mockResolvedValueOnce(new TextEncoder().encode("a\nb\n"));
+    render(
+      <BlockViewerModal
+        block={{ ...makeBlock({ command: "ls" }), cwd: "/tmp" }}
+        pty="pty-1"
+        onClose={() => undefined}
+      />,
+    );
+    // Resolve the bytes fetch.
+    await act(() => Promise.resolve());
+    // The toggle is visible…
+    expect(screen.getByTestId("block-viewer-fmt-raw")).toBeInTheDocument();
+    // …and FMT is the default selection.
+    expect(screen.getByTestId("block-viewer-fmt-pill")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("block-viewer-raw-pill")).toHaveAttribute("data-active", "false");
+  });
+
+  it("swaps to RAW when the user clicks the RAW pill", async () => {
+    mockGetBlockOutput.mockResolvedValueOnce(new TextEncoder().encode("a\nb\n"));
+    render(
+      <BlockViewerModal
+        block={{ ...makeBlock({ command: "ls" }), cwd: "/tmp" }}
+        pty="pty-1"
+        onClose={() => undefined}
+      />,
+    );
+    await act(() => Promise.resolve());
+    fireEvent.click(screen.getByTestId("block-viewer-raw-pill"));
+    expect(screen.getByTestId("block-viewer-raw-pill")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("block-viewer-fmt-pill")).toHaveAttribute("data-active", "false");
+    // The formatter wrapper goes away in RAW mode.
+    expect(screen.queryByTestId("block-viewer-formatter")).toBeNull();
   });
 });
 

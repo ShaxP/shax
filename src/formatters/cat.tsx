@@ -24,7 +24,10 @@ import { PASS, type Formatter, type FormatterContext } from "./types";
 const HOST: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  height: 320,
+  // Inline blocks get a fixed cap. The modal overrides
+  // `--formatter-max-height` (to e.g. `100%`) so the viewer
+  // fills the panel.
+  height: "var(--formatter-max-height, 320px)",
   margin: "8px 0 0 0",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius-sm)",
@@ -45,6 +48,15 @@ function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
 export const catFormatter: Formatter = {
   name: "cat",
   matcher: { kind: "argv0", argv0: "cat" },
+  // The modal viewer's content-type routing (image / markdown /
+  // Viewer) is strictly richer than what this formatter would
+  // render — its MarkdownView renders `cat README.md` as rendered
+  // markdown, its ImageView shows `cat image.png` as an image,
+  // and both use disk-read overrides to bypass PTY corruption.
+  // Skip the modal so the user gets that experience by default;
+  // the inline block FMT pill still uses this formatter for the
+  // bounded-height in-row view.
+  useInModal: false,
   render,
 };
 
@@ -54,5 +66,6 @@ export const catFormatter: Formatter = {
 export const batFormatter: Formatter = {
   name: "bat",
   matcher: { kind: "argv0", argv0: "bat" },
+  useInModal: false,
   render,
 };

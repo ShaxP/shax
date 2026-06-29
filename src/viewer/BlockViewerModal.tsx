@@ -22,6 +22,7 @@ import {
   type BlockSummary,
   type PtyId,
 } from "../lib/ipc";
+import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
 import { shellTokenize } from "../lib/shellTokenize";
 import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
@@ -101,6 +102,52 @@ const STATUS_LINE: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 12,
   color: "var(--fg-faint)",
+};
+
+const TOGGLE_GROUP: CSSProperties = {
+  display: "flex",
+  padding: 2,
+  border: "1px solid var(--border-strong)",
+  borderRadius: 4,
+  gap: 0,
+};
+
+const TOGGLE_BASE: CSSProperties = {
+  appearance: "none",
+  border: "none",
+  background: "transparent",
+  fontFamily: "var(--font-ui)",
+  fontSize: 10,
+  letterSpacing: 0.5,
+  padding: "2px 8px",
+  borderRadius: 3,
+  cursor: "pointer",
+};
+
+const TOGGLE_ON: CSSProperties = {
+  ...TOGGLE_BASE,
+  background: "var(--accent)",
+  color: "var(--bg)",
+};
+
+const TOGGLE_OFF: CSSProperties = {
+  ...TOGGLE_BASE,
+  color: "var(--fg-faint)",
+};
+
+// Wrapper around a modal-rendered formatter. The flex:1 sizing
+// + `--formatter-max-height: 100%` override lets each formatter's
+// own `max-height` track the modal panel instead of the
+// fixed-pixel cap they use inside the block list.
+const FORMATTER_HOST: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflow: "auto",
+  padding: "10px 14px",
+  // Custom property for the formatter's `max-height` fallback.
+  // CSSProperties type doesn't enumerate custom properties; the
+  // DOM accepts them fine.
+  ["--formatter-max-height" as never]: "100%",
 };
 
 /**
@@ -217,6 +264,60 @@ export function BlockViewerModal({
     return detectLanguage(text, argv);
   }, [text, argv]);
 
+  // Formatter lookup for the modal. We build a context with the
+  // text the modal would otherwise render — disk-read override
+  // when available, captured-then-ANSI-stripped fallback. For
+  // formatters that re-probe (ls, git status, git diff) the
+  // stdout field is irrelevant; for the trio plus future
+  // additions, the cwd from `block.cwd` is the key piece. The
+  // `pty` may be `null` (block from search, source pane gone);
+  // formatters that need a pane id should tolerate that
+  // (`paneId: ""` is the convention).
+  const formatterCtx: FormatterContext | null = useMemo(() => {
+    if (bytes === null) return null;
+    const rawText = TEXT_DECODER.decode(bytes);
+    return {
+      argv,
+      cwd: block.cwd,
+      env: {},
+      exitCode: block.exit_code,
+      durationMs: block.duration_ms,
+      stdout: text ?? "",
+      stderr: "",
+      rawAnsi: rawText,
+      paneId: pty ?? "",
+    };
+  }, [bytes, argv, block.cwd, block.exit_code, block.duration_ms, text, pty]);
+
+  const modalFormatter = useMemo(() => {
+    if (formatterCtx === null) return null;
+    const f = findFormatter(formatterCtx);
+    if (f === null) return null;
+    // `useInModal === false` opt-outs (cat / bat) fall through to
+    // the content-type routing below — that path renders rendered
+    // markdown / images / etc., which is what the user actually
+    // wants in the modal.
+    if (f.useInModal === false) return null;
+    return f;
+  }, [formatterCtx]);
+
+  // FMT/RAW toggle local to the modal. Defaults to FMT when a
+  // formatter applies. Hidden entirely when no formatter matches
+  // — non-formatter blocks keep today's look exactly.
+  const [modalMode, setModalMode] = useState<"fmt" | "raw">("fmt");
+  // When opening a new block, snap back to FMT — the previous
+  // toggle state is meaningless across blocks.
+  useEffect(() => {
+    setModalMode("fmt");
+  }, [block.id]);
+
+  const formatterOutput = useMemo(() => {
+    if (modalFormatter === null || formatterCtx === null) return null;
+    if (modalMode !== "fmt") return null;
+    const result = invokeFormatter(modalFormatter, formatterCtx);
+    return isPass(result) ? null : result;
+  }, [modalFormatter, formatterCtx, modalMode]);
+
   // Whenever we can resolve a filename, prefer reading it
   // straight from disk over the captured stdout — for *every*
   // detected content type, not just images. The captured-stdout
@@ -281,6 +382,29 @@ export function BlockViewerModal({
           <span style={TITLE} data-testid="block-viewer-title">
             {block.command ?? "(no command)"}
           </span>
+          {modalFormatter !== null && (
+            <div data-testid="block-viewer-fmt-raw" style={TOGGLE_GROUP}>
+              <button
+                type="button"
+                data-testid="block-viewer-fmt-pill"
+                style={modalMode === "fmt" ? TOGGLE_ON : TOGGLE_OFF}
+                data-active={modalMode === "fmt" ? "true" : "false"}
+                title={`formatter: ${modalFormatter.name}`}
+                onClick={() => setModalMode("fmt")}
+              >
+                FMT
+              </button>
+              <button
+                type="button"
+                data-testid="block-viewer-raw-pill"
+                style={modalMode === "raw" ? TOGGLE_ON : TOGGLE_OFF}
+                data-active={modalMode === "raw" ? "true" : "false"}
+                onClick={() => setModalMode("raw")}
+              >
+                RAW
+              </button>
+            </div>
+          )}
           <button
             type="button"
             data-testid="block-viewer-close"
@@ -297,6 +421,15 @@ export function BlockViewerModal({
         ) : bytes === null ? (
           <div style={STATUS_LINE} data-testid="block-viewer-loading">
             Loading…
+          </div>
+        ) : formatterOutput !== null ? (
+          // FMT in modal: uncap the formatter's own height via the
+          // CSS variable so it fills the panel. The wrapper is a
+          // flex:1 column so the formatter's overflow:auto scrolls
+          // inside the modal rather than the modal scrolling
+          // itself.
+          <div data-testid="block-viewer-formatter" style={FORMATTER_HOST}>
+            {formatterOutput}
           </div>
         ) : contentType === "image" ? (
           <ImageView
