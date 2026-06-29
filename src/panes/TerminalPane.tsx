@@ -365,9 +365,25 @@ function TerminalPaneInner({
     }
   };
 
+  /** True when an app-level overlay (search, block viewer
+   *  modal) is open. The block-focus keymap must not swallow
+   *  keys while the user is interacting with one of those —
+   *  e.g. typing into the search box would otherwise trigger
+   *  `j` → advance-down. We check the DOM rather than thread a
+   *  prop because the overlays are App-level state and
+   *  TerminalPane shouldn't need a wider awareness. */
+  const overlayIsOpen = (): boolean =>
+    document.querySelector('[data-testid="search-overlay"]') !== null ||
+    document.querySelector('[data-testid="block-viewer-modal"]') !== null;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (!activeRef.current) return;
+      // Hand off to the overlay's own keymap. This applies to
+      // `Ctrl+J` too: a user inside the search input probably
+      // doesn't want it to also re-engage block-focus on the
+      // pane behind the backdrop.
+      if (overlayIsOpen()) return;
       // Ctrl+J enters block-focus mode from the prompt; also
       // exits when already in it (symmetric toggle). We swallow
       // the keystroke so xterm doesn't see a literal `\n`.
