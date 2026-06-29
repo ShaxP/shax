@@ -190,13 +190,13 @@ function TerminalPaneInner({
   blockFocusRef.current = blockFocus;
   activeRef.current = active;
 
-  // The list of block ids we treat as navigable. Interactive
-  // blocks (vim, less, htop) never expand a useful render, so we
-  // skip them — pressing `j` past one would land on a block with
-  // no content. This stays an inline filter rather than reducer-
-  // state so the user can change `interactive` recovery later
-  // without a state migration.
-  const navigableBlocks = (): UiBlock[] => blocksRef.current.filter((b) => !b.interactive);
+  // Every block is navigable, including interactive ones (vim,
+  // less, htop). The user still needs to reach them to yank the
+  // command, open the modal, etc. — operations that don't depend
+  // on a rich rendered body. Block-action listeners in BlockRow
+  // no-op on operations that don't apply (expand/collapse for
+  // interactive blocks).
+  const navigableBlocks = (): UiBlock[] => blocksRef.current;
   const navigableIds = (): string[] => navigableBlocks().map((b) => b.id);
 
   // Imperative helpers used by the action dispatcher below.
