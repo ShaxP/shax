@@ -26,6 +26,8 @@ A completed block is rendered at the highest tier it qualifies for, and always d
 
 Every tier-1 and tier-2 block carries an always-available toggle back to raw. A formatter that errors falls back to raw silently. This is the fidelity contract.
 
+For content the user can view multiple ways — markdown rendered vs. its source, an image vs. its hex dump vs. its EXIF — the toggle grows from two-state (FMT / RAW) to a small lens group (FMT / SRC / INFO / RAW). All lenses are views of the same underlying bytes; RAW always shows the captured stdout the PTY actually wrote, never a re-probe from disk. See `07` for the per-content-type lens table.
+
 ## The promotion gate
 
 A command is promoted up the ladder only when each condition holds. Failing a condition degrades it to a safer tier.
@@ -39,3 +41,7 @@ The OSC 133 capture and the shell integration give the backend what it needs to 
 ## Why this matters
 
 This model is what lets Shax be both a real terminal and a rich one. Keep the boundary sharp: when in doubt about whether something is interactive, treat it as interactive and stay raw. A missed formatting opportunity is invisible; a broken vim session is not.
+
+## Action surfaces also emit real commands
+
+Formatters, widgets (`08`), the AI assistant (`09`), and the pane command palette (`14`) are all *input methods* — convenient ways to compose a shell command. Every action they take ends by emitting a real, visible command into the pane's prompt and submitting it; nothing mutates state behind the scenes. This is what CLAUDE.md non-negotiable #3 (the honest log) demands, and what makes every Shax-driven action reproducible from the user's own scrollback.

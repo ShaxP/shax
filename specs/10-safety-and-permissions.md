@@ -4,7 +4,7 @@ The moment widgets and the assistant can run commands, safety becomes a core fea
 
 ## The approval gate
 
-Every side-effectful command, whether initiated by an interactive widget (`08`) or by the assistant (`09`), passes through one gate before it runs. The gate:
+Every side-effectful command, whether initiated by an interactive widget (`08`), the assistant (`09`), or the pane command palette (`14`), passes through one gate before it runs. The gate:
 
 - shows the exact command that will run,
 - shows what it will affect (the cwd, the files or refs touched, the pane),
@@ -29,9 +29,9 @@ Where a command supports it, offer a dry-run or an explanation of what it will d
 
 Because every action becomes a real command in the prompt, there is never a hidden mutation to audit. The log is the audit trail. Do not add any path that mutates state without leaving a visible command.
 
-## Formatter sandbox
+## Formatter and pane-command sandbox
 
-Community formatters run in a worker sandbox with a restricted API and no ambient filesystem or network access (`07`). This is a security boundary; treat a bypass as a vulnerability.
+Community formatters (`07`) and community pane commands (`14`) both run in a worker sandbox with a restricted API and no ambient filesystem or network access. The two share the same trust model: the only way an extension can "do" anything is to *propose* a rendered view (formatters) or a shell command string (commands) that the user sees before it acts. This is a security boundary; treat a bypass as a vulnerability.
 
 ## Privacy and local-first
 
