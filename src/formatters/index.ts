@@ -17,10 +17,12 @@ import { register } from "./registry";
 import { batFormatter, catFormatter } from "./cat";
 import { gitDiffFormatter } from "./gitDiff";
 import { gitStatusFormatter } from "./gitStatus";
+import { jsonFormatter } from "./json";
 import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
 
 // Side-effect registration on first import. Idempotent: `register`
-// no-ops on duplicate `name`.
+// no-ops on duplicate `name`. JSON wins on priority over `cat` so
+// `cat foo.json` lands in the tree view, not the source viewer.
 register(catFormatter);
 register(batFormatter);
 register(lsFormatter);
@@ -28,6 +30,7 @@ register(ezaFormatter);
 register(exaFormatter);
 register(gitStatusFormatter);
 register(gitDiffFormatter);
+register(jsonFormatter);
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";
