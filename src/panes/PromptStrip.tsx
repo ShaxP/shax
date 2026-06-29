@@ -22,9 +22,16 @@
  */
 
 import { forwardRef } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, Ref } from "react";
+import type {
+  ClipboardEvent as ReactClipboardEvent,
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  Ref,
+} from "react";
 import type { PromptLine } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
+
+const TEXT_ENCODER = new TextEncoder();
 
 export interface PromptStripProps {
   /** The current working directory, sourced from OSC 133 A. */
@@ -167,6 +174,23 @@ function PromptStripInner(
     onInput(bytes);
   };
 
+  const handlePaste = (event: ReactClipboardEvent<HTMLDivElement>): void => {
+    // Read text from the clipboard and send it through to the shell as
+    // if the user had typed each character. The browser would otherwise
+    // try to paste *into* this div (no-op for a non-editable element)
+    // and the shell would never see the bytes.
+    event.preventDefault();
+    event.stopPropagation();
+    const text = event.clipboardData.getData("text/plain");
+    if (text.length === 0) return;
+    // Normalise line endings — Windows / web clipboards often deliver
+    // CRLF, but the shell expects LF (any CR in the middle of a paste
+    // looks like an Enter and prematurely submits whichever line
+    // contains it).
+    const normalised = text.replace(/\r\n?/g, "\n");
+    onInput(TEXT_ENCODER.encode(normalised));
+  };
+
   // Group consecutive same-styled chars into runs so the strip can render
   // styled chunks (zsh-autosuggestions ghost text, syntax-highlighted
   // command parts) in a faint colour while the user's committed input
@@ -184,6 +208,7 @@ function PromptStripInner(
       role="textbox"
       aria-label="Shell prompt"
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       style={ROW}
     >
       <span style={META_GROUP}>
