@@ -866,7 +866,14 @@ function TerminalPaneInner({
             liveOutputs={blockState.liveOutputs}
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
-            onSelectBlock={(id) => dispatch({ type: "select_block", id })}
+            onSelectBlock={(id) => {
+              dispatch({ type: "select_block", id });
+              // Clicking a row is an explicit "I want to interact
+              // with this block" gesture — same as a search jump.
+              // Engage block-focus so j/k/Enter/Esc/Tab/y work
+              // immediately without a separate Ctrl+J.
+              setBlockFocus(true);
+            }}
           />
         </div>
         {exitedCode !== null && (
