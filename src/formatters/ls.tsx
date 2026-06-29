@@ -282,7 +282,9 @@ const STATUS_LINE: CSSProperties = {
 };
 
 const SCROLL_HOST: CSSProperties = {
-  maxHeight: 320,
+  // Inline blocks get a fixed cap. The modal overrides
+  // `--formatter-max-height` to let the listing fill the panel.
+  maxHeight: "var(--formatter-max-height, 320px)",
   overflowY: "auto",
   fontFamily: "var(--font-mono)",
   fontSize: 12.5,

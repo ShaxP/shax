@@ -98,6 +98,15 @@ export interface Formatter {
   readonly name: string;
   readonly matcher: Matcher;
   readonly priority?: number;
+  /** Whether the modal viewer should defer to this formatter when
+   *  the user opens the block via the eye icon. Defaults to
+   *  `true`. Set `false` on formatters whose modal-context output
+   *  is strictly less rich than the built-in viewer's
+   *  content-type routing — e.g. `cat README.md` rendered through
+   *  the cat formatter would lose the modal's MarkdownView /
+   *  ImageView specialisations. The inline-block FMT pill still
+   *  uses the formatter regardless of this flag. */
+  readonly useInModal?: boolean;
   readonly render: (ctx: FormatterContext) => FormatterResult;
 }
 

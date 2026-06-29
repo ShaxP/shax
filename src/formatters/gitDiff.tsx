@@ -28,10 +28,11 @@ const HOST: CSSProperties = {
   margin: "4px 0 0 0",
   fontFamily: "var(--font-mono)",
   fontSize: 12.5,
-  // Cap the inline render so a 5k-line diff doesn't take over
-  // the pane — the eye icon still opens the modal for the
-  // unbounded experience.
-  maxHeight: 480,
+  // Inline blocks cap so a 5k-line diff doesn't take over the
+  // pane. The modal overrides `--formatter-max-height` so the
+  // diff fills the panel — the eye icon's whole point is to
+  // show the diff at full size.
+  maxHeight: "var(--formatter-max-height, 480px)",
   overflowY: "auto",
 };
 
