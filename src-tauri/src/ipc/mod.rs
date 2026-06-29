@@ -158,6 +158,12 @@ pub async fn read_file_bytes(path: String) -> Result<String, String> {
 /// classification is from the filesystem, not from SGR colours.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+// On Windows the classifier never constructs `Device`/`Socket`/
+// `Fifo` (those concepts don't exist there), so clippy's dead-
+// code lint would flag them — even though they're part of the
+// wire format the frontend expects and *are* constructed on
+// Unix. Suppress the lint on Windows builds only.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub enum DirEntryKind {
     /// Regular directory.
     Dir,
