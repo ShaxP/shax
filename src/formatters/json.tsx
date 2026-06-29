@@ -310,7 +310,6 @@ export const jsonFormatter: Formatter = {
       // Diagnostic for slice 4.6a — remove after verification.
       // Surfaces only the head of stdout to keep the console
       // sane on large outputs.
-      // eslint-disable-next-line no-console
       console.warn(
         "[json-formatter] match check",
         JSON.stringify({
