@@ -147,14 +147,22 @@ function TerminalPaneInner({
   useEffect(() => {
     if (paneId === undefined) return;
     const onSelect = (e: Event): void => {
-      const detail = (e as CustomEvent<{ paneId: string; blockId: BlockId }>).detail;
+      const detail = (e as CustomEvent<{ paneId: string; blockId: BlockId; focus?: boolean }>)
+        .detail;
       if (detail?.paneId !== paneId) return;
       dispatch({ type: "select_block", id: detail.blockId });
+      // The search overlay's jump path sets `focus: true` so the
+      // user lands ready to navigate with j/k/Enter/Esc. Plain
+      // click-to-select on a row omits the flag (BlockList passes
+      // just `id`), so the highlight updates without hijacking
+      // the keymap.
+      if (detail.focus === true) setBlockFocus(true);
     };
     const onInspect = (e: Event): void => {
-      const detail = (e as CustomEvent<{ paneId: string; block: UiBlock }>).detail;
+      const detail = (e as CustomEvent<{ paneId: string; block: UiBlock; focus?: boolean }>).detail;
       if (detail?.paneId !== paneId) return;
       dispatch({ type: "inspect_block", block: detail.block });
+      if (detail.focus === true) setBlockFocus(true);
     };
     window.addEventListener("shax:select-block", onSelect);
     window.addEventListener("shax:inspect-block", onInspect);
