@@ -399,9 +399,21 @@ function BlockRowInner({
       }
       if (detail.kind === "yank") {
         if (typeof navigator === "undefined" || navigator.clipboard === undefined) return;
-        const text = outputText ?? "";
-        if (text.length === 0) return;
-        void navigator.clipboard.writeText(text).catch(() => undefined);
+        // Copy the block as a unit: command line + output. Either
+        // half may be unavailable (interactive block with no flow
+        // text, historical block not yet expanded, prompt with no
+        // command captured) — we copy whichever parts we have and
+        // bail only when both are empty. Toolbar copy still
+        // produces command-only; `y` produces the richer block.
+        const parts: string[] = [];
+        if (block.command !== null && block.command.length > 0) {
+          parts.push(`$ ${block.command}`);
+        }
+        if (outputText !== null && outputText.length > 0) {
+          parts.push(outputText);
+        }
+        if (parts.length === 0) return;
+        void navigator.clipboard.writeText(parts.join("\n")).catch(() => undefined);
         return;
       }
       if (detail.kind === "expand") {
@@ -429,6 +441,7 @@ function BlockRowInner({
     return () => window.removeEventListener("shax:block-action", onAction);
   }, [
     block.id,
+    block.command,
     formatter,
     outputText,
     isRunning,
