@@ -91,6 +91,10 @@ Polished further in M7:
 
 - **ANSI / SGR colour rendering inside the viewer.** Slice 4.1 strips ANSI before feeding text to CodeMirror because CM6 doesn't understand SGR codes — viewing `ls --color` / `git log --color` / `cargo build` output through the viewer therefore shows clean text without the colours the bytes carry. The structured formatters (`ls`, `git status`, `git diff`, JSON) paint their own colour from probes / parsing, so the gap only appears for blocks that have ANSI but no registered formatter. Close by parsing SGR runs into CodeMirror range decorations (cleanest, stays vim-navigable) or by adding a generic "ANSI-coloured text" formatter that catches that bucket. Bytes are already preserved end-to-end; this is purely a rendering enhancement.
 
+- **Content-aware `cat` with FMT / SRC / RAW lens toggle.** Today the inline cat formatter shows file source in CodeMirror regardless of content; the rendered-markdown / image-view treatment only happens in the modal viewer. Lift the modal's content-aware routing into a shared `ContentView` component so inline cat shows markdown as markdown, images as images, and svg as svg with the same disk-read + DOMPurify + image-fit plumbing the modal already uses. Grow the FMT/RAW pill into a per-block-content lens group: FMT (rendered) / SRC (source — CodeMirror for text, hex dump for binaries) / RAW (captured stdout, unchanged). Specced in `07`. Hex dump is xxd-style, file-signature-highlighted, sticky offset column, virtualised for large files.
+
+- **INFO lens for binary metadata.** A fourth lens on image / binary cat blocks that surfaces structured metadata — PNG IHDR, JPEG EXIF (camera / lens / time / GPS, with redaction option), GIF frame count + loop, WebP animation flags, SVG security warnings. Ships in three phases: (1) PNG + JPEG + GIF (covers ~99% of image cat blocks), (2) WebP + SVG, (3) anything else as need surfaces. INFO becomes a visible toggle only after phase 1 lands. Per-format parsers are small (sub-200-LOC) and well-documented; the lens reuses the same `ContentView` component as FMT/SRC/RAW so it is structurally a fourth view, not a separate UI. See `07` for the per-format field table.
+
 ## M5 Interactive widgets
 
 **Goal:** explorable git diff, git status, and ls. **Lead:** frontend, with safety review from ai.
@@ -118,3 +122,15 @@ Polished further in M7:
 - Performance pass, full dark and light themes, onboarding and empty states, and the assistant-in-its-own-pane flow.
 
 **Exit:** hybrid search answers fuzzy intent queries; the app is fast under large histories; dark and light are both polished; onboarding teaches the keyboard model.
+
+## M8 Pane command palette
+
+**Goal:** a `Cmd+K` palette that exposes pane-scoped operations as guided UIs that emit real shell commands. **Lead:** frontend, with safety review from ai.
+
+- The palette framework: registry, matcher-against-`PaneContext`, panel lifecycle, fuzzy filter, overlay-bypass for block-focus, preview-and-submit gesture (`14`).
+- Built-in `cd to directory` with a single-pane file browser (breadcrumb header, list body, type-ahead filter, arrow / vim navigation, hidden-files toggle, symlink awareness).
+- Built-in git commands: `status` (read-only viewer), `checkout` (branch picker → `git checkout`), `stash` (form → `git stash push`), `commit` (message + body → `git commit`), `rebase` (target picker → `git rebase`). All destructive paths pass through the existing safety gate (`10`).
+- Community pane-command sandbox: worker-isolated, declarative panel-schema API (text / multiline / dropdown / list-picker / file-picker / toggle), `buildCommand(values) → string` callback, manifest in `~/.config/shax/commands/`. Mirrors the formatter sandbox model.
+- A "Reload commands" entry in the palette for development workflow.
+
+**Exit:** `Cmd+K` opens the palette in any pane; the built-in commands compose and submit real shell commands visible in the user's scrollback; destructive commands prompt twice (palette confirm + safety gate); a sample community command loads from disk, runs sandboxed, and cannot bypass the prompt-emission contract.

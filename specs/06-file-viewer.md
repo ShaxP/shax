@@ -35,6 +35,12 @@ Render png, jpeg, and gif as a plain image element inside a block; gif animates 
 
 SVG is special: it can carry `<script>` and `<foreignObject>`. Sanitize and sandbox SVG (strip scripts and event handlers) before rendering. A malicious file the user views must never run code in the app's context.
 
+## Inline vs. modal: the same content view in both places
+
+The block viewer modal and the inline cat formatter both reach the same `ContentView` component — the routing logic that picks Markdown / Image / Hex / CodeMirror by content type lives in one place, not two. They differ only in the height budget: inline gets the formatter's bounded cap, modal gets the panel. The component sizes via a CSS custom property so each surface controls its own ceiling without touching the routing.
+
+This means inline cat blocks render markdown as markdown and images as images, not as source text — matching the modal — and the FMT / SRC / RAW (plus INFO for binaries) lens toggle defined in `07` applies in both surfaces consistently. The lens toggle is the user-facing fidelity-contract knob: rendered view, source view, or raw bytes, with the binary hex view as the SRC for image-shaped blocks.
+
 ## Big files
 
 Cap and virtualize. CodeMirror virtualizes the viewer; for very large files, stream from the backend rather than buffering the whole file, and show a clear "truncated, view raw or open fully" affordance.
