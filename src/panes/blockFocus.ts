@@ -103,7 +103,9 @@ export type BlockKeyAction =
   | { kind: "last-block" }
   | { kind: "open-modal" }
   | { kind: "toggle-fmt-raw" }
-  | { kind: "yank" };
+  | { kind: "yank" }
+  | { kind: "collapse" }
+  | { kind: "expand" };
 
 export interface KeyState {
   /** Whether the previous keypress was `g`. Used for the `g g` chord. */
@@ -159,6 +161,15 @@ export function dispatchBlockKey(
   }
   if (key === "k" || key === "ArrowUp") {
     return { action: { kind: "advance-up" }, state: INITIAL_KEY_STATE };
+  }
+  // Vim-tree convention: `h` / `←` collapse the focused block,
+  // `l` / `→` expand it. There's no sideways navigation in a
+  // single-column block list, so the horizontal keys are free.
+  if (key === "h" || key === "ArrowLeft") {
+    return { action: { kind: "collapse" }, state: INITIAL_KEY_STATE };
+  }
+  if (key === "l" || key === "ArrowRight") {
+    return { action: { kind: "expand" }, state: INITIAL_KEY_STATE };
   }
   if (key === " " || key === "f") {
     return { action: { kind: "page-down" }, state: INITIAL_KEY_STATE };

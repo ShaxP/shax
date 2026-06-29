@@ -172,6 +172,24 @@ describe("dispatchBlockKey", () => {
     });
   });
 
+  it("h / ArrowLeft → collapse", () => {
+    expect(dispatchBlockKey(ev({ key: "h" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "collapse",
+    });
+    expect(dispatchBlockKey(ev({ key: "ArrowLeft" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "collapse",
+    });
+  });
+
+  it("l / ArrowRight → expand", () => {
+    expect(dispatchBlockKey(ev({ key: "l" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "expand",
+    });
+    expect(dispatchBlockKey(ev({ key: "ArrowRight" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "expand",
+    });
+  });
+
   it("unknown keys are no-ops", () => {
     expect(dispatchBlockKey(ev({ key: "p" }), INITIAL_KEY_STATE).action).toEqual({
       kind: "noop",

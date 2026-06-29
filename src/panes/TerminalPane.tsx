@@ -362,6 +362,8 @@ function TerminalPaneInner({
         return;
       case "toggle-fmt-raw":
       case "yank":
+      case "collapse":
+      case "expand":
         if (currentId !== null) {
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {

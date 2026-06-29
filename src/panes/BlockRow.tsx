@@ -359,14 +359,26 @@ function BlockRowInner({
   // formatter declined / threw, we still need to show *something*.
   const showFormatted = formatterOutput !== null;
 
+  // Interactive blocks (vim, htop, less, …) never expand into an output
+  // view — their bytes are cursor / grid manipulation, not flow text,
+  // and rendering them produces nonsense. We also skip the historical
+  // IPC fetch for the same reason. The user still sees the command,
+  // duration, and the small "interactive session" label below.
+  const interactive = block.interactive;
+
   // Listen for block-focus-mode action dispatches addressed to
-  // this block (Tab toggles FMT/RAW, `y` yanks). The keyboard
-  // handler lives in App.tsx; targeting a specific block via
-  // `detail.blockId` keeps BlockRow out of the global keymap.
+  // this block: Tab toggles FMT/RAW, `y` yanks, `h`/`←` collapse,
+  // `l`/`→` expand. The keyboard handler lives in TerminalPane;
+  // targeting a specific block via `detail.blockId` keeps
+  // BlockRow out of the global keymap.
   useEffect(() => {
     const onAction = (e: Event): void => {
-      const detail = (e as CustomEvent<{ blockId: string; kind: "toggle-fmt-raw" | "yank" }>)
-        .detail;
+      const detail = (
+        e as CustomEvent<{
+          blockId: string;
+          kind: "toggle-fmt-raw" | "yank" | "collapse" | "expand";
+        }>
+      ).detail;
       if (detail?.blockId !== block.id) return;
       if (detail.kind === "toggle-fmt-raw") {
         // Mirror the inline pill's `null → default` logic: if the
@@ -386,17 +398,40 @@ function BlockRowInner({
         void navigator.clipboard.writeText(text).catch(() => undefined);
         return;
       }
+      if (detail.kind === "expand") {
+        // No-op for blocks that can't expand (alt-screen, still
+        // running — both rendered specially). For everything
+        // else, set the user-open override and lazy-fetch the
+        // bytes if this is a historical row.
+        if (isRunning || interactive) return;
+        setUserOpen(true);
+        if (!fetched && liveOutput === undefined && getOutput !== undefined) {
+          setFetched(true);
+          void getOutput(pty, block.id).then((bytes) => {
+            setFetchedOutput(TEXT_DECODER.decode(bytes));
+          });
+        }
+        return;
+      }
+      if (detail.kind === "collapse") {
+        if (isRunning || interactive) return;
+        setUserOpen(false);
+        return;
+      }
     };
     window.addEventListener("shax:block-action", onAction);
     return () => window.removeEventListener("shax:block-action", onAction);
-  }, [block.id, formatter, outputText]);
-
-  // Interactive blocks (vim, htop, less, …) never expand into an output
-  // view — their bytes are cursor / grid manipulation, not flow text,
-  // and rendering them produces nonsense. We also skip the historical
-  // IPC fetch for the same reason. The user still sees the command,
-  // duration, and the small "interactive session" label below.
-  const interactive = block.interactive;
+  }, [
+    block.id,
+    formatter,
+    outputText,
+    isRunning,
+    interactive,
+    fetched,
+    liveOutput,
+    getOutput,
+    pty,
+  ]);
 
   // Natural default: open whenever we already have the bytes in memory, OR
   // the block is still running (always-open is the rule for running). For
