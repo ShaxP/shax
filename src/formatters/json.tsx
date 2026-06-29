@@ -304,8 +304,25 @@ export const jsonFormatter: Formatter = {
       // case. For everything else, do the looks-like + parse
       // check inline (probeJson is fast on non-JSON because of
       // the looksLikeJson pre-flight).
-      if (isLikelyJsonCommand(ctx.argv)) return true;
-      return probeJson(ctx.stdout) !== null;
+      const hintMatch = isLikelyJsonCommand(ctx.argv);
+      const probe = probeJson(ctx.stdout);
+      const matched = hintMatch || probe !== null;
+      // Diagnostic for slice 4.6a — remove after verification.
+      // Surfaces only the head of stdout to keep the console
+      // sane on large outputs.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[json-formatter] match check",
+        JSON.stringify({
+          argv: ctx.argv,
+          stdoutHead: ctx.stdout.slice(0, 200),
+          stdoutLength: ctx.stdout.length,
+          looksLike: probe !== null,
+          hintMatch,
+          matched,
+        }),
+      );
+      return matched;
     },
   },
   // Higher than the cat formatter's default 0 so JSON wins over
