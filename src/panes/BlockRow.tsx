@@ -399,15 +399,17 @@ function BlockRowInner({
       }
       if (detail.kind === "yank") {
         if (typeof navigator === "undefined" || navigator.clipboard === undefined) return;
-        // Copy the block as a unit: command line + output. Either
-        // half may be unavailable (interactive block with no flow
-        // text, historical block not yet expanded, prompt with no
-        // command captured) — we copy whichever parts we have and
-        // bail only when both are empty. Toolbar copy still
-        // produces command-only; `y` produces the richer block.
+        // Copy the block as a unit: command line + output, with
+        // no prompt-style prefix (the toolbar copy button is
+        // command-only and produces `ls -l` — `y` matches that
+        // for the command portion and appends the output). Either
+        // half may be unavailable (interactive block, historical
+        // row not yet fetched, prompt with no command captured);
+        // we copy whichever parts we have and bail only when
+        // both are empty.
         const parts: string[] = [];
         if (block.command !== null && block.command.length > 0) {
-          parts.push(`$ ${block.command}`);
+          parts.push(block.command);
         }
         if (outputText !== null && outputText.length > 0) {
           parts.push(outputText);
