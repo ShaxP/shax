@@ -154,7 +154,7 @@ function GitDiffView({ ctx }: GitDiffViewProps): React.ReactElement {
     );
   }
   return (
-    <div data-testid="formatter-git-diff" style={HOST}>
+    <div data-testid="formatter-git-diff" data-block-scroll-host="git-diff" style={HOST}>
       {diff.files.map((file) => (
         <FileBlock key={`${file.oldPath}::${file.path}`} file={file} />
       ))}

@@ -359,6 +359,38 @@ function BlockRowInner({
   // formatter declined / threw, we still need to show *something*.
   const showFormatted = formatterOutput !== null;
 
+  // Listen for block-focus-mode action dispatches addressed to
+  // this block (Tab toggles FMT/RAW, `y` yanks). The keyboard
+  // handler lives in App.tsx; targeting a specific block via
+  // `detail.blockId` keeps BlockRow out of the global keymap.
+  useEffect(() => {
+    const onAction = (e: Event): void => {
+      const detail = (e as CustomEvent<{ blockId: string; kind: "toggle-fmt-raw" | "yank" }>)
+        .detail;
+      if (detail?.blockId !== block.id) return;
+      if (detail.kind === "toggle-fmt-raw") {
+        // Mirror the inline pill's `null → default` logic: if the
+        // user has never toggled, switch to whichever isn't the
+        // current effective mode. If they have, flip it.
+        if (formatter === null) return;
+        setFormatMode((prev) => {
+          const cur = prev ?? "fmt";
+          return cur === "fmt" ? "raw" : "fmt";
+        });
+        return;
+      }
+      if (detail.kind === "yank") {
+        if (typeof navigator === "undefined" || navigator.clipboard === undefined) return;
+        const text = outputText ?? "";
+        if (text.length === 0) return;
+        void navigator.clipboard.writeText(text).catch(() => undefined);
+        return;
+      }
+    };
+    window.addEventListener("shax:block-action", onAction);
+    return () => window.removeEventListener("shax:block-action", onAction);
+  }, [block.id, formatter, outputText]);
+
   // Interactive blocks (vim, htop, less, …) never expand into an output
   // view — their bytes are cursor / grid manipulation, not flow text,
   // and rendering them produces nonsense. We also skip the historical

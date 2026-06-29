@@ -361,7 +361,7 @@ function LsView({ ctx }: LsViewProps): React.ReactElement {
 
   return (
     <div data-testid="formatter-ls" style={SHELL}>
-      <div style={SCROLL_HOST}>
+      <div data-block-scroll-host="ls" style={SCROLL_HOST}>
         {flags.long || flags.onePerLine ? (
           view.map((e) => <LsLongRow key={e.name} entry={e} />)
         ) : (
