@@ -227,6 +227,30 @@ function TerminalPaneInner({
     host.scrollTop = dir === "next" ? 0 : host.scrollHeight;
   };
 
+  /** Scroll the BlockList just enough so the entire block is
+   *  visible. Called after `expand` so freshly-revealed output
+   *  on the last block doesn't sit half off-screen. If the block
+   *  is taller than the visible area, align its top instead so
+   *  the user sees the start of the output. */
+  const ensureBlockVisible = (id: BlockId): void => {
+    const block = document.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
+    if (block === null) return;
+    const list = block.closest<HTMLElement>('[data-testid="block-list"]');
+    if (list === null) return;
+    const blockRect = block.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    if (blockRect.height > listRect.height) {
+      // Block bigger than the viewport — align its top.
+      list.scrollTop += blockRect.top - listRect.top;
+      return;
+    }
+    if (blockRect.bottom > listRect.bottom) {
+      list.scrollTop += blockRect.bottom - listRect.bottom;
+    } else if (blockRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - blockRect.top;
+    }
+  };
+
   const advanceFocus = (dir: "next" | "prev"): void => {
     const ids = navigableIds();
     const current = selectedIdRef.current;
@@ -363,6 +387,14 @@ function TerminalPaneInner({
       case "toggle-fmt-raw":
       case "yank":
       case "collapse":
+        if (currentId !== null) {
+          window.dispatchEvent(
+            new CustomEvent("shax:block-action", {
+              detail: { blockId: currentId, kind: action.kind },
+            }),
+          );
+        }
+        return;
       case "expand":
         if (currentId !== null) {
           window.dispatchEvent(
@@ -370,6 +402,18 @@ function TerminalPaneInner({
               detail: { blockId: currentId, kind: action.kind },
             }),
           );
+          // After the row expands, the captured output appears
+          // below the header — likely pushing the block's
+          // bottom past the BlockList's visible area when the
+          // focused block was already at the bottom. Two rAFs
+          // so React commits + layout settles, then ensure the
+          // whole block is on-screen.
+          const idToScroll = currentId;
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              ensureBlockVisible(idToScroll);
+            });
+          });
         }
         return;
     }
