@@ -2,25 +2,34 @@ import { describe, expect, it } from "vitest";
 import { entryCount, isLikelyJsonCommand, kindOf, looksLikeJson, probeJson } from "./detectJson";
 
 describe("looksLikeJson", () => {
-  it("accepts strings that begin with { or [", () => {
+  it("accepts structural openers", () => {
     expect(looksLikeJson("{}")).toBe(true);
     expect(looksLikeJson("[]")).toBe(true);
     expect(looksLikeJson('{"a":1}')).toBe(true);
     expect(looksLikeJson("[1,2,3]")).toBe(true);
   });
 
-  it("accepts leading whitespace before the structural opener", () => {
-    expect(looksLikeJson("   \n {}")).toBe(true);
-    expect(looksLikeJson("\t[\n]")).toBe(true);
+  it("accepts bare-primitive openers (jq emits these)", () => {
+    expect(looksLikeJson("42")).toBe(true);
+    expect(looksLikeJson("-3.14")).toBe(true);
+    expect(looksLikeJson('"a string"')).toBe(true);
+    expect(looksLikeJson("true")).toBe(true);
+    expect(looksLikeJson("false")).toBe(true);
+    expect(looksLikeJson("null")).toBe(true);
   });
 
-  it("rejects non-JSON-looking input", () => {
+  it("accepts leading whitespace before the opener", () => {
+    expect(looksLikeJson("   \n {}")).toBe(true);
+    expect(looksLikeJson("\t[\n]")).toBe(true);
+    expect(looksLikeJson("  42")).toBe(true);
+  });
+
+  it("rejects clearly non-JSON input", () => {
     expect(looksLikeJson("hello")).toBe(false);
-    expect(looksLikeJson("42")).toBe(false); // bare primitive — we don't promote
-    expect(looksLikeJson('"a string"')).toBe(false);
     expect(looksLikeJson("")).toBe(false);
     expect(looksLikeJson("   ")).toBe(false);
     expect(looksLikeJson("total 24\ndrwxr-xr-x ...")).toBe(false);
+    expect(looksLikeJson("error: not found")).toBe(false);
   });
 });
 
@@ -36,16 +45,48 @@ describe("probeJson", () => {
     expect(p?.value).toEqual([{ id: 1 }, { id: 2 }]);
   });
 
+  it("parses bare primitives (jq '.foo' emits these)", () => {
+    expect(probeJson("42")?.value).toBe(42);
+    expect(probeJson("-3.14")?.value).toBe(-3.14);
+    expect(probeJson('"hello"')?.value).toBe("hello");
+    expect(probeJson("true")?.value).toBe(true);
+    expect(probeJson("false")?.value).toBe(false);
+    expect(probeJson("null")?.value).toBeNull();
+  });
+
+  it("parses JSON Lines streams as a synthetic array (jq '.[]' emits these)", () => {
+    const p = probeJson("1\n2\n3");
+    expect(p?.value).toEqual([1, 2, 3]);
+  });
+
+  it("parses heterogeneous JSON Lines", () => {
+    const p = probeJson('{"a":1}\n{"b":2}\n{"c":3}');
+    expect(p?.value).toEqual([{ a: 1 }, { b: 2 }, { c: 3 }]);
+  });
+
+  it("a single-line bare primitive stays single, not lines-wrapped", () => {
+    // `42` should parse as the number 42, not the array [42].
+    expect(probeJson("42")?.value).toBe(42);
+  });
+
   it("returns null on malformed JSON", () => {
     expect(probeJson('{"name":}')).toBeNull();
     expect(probeJson("{trailing,}")).toBeNull();
     expect(probeJson('{"a"')).toBeNull();
   });
 
-  it("returns null on input that doesn't look like JSON, without trying to parse", () => {
+  it("returns null on clearly non-JSON input", () => {
     expect(probeJson("hello world")).toBeNull();
-    expect(probeJson("42")).toBeNull();
     expect(probeJson("")).toBeNull();
+    expect(probeJson("   ")).toBeNull();
+  });
+
+  it("returns null when only some JSON-Lines parse and the rest are noise", () => {
+    expect(probeJson("1\n2\nnot json\n4")).toBeNull();
+  });
+
+  it("handles trailing whitespace + newlines", () => {
+    expect(probeJson('{"a":1}\n\n  ')?.value).toEqual({ a: 1 });
   });
 
   it("handles deeply nested input", () => {

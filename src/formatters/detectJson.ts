@@ -23,26 +23,58 @@ export interface JsonProbe {
 
 /** Cheap pre-flight: does the input *look* like JSON? Skips a
  *  full parse for blocks that clearly aren't (`ls` output, a
- *  shell error, etc.). */
+ *  shell error, etc.). Tight enough to reject prose ("total 24")
+ *  while still accepting the bare primitives `jq` emits (`42`,
+ *  `"hi"`, `null`).
+ *
+ *  Structural openers (`{`, `[`, `"`) and numeric opener (`-` or
+ *  digit) get the unambiguous yes. For `true` / `false` / `null`
+ *  the first non-blank line must be *exactly* the keyword — so
+ *  "total 24" (starts with `t`) doesn't sneak through. */
 export function looksLikeJson(text: string): boolean {
-  // Trim leading whitespace; JSON is allowed to have any amount
-  // of leading whitespace and most pretty-printers add it.
-  let i = 0;
-  while (i < text.length && /\s/.test(text[i] ?? "")) i++;
-  if (i >= text.length) return false;
-  const first = text[i];
-  return first === "{" || first === "[";
+  const trimmed = text.trim();
+  if (trimmed === "") return false;
+  const first = trimmed[0] ?? "";
+  if (first === "{" || first === "[" || first === '"') return true;
+  if (first === "-" || (first >= "0" && first <= "9")) return true;
+  const firstLine = (trimmed.split("\n", 1)[0] ?? "").trim();
+  return firstLine === "true" || firstLine === "false" || firstLine === "null";
 }
 
 /** Full probe: try to parse `text` as JSON and return the parsed
- *  value, or `null` on parse failure / empty / not-even-looks-like.
- *  The implementation is intentionally a single `JSON.parse` —
- *  V8's parser is faster than anything we'd write. */
+ *  value. Two routes, in order:
+ *
+ *    1. A single JSON value — `JSON.parse` of the trimmed text.
+ *       Catches both structured (`{...}`, `[...]`) and bare
+ *       (`42`, `"hi"`, `true`, `null`) outputs.
+ *    2. JSON Lines — one value per line, each parses cleanly.
+ *       This is what `jq '.[]'` and similar streaming queries
+ *       emit. Wrapped into a synthetic array so the renderer
+ *       sees a single value.
+ *
+ *  Returns `null` on parse failure / empty / not-JSON-shaped.
+ *  Single-value parses are tried first, so a block whose stdout
+ *  is a valid array doesn't get mis-detected as JSON Lines. */
 export function probeJson(text: string): JsonProbe | null {
-  if (!looksLikeJson(text)) return null;
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  if (!looksLikeJson(trimmed)) return null;
+  // 1. Single value.
   try {
-    const value: unknown = JSON.parse(text);
+    const value: unknown = JSON.parse(trimmed);
     return { value };
+  } catch {
+    // fall through
+  }
+  // 2. JSON Lines. Each non-blank line must parse standalone.
+  const lines = trimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length < 2) return null;
+  try {
+    const values = lines.map((line) => JSON.parse(line) as unknown);
+    return { value: values };
   } catch {
     return null;
   }
