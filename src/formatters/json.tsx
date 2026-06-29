@@ -155,7 +155,14 @@ function JsonNode({
       >
         <span
           style={DISCLOSURE}
-          onClick={() => setExpanded(true)}
+          onClick={(e) => {
+            // Tree-local: don't bubble to BlockRow's onClick,
+            // which would shift block-focus to this row and
+            // visually "select another block" from the user's
+            // perspective.
+            e.stopPropagation();
+            setExpanded(true);
+          }}
           role="button"
           aria-label="Expand"
         >
