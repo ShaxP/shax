@@ -714,6 +714,18 @@ fn build_shell_command(
     }
     cmd.env("TERM", "xterm-256color");
 
+    // Disable git's pager. The block list already paginates output, and
+    // `git diff` / `git log` / `git show` defaulting to `less` means the
+    // user gets stuck in alt-screen, the block stays "running", and the
+    // inline formatter has nothing to render against. `GIT_PAGER=cat`
+    // tells git to stream everything to stdout; the block completes
+    // promptly and the slice-4.5 formatter renders the unified diff with
+    // our own colours + line-number gutter.
+    //
+    // Scoped to git on purpose — other pagers (man, explicit `less foo`)
+    // still work through alt-screen passthrough.
+    cmd.env("GIT_PAGER", "cat");
+
     let cwd = opts.cwd.clone().or_else(|| std::env::var("HOME").ok());
     if let Some(ref cwd) = cwd {
         cmd.cwd(cwd);
