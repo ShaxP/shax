@@ -425,3 +425,27 @@ export async function readDirEntries(path: string): Promise<DirEntry[]> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DirEntry[]>("read_dir_entries", { path });
 }
+
+/**
+ * Run `git status --porcelain=v2 --branch -z` in `cwd` and return
+ * stdout. Used by the slice-4.5 git-status formatter so we parse a
+ * stable machine-readable format instead of screen-scraping the
+ * human-readable one. Rejects with the backend's error string on
+ * not-a-repo / git-not-found / 10s timeout.
+ */
+export async function gitStatusPorcelain(cwd: string): Promise<string> {
+  if (!isTauriContext()) return "";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("git_status_porcelain", { cwd });
+}
+
+/**
+ * Run `git diff <args>` in `cwd` and return stdout. The unified
+ * diff format is the machine-readable format already, so we don't
+ * substitute the args — we replay what the user typed.
+ */
+export async function gitDiff(cwd: string, args: readonly string[]): Promise<string> {
+  if (!isTauriContext()) return "";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("git_diff", { cwd, args: [...args] });
+}
