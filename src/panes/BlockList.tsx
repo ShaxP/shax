@@ -90,14 +90,22 @@ export function BlockList({
     // dep-driven scroll above is enough for tests.
     if (typeof ResizeObserver === "undefined") return;
     let stickToBottom = true;
+    let lastScrollHeight = scroller.scrollHeight;
     const NEAR_BOTTOM_PX = 40;
     const onScroll = (): void => {
       const dist = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       stickToBottom = dist < NEAR_BOTTOM_PX;
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
+    // Only auto-scroll when content *grew*. Shrinks (block collapse)
+    // already let the browser clamp `scrollTop` if needed; re-running
+    // `scrollTop = scrollHeight` on shrink would yank the viewport up
+    // and put a different block under the user's cursor — leading to
+    // a follow-up click landing on the wrong row.
     const ro = new ResizeObserver(() => {
-      if (stickToBottom) scroller.scrollTop = scroller.scrollHeight;
+      const grew = scroller.scrollHeight > lastScrollHeight;
+      lastScrollHeight = scroller.scrollHeight;
+      if (stickToBottom && grew) scroller.scrollTop = scroller.scrollHeight;
     });
     ro.observe(content);
     return () => {

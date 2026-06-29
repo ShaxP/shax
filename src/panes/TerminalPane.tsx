@@ -867,12 +867,13 @@ function TerminalPaneInner({
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
             onSelectBlock={(id) => {
+              // Click highlights the row but does NOT engage
+              // block-focus mode — engaging it would silently
+              // eat subsequent prompt keystrokes that overlap
+              // with nav bindings (`j` for jq, etc.). Users who
+              // want keyboard nav on a clicked block can press
+              // Ctrl+J after the click.
               dispatch({ type: "select_block", id });
-              // Clicking a row is an explicit "I want to interact
-              // with this block" gesture — same as a search jump.
-              // Engage block-focus so j/k/Enter/Esc/Tab/y work
-              // immediately without a separate Ctrl+J.
-              setBlockFocus(true);
             }}
           />
         </div>
