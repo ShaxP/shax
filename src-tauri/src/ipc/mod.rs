@@ -291,6 +291,90 @@ fn is_executable_perm(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// Run `git status --porcelain=v2 --branch -z` in `cwd` and return
+/// stdout. Why this and not "let the user pass arbitrary git
+/// args": narrowing the API keeps the backend from becoming a
+/// general git-runner, and the porcelain v2 format is stable
+/// across git versions (the human output isn't). The `-z` keeps
+/// paths null-terminated so filenames with newlines parse cleanly
+/// on the frontend.
+///
+/// Cap on output size + a 10s hard timeout so a wedged git
+/// invocation can't hang the formatter.
+const MAX_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+
+#[tauri::command]
+pub async fn git_status_porcelain(cwd: String) -> Result<String, String> {
+    run_git(&cwd, &["status", "--porcelain=v2", "--branch", "-z"]).await
+}
+
+/// Run `git diff <args>` in `cwd`. `args` is the part of the
+/// user's command after `diff` — we replay it verbatim because
+/// the user might have typed `git diff HEAD`, `git diff
+/// --stat`, or a path / pathspec. Unified diff is the machine-
+/// readable format already, so no `--porcelain` substitution.
+///
+/// Same cap + timeout as `git_status_porcelain`. Refuses any
+/// arg that starts with `--exec` / `--ext-` / `-c` to avoid
+/// becoming a shell-out vector (those flags can run arbitrary
+/// commands via `--ext-diff` config). The formatter still
+/// renders RAW if we reject.
+#[tauri::command]
+pub async fn git_diff(cwd: String, args: Vec<String>) -> Result<String, String> {
+    for arg in &args {
+        if arg.starts_with("--ext-diff")
+            || arg.starts_with("--exec")
+            || arg == "-c"
+            || arg.starts_with("--upload-pack")
+            || arg.starts_with("--receive-pack")
+        {
+            return Err(format!("git_diff: refusing arg: {arg}"));
+        }
+    }
+    let mut full: Vec<&str> = vec!["diff"];
+    for a in &args {
+        full.push(a.as_str());
+    }
+    run_git(&cwd, &full).await
+}
+
+/// Shared `git` runner. Returns stdout as a string; non-UTF-8
+/// bytes pass through with replacement characters because the
+/// formatter renders text, not bytes. Treats a non-zero exit as
+/// an error iff stdout is empty — `git status` and `git diff`
+/// can both report changes via stdout while exiting non-zero
+/// (e.g. `git diff --exit-code` exits 1 when there are diffs).
+async fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
+    // Hard timeout. 10s covers very large repos; anything past
+    // that is almost certainly a hang and we'd rather surface
+    // a clean error.
+    let proc = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| "git: timed out after 10s".to_string())?
+    .map_err(|e| format!("git: failed to spawn: {e}"))?;
+
+    if proc.stdout.len() > MAX_GIT_OUTPUT_BYTES {
+        return Err(format!(
+            "git: output too large ({} bytes, cap {} bytes)",
+            proc.stdout.len(),
+            MAX_GIT_OUTPUT_BYTES
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&proc.stdout).into_owned();
+    if !proc.status.success() && stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&proc.stderr);
+        return Err(format!("git: exit {}: {}", proc.status, stderr.trim()));
+    }
+    Ok(stdout)
+}
+
 /// Load the persisted app-state JSON (tabs + layout tree + focused pane),
 /// or `null` if the user has no prior session yet. The frontend hydrates
 /// its tab reducer from this on mount; if the store isn't attached (rare,

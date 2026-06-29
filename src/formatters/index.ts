@@ -15,6 +15,8 @@
 
 import { register } from "./registry";
 import { batFormatter, catFormatter } from "./cat";
+import { gitDiffFormatter } from "./gitDiff";
+import { gitStatusFormatter } from "./gitStatus";
 import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
 
 // Side-effect registration on first import. Idempotent: `register`
@@ -24,6 +26,8 @@ register(batFormatter);
 register(lsFormatter);
 register(ezaFormatter);
 register(exaFormatter);
+register(gitStatusFormatter);
+register(gitDiffFormatter);
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";
