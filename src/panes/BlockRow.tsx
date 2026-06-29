@@ -375,11 +375,17 @@ function BlockRowInner({
     const onAction = (e: Event): void => {
       const detail = (
         e as CustomEvent<{
+          pty: PtyId | null;
           blockId: string;
           kind: "toggle-fmt-raw" | "yank" | "collapse" | "expand";
         }>
       ).detail;
-      if (detail?.blockId !== block.id) return;
+      // Pane-scope filter: only react when the event originated
+      // from this row's pane. Without it, an inspected-block row
+      // (search jump) carries the same id as the live row in
+      // another pane, so a single key press would expand both.
+      if (detail?.pty !== pty) return;
+      if (detail.blockId !== block.id) return;
       if (detail.kind === "toggle-fmt-raw") {
         // Mirror the inline pill's `null → default` logic: if the
         // user has never toggled, switch to whichever isn't the

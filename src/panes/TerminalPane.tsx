@@ -390,7 +390,7 @@ function TerminalPaneInner({
         if (currentId !== null) {
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {
-              detail: { blockId: currentId, kind: action.kind },
+              detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
             }),
           );
         }
@@ -399,7 +399,7 @@ function TerminalPaneInner({
         if (currentId !== null) {
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {
-              detail: { blockId: currentId, kind: action.kind },
+              detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
             }),
           );
           // After the row expands, the captured output appears
