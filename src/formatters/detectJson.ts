@@ -41,43 +41,136 @@ export function looksLikeJson(text: string): boolean {
   return firstLine === "true" || firstLine === "false" || firstLine === "null";
 }
 
+/** Extract the first balanced JSON value from the head of `text`,
+ *  returning the substring that should be parseable. Returns
+ *  `null` when nothing JSON-shaped is at the head.
+ *
+ *  Why this exists: PTY-captured stdout from `jq`, `curl`, etc.
+ *  often has trailing terminal noise — zsh's `%` missing-newline
+ *  indicator (which survives ANSI strip), late prompt bytes, the
+ *  user's PS1 fragments. A strict `JSON.parse` chokes on any
+ *  trailing character; this walker stops at the structural close
+ *  of the leading value so the trailing noise is ignored. */
+function extractLeadingJson(text: string): string | null {
+  let i = 0;
+  while (i < text.length && /\s/.test(text[i] ?? "")) i++;
+  if (i >= text.length) return null;
+  const start = i;
+  const first = text[i] ?? "";
+
+  // Structural opener: walk brackets, respecting strings + escapes.
+  if (first === "{" || first === "[") {
+    const close = first === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    while (i < text.length) {
+      const ch = text[i] ?? "";
+      if (inString) {
+        if (escape) {
+          escape = false;
+          i++;
+          continue;
+        }
+        if (ch === "\\") {
+          escape = true;
+          i++;
+          continue;
+        }
+        if (ch === '"') {
+          inString = false;
+          i++;
+          continue;
+        }
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        i++;
+        continue;
+      }
+      if (ch === first) {
+        depth++;
+      } else if (ch === close) {
+        depth--;
+        if (depth === 0) return text.slice(start, i + 1);
+      }
+      i++;
+    }
+    return null; // unbalanced
+  }
+
+  // Quoted-string primitive: walk to the matching `"`.
+  if (first === '"') {
+    let escape = false;
+    i++;
+    while (i < text.length) {
+      const ch = text[i] ?? "";
+      if (escape) {
+        escape = false;
+        i++;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        i++;
+        continue;
+      }
+      if (ch === '"') return text.slice(start, i + 1);
+      i++;
+    }
+    return null;
+  }
+
+  // Numeric / keyword primitive: read to the next whitespace.
+  while (i < text.length && !/\s/.test(text[i] ?? "")) i++;
+  return text.slice(start, i);
+}
+
 /** Full probe: try to parse `text` as JSON and return the parsed
  *  value. Two routes, in order:
  *
- *    1. A single JSON value — `JSON.parse` of the trimmed text.
- *       Catches both structured (`{...}`, `[...]`) and bare
- *       (`42`, `"hi"`, `true`, `null`) outputs.
- *    2. JSON Lines — one value per line, each parses cleanly.
- *       This is what `jq '.[]'` and similar streaming queries
- *       emit. Wrapped into a synthetic array so the renderer
- *       sees a single value.
+ *    1. JSON Lines — when there are ≥2 non-blank lines that
+ *       *all* parse standalone (`jq '.[]'`'s streaming output).
+ *       Wrapped into a synthetic array. Has to run first so a
+ *       multi-line stream of primitives like `1\n2\n3` isn't
+ *       short-circuited by route 2 returning just `1`.
+ *    2. Leading JSON value — extract the balanced prefix
+ *       (`extractLeadingJson`) and `JSON.parse` it. Tolerates
+ *       trailing noise (zsh `%` artifact, stray prompt bytes),
+ *       which most PTY-captured output carries.
  *
- *  Returns `null` on parse failure / empty / not-JSON-shaped.
- *  Single-value parses are tried first, so a block whose stdout
- *  is a valid array doesn't get mis-detected as JSON Lines. */
+ *  Returns `null` on parse failure / empty / not-JSON-shaped. */
 export function probeJson(text: string): JsonProbe | null {
   const trimmed = text.trim();
   if (trimmed === "") return null;
   if (!looksLikeJson(trimmed)) return null;
-  // 1. Single value.
-  try {
-    const value: unknown = JSON.parse(trimmed);
-    return { value };
-  } catch {
-    // fall through
-  }
-  // 2. JSON Lines. Each non-blank line must parse standalone.
+  // 1. JSON Lines. Each non-blank line must parse standalone;
+  //    one failure forces the fall-through.
   const lines = trimmed
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  if (lines.length < 2) return null;
-  try {
-    const values = lines.map((line) => JSON.parse(line) as unknown);
-    return { value: values };
-  } catch {
-    return null;
+  if (lines.length >= 2) {
+    try {
+      const values = lines.map((line) => JSON.parse(line) as unknown);
+      return { value: values };
+    } catch {
+      // fall through to leading-value extract
+    }
   }
+  // 2. Leading-value extract + parse (tolerates trailing noise).
+  const extracted = extractLeadingJson(trimmed);
+  if (extracted !== null) {
+    try {
+      const value: unknown = JSON.parse(extracted);
+      return { value };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /** Convenience for the matcher: was this block produced by a tool

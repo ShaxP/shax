@@ -81,8 +81,13 @@ describe("probeJson", () => {
     expect(probeJson("   ")).toBeNull();
   });
 
-  it("returns null when only some JSON-Lines parse and the rest are noise", () => {
-    expect(probeJson("1\n2\nnot json\n4")).toBeNull();
+  it("returns the leading value when JSON Lines fails partway and there's a valid head", () => {
+    // `1\n2\nnot json\n4` can't form a clean JSON Lines stream
+    // (line 3 isn't JSON), so we fall through to the leading-
+    // value extract, which sees `1` followed by trailing noise.
+    // Returning the head is the same behaviour that rescues
+    // `{"a":"b"}\r\n%...` from PTY-captured jq output.
+    expect(probeJson("1\n2\nnot json\n4")?.value).toBe(1);
   });
 
   it("handles trailing whitespace + newlines", () => {
@@ -92,6 +97,32 @@ describe("probeJson", () => {
   it("handles deeply nested input", () => {
     const deep = JSON.stringify({ a: { b: { c: { d: [1, 2, 3] } } } });
     expect(probeJson(deep)?.value).toEqual({ a: { b: { c: { d: [1, 2, 3] } } } });
+  });
+
+  it("tolerates zsh's missing-newline indicator after a structural value", () => {
+    // What jq's output looks like in a PTY after ANSI strip when
+    // zsh's PROMPT_SP fires: the literal `%` plus padding and
+    // carriage returns, all *after* the JSON.
+    const captured =
+      '{"a":"b"}\r\n%                                                                                     \r \r';
+    expect(probeJson(captured)?.value).toEqual({ a: "b" });
+  });
+
+  it("tolerates trailing noise after a primitive", () => {
+    expect(probeJson("42\n%   \r")?.value).toBe(42);
+    expect(probeJson('"hi"\n%   \r')?.value).toBe("hi");
+    expect(probeJson("null\n%   \r")?.value).toBeNull();
+  });
+
+  it("doesn't get confused by `}` inside a string", () => {
+    // A naive bracket-counter would close at the `}` inside the
+    // string. extractLeadingJson tracks string state, so this
+    // parses as the whole object.
+    expect(probeJson('{"x":"}"}')?.value).toEqual({ x: "}" });
+  });
+
+  it("doesn't get confused by escaped quotes inside a string", () => {
+    expect(probeJson('{"x":"\\"hi\\""}')?.value).toEqual({ x: '"hi"' });
   });
 });
 
