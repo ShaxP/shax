@@ -35,6 +35,19 @@ import type { UiBlock } from "./blockReducer";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
 import { PromptStrip } from "./PromptStrip";
+import {
+  dispatchBlockKey,
+  firstBlockId,
+  INITIAL_KEY_STATE,
+  lastBlockId,
+  nextBlockId,
+  prevBlockId,
+  smartScrollDown,
+  smartScrollUp,
+  type BlockKeyAction,
+  type KeyState,
+  type ScrollFrame,
+} from "./blockFocus";
 
 const RESIZE_DEBOUNCE_MS = 50;
 
@@ -134,14 +147,22 @@ function TerminalPaneInner({
   useEffect(() => {
     if (paneId === undefined) return;
     const onSelect = (e: Event): void => {
-      const detail = (e as CustomEvent<{ paneId: string; blockId: BlockId }>).detail;
+      const detail = (e as CustomEvent<{ paneId: string; blockId: BlockId; focus?: boolean }>)
+        .detail;
       if (detail?.paneId !== paneId) return;
       dispatch({ type: "select_block", id: detail.blockId });
+      // The search overlay's jump path sets `focus: true` so the
+      // user lands ready to navigate with j/k/Enter/Esc. Plain
+      // click-to-select on a row omits the flag (BlockList passes
+      // just `id`), so the highlight updates without hijacking
+      // the keymap.
+      if (detail.focus === true) setBlockFocus(true);
     };
     const onInspect = (e: Event): void => {
-      const detail = (e as CustomEvent<{ paneId: string; block: UiBlock }>).detail;
+      const detail = (e as CustomEvent<{ paneId: string; block: UiBlock; focus?: boolean }>).detail;
       if (detail?.paneId !== paneId) return;
       dispatch({ type: "inspect_block", block: detail.block });
+      if (detail.focus === true) setBlockFocus(true);
     };
     window.addEventListener("shax:select-block", onSelect);
     window.addEventListener("shax:inspect-block", onInspect);
@@ -150,6 +171,334 @@ function TerminalPaneInner({
       window.removeEventListener("shax:inspect-block", onInspect);
     };
   }, [paneId]);
+
+  // ── Block-focus mode ──────────────────────────────────────────────────
+  //
+  // When active && blockFocus is true, this pane intercepts the
+  // navigation keys defined in `panes/blockFocus.ts`. Entry is via
+  // Ctrl+J (handled below); exit via Esc or another Ctrl+J.
+  const [blockFocus, setBlockFocus] = useState(false);
+  // Refs let the keydown handler read the latest state without
+  // re-registering on every block-list change.
+  const blocksRef = useRef<UiBlock[]>([]);
+  const selectedIdRef = useRef<BlockId | null>(null);
+  const blockFocusRef = useRef(false);
+  const activeRef = useRef(active);
+  const chordStateRef = useRef<KeyState>(INITIAL_KEY_STATE);
+  blocksRef.current = blockState.blocks;
+  selectedIdRef.current = blockState.selectedBlockId;
+  blockFocusRef.current = blockFocus;
+  activeRef.current = active;
+
+  // Every block is navigable, including interactive ones (vim,
+  // less, htop). The user still needs to reach them to yank the
+  // command, open the modal, etc. — operations that don't depend
+  // on a rich rendered body. Block-action listeners in BlockRow
+  // no-op on operations that don't apply (expand/collapse for
+  // interactive blocks).
+  const navigableBlocks = (): UiBlock[] => blocksRef.current;
+  const navigableIds = (): string[] => navigableBlocks().map((b) => b.id);
+
+  // Imperative helpers used by the action dispatcher below.
+  const selectBlock = (id: BlockId | null): void => {
+    dispatch({ type: "select_block", id });
+  };
+
+  const getScrollHost = (blockId: BlockId): HTMLElement | null => {
+    const block = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`);
+    return block?.querySelector<HTMLElement>("[data-block-scroll-host]") ?? null;
+  };
+
+  const scrollFrame = (host: HTMLElement | null): ScrollFrame | null => {
+    if (host === null) return null;
+    return {
+      scrollTop: host.scrollTop,
+      scrollHeight: host.scrollHeight,
+      clientHeight: host.clientHeight,
+    };
+  };
+
+  /** Drop the new block into a sensible scroll position when
+   *  focus advances continuously: top-edge when going down,
+   *  bottom-edge when going up. Mimics RSS / mail readers. */
+  const positionForDirection = (id: BlockId, dir: "next" | "prev"): void => {
+    const host = getScrollHost(id);
+    if (host === null) return;
+    host.scrollTop = dir === "next" ? 0 : host.scrollHeight;
+  };
+
+  /** Scroll the BlockList just enough so the entire block is
+   *  visible. Called after `expand` so freshly-revealed output
+   *  on the last block doesn't sit half off-screen. If the block
+   *  is taller than the visible area, align its top instead so
+   *  the user sees the start of the output. */
+  const ensureBlockVisible = (id: BlockId): void => {
+    const block = document.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
+    if (block === null) return;
+    const list = block.closest<HTMLElement>('[data-testid="block-list"]');
+    if (list === null) return;
+    const blockRect = block.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    if (blockRect.height > listRect.height) {
+      // Block bigger than the viewport — align its top.
+      list.scrollTop += blockRect.top - listRect.top;
+      return;
+    }
+    if (blockRect.bottom > listRect.bottom) {
+      list.scrollTop += blockRect.bottom - listRect.bottom;
+    } else if (blockRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - blockRect.top;
+    }
+  };
+
+  const advanceFocus = (dir: "next" | "prev"): void => {
+    const ids = navigableIds();
+    const current = selectedIdRef.current;
+    const newId = dir === "next" ? nextBlockId({ ids }, current) : prevBlockId({ ids }, current);
+    if (newId === null || newId === current) return;
+    selectBlock(newId);
+    // Defer scroll positioning to next paint — the new id needs
+    // to be in the DOM first.
+    requestAnimationFrame(() => positionForDirection(newId, dir));
+  };
+
+  const exitBlockFocus = (): void => {
+    setBlockFocus(false);
+    selectBlock(null);
+    chordStateRef.current = INITIAL_KEY_STATE;
+    // Hand focus back to the prompt strip (or xterm under
+    // alt-screen). Reusing the existing "refocus active pane"
+    // signal would couple us to App; an explicit event keeps
+    // TerminalPane self-contained.
+    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+  };
+
+  // Approx line height of the in-pane formatter / raw rows; used
+  // for line-step scrolls. Conservative — most formatter rows are
+  // 18–20 px in the current theme.
+  const LINE_PX = 20;
+  const PAGE_FRACTION = 0.9;
+
+  const performAction = (action: BlockKeyAction): void => {
+    const currentId = selectedIdRef.current;
+    switch (action.kind) {
+      case "noop":
+        return;
+      case "exit":
+        exitBlockFocus();
+        return;
+      case "focus":
+        selectBlock(action.id);
+        return;
+      case "first-block": {
+        const id = firstBlockId({ ids: navigableIds() });
+        if (id !== null) {
+          selectBlock(id);
+          requestAnimationFrame(() => positionForDirection(id, "prev"));
+        }
+        return;
+      }
+      case "last-block": {
+        const id = lastBlockId({ ids: navigableIds() });
+        if (id !== null) {
+          selectBlock(id);
+          requestAnimationFrame(() => positionForDirection(id, "next"));
+        }
+        return;
+      }
+      case "advance-down": {
+        if (currentId === null) return;
+        const host = getScrollHost(currentId);
+        const decision = smartScrollDown(scrollFrame(host), LINE_PX);
+        if (decision.kind === "scroll-within" && host !== null) {
+          host.scrollTop += decision.deltaPx;
+        } else {
+          advanceFocus("next");
+        }
+        return;
+      }
+      case "advance-up": {
+        if (currentId === null) return;
+        const host = getScrollHost(currentId);
+        const decision = smartScrollUp(scrollFrame(host), LINE_PX);
+        if (decision.kind === "scroll-within" && host !== null) {
+          host.scrollTop += decision.deltaPx;
+        } else {
+          advanceFocus("prev");
+        }
+        return;
+      }
+      case "page-down": {
+        if (currentId === null) return;
+        const host = getScrollHost(currentId);
+        if (host === null) {
+          advanceFocus("next");
+          return;
+        }
+        const page = host.clientHeight * PAGE_FRACTION;
+        const decision = smartScrollDown(scrollFrame(host), page);
+        if (decision.kind === "scroll-within") {
+          host.scrollTop += decision.deltaPx;
+        } else {
+          advanceFocus("next");
+        }
+        return;
+      }
+      case "page-up": {
+        if (currentId === null) return;
+        const host = getScrollHost(currentId);
+        if (host === null) {
+          advanceFocus("prev");
+          return;
+        }
+        const page = host.clientHeight * PAGE_FRACTION;
+        const decision = smartScrollUp(scrollFrame(host), page);
+        if (decision.kind === "scroll-within") {
+          host.scrollTop += decision.deltaPx;
+        } else {
+          advanceFocus("prev");
+        }
+        return;
+      }
+      case "scroll-top":
+        if (currentId !== null) {
+          const host = getScrollHost(currentId);
+          if (host !== null) host.scrollTop = 0;
+        }
+        return;
+      case "scroll-bottom":
+        if (currentId !== null) {
+          const host = getScrollHost(currentId);
+          if (host !== null) host.scrollTop = host.scrollHeight;
+        }
+        return;
+      case "open-modal":
+        if (currentId !== null) {
+          const block = blocksRef.current.find((b) => b.id === currentId);
+          if (block !== undefined) {
+            window.dispatchEvent(
+              new CustomEvent("shax:open-viewer", {
+                detail: { pty: ptyIdRef.current, block },
+              }),
+            );
+          }
+        }
+        return;
+      case "toggle-fmt-raw":
+      case "yank":
+      case "collapse":
+        if (currentId !== null) {
+          window.dispatchEvent(
+            new CustomEvent("shax:block-action", {
+              detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
+            }),
+          );
+        }
+        return;
+      case "expand":
+        if (currentId !== null) {
+          window.dispatchEvent(
+            new CustomEvent("shax:block-action", {
+              detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
+            }),
+          );
+          // After the row expands, the captured output appears
+          // below the header — likely pushing the block's
+          // bottom past the BlockList's visible area when the
+          // focused block was already at the bottom. Two rAFs
+          // so React commits + layout settles, then ensure the
+          // whole block is on-screen.
+          const idToScroll = currentId;
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              ensureBlockVisible(idToScroll);
+            });
+          });
+        }
+        return;
+    }
+  };
+
+  /** True when an app-level overlay (search, block viewer
+   *  modal) is open. The block-focus keymap must not swallow
+   *  keys while the user is interacting with one of those —
+   *  e.g. typing into the search box would otherwise trigger
+   *  `j` → advance-down. We check the DOM rather than thread a
+   *  prop because the overlays are App-level state and
+   *  TerminalPane shouldn't need a wider awareness. */
+  const overlayIsOpen = (): boolean =>
+    document.querySelector('[data-testid="search-overlay"]') !== null ||
+    document.querySelector('[data-testid="block-viewer-modal"]') !== null;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (!activeRef.current) return;
+      // Hand off to the overlay's own keymap. This applies to
+      // `Ctrl+J` too: a user inside the search input probably
+      // doesn't want it to also re-engage block-focus on the
+      // pane behind the backdrop.
+      if (overlayIsOpen()) return;
+      // Ctrl+J enters block-focus mode from the prompt; also
+      // exits when already in it (symmetric toggle). We swallow
+      // the keystroke so xterm doesn't see a literal `\n`.
+      const isCtrlJ = e.key === "j" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+      if (isCtrlJ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (blockFocusRef.current) {
+          exitBlockFocus();
+          return;
+        }
+        const ids = navigableIds();
+        const latest = ids[ids.length - 1];
+        if (latest === undefined) return; // nothing to focus
+        setBlockFocus(true);
+        selectBlock(latest);
+        return;
+      }
+      // Other keys only intercept while in block-focus mode.
+      if (!blockFocusRef.current) return;
+      const { action, state: nextChord } = dispatchBlockKey(
+        {
+          key: e.key,
+          shiftKey: e.shiftKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          altKey: e.altKey,
+        },
+        chordStateRef.current,
+      );
+      chordStateRef.current = nextChord;
+      if (action.kind === "noop") {
+        // Eat the keystroke only if it's the pending-g chord
+        // arming step — otherwise let the system / shell handle
+        // it. We don't want block-focus to swallow `Cmd+T` etc.
+        if (nextChord.pendingG) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      performAction(action);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs cover the changing state
+  }, []);
+
+  // When this pane loses `active` (tab switch, focus moves to a
+  // sibling pane), drop out of block-focus so the next pane
+  // doesn't inherit a stale mode.
+  useEffect(() => {
+    if (!active && blockFocus) {
+      setBlockFocus(false);
+      selectBlock(null);
+      chordStateRef.current = INITIAL_KEY_STATE;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -517,7 +866,14 @@ function TerminalPaneInner({
             liveOutputs={blockState.liveOutputs}
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
-            onSelectBlock={(id) => dispatch({ type: "select_block", id })}
+            onSelectBlock={(id) => {
+              dispatch({ type: "select_block", id });
+              // Clicking a row is an explicit "I want to interact
+              // with this block" gesture — same as a search jump.
+              // Engage block-focus so j/k/Enter/Esc/Tab/y work
+              // immediately without a separate Ctrl+J.
+              setBlockFocus(true);
+            }}
           />
         </div>
         {exitedCode !== null && (

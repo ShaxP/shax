@@ -724,16 +724,22 @@ export default function App(): React.ReactElement {
             // ask the (now-visible) BlockList to scroll + select. The
             // listeners live in the matching TerminalPane.
             setTimeout(() => {
+              // `focus: true` opts the target pane into block-focus
+              // mode along with the selection. Search jumps are an
+              // explicit "I want to interact with this block" signal,
+              // so the keymap (j/k/Enter/Esc/…) should be live the
+              // moment the user lands. Click-to-select on a row
+              // omits the flag and only updates the highlight.
               if (live !== null) {
                 window.dispatchEvent(
                   new CustomEvent("shax:select-block", {
-                    detail: { paneId: target.paneId, blockId: hit.block.id },
+                    detail: { paneId: target.paneId, blockId: hit.block.id, focus: true },
                   }),
                 );
               } else {
                 window.dispatchEvent(
                   new CustomEvent("shax:inspect-block", {
-                    detail: { paneId: target.paneId, block: hit.block },
+                    detail: { paneId: target.paneId, block: hit.block, focus: true },
                   }),
                 );
               }

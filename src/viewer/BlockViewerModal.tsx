@@ -188,19 +188,32 @@ export function BlockViewerModal({
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Esc closes; ignore key events that originated from inside the
-  // viewer (its own Esc handlers in vim normal-mode etc. take
-  // precedence). The viewer wrapper stops propagation for other
-  // keys; Esc bubbles up here.
+  // Esc closes the modal. Registered in **capture** phase so we
+  // see the keystroke before PromptStrip's React onKeyDown — that
+  // handler maps Esc to byte 0x1b and calls stopPropagation, which
+  // in React 17+ also stops the native event from reaching window
+  // bubble listeners. Without capture, an Esc with the prompt
+  // strip focused would just hit the PTY and the modal would stay
+  // open. The Viewer-internal Esc (vim normal-mode) is dispatched
+  // at the host element below this listener and short-circuits
+  // before bubbling up, so this doesn't double-fire when the user
+  // intended an in-editor Esc.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      // Don't close if the focus is inside CodeMirror (the user
+      // might be exiting vim insert mode etc.). Viewer.tsx
+      // explicitly does NOT stopPropagation for Esc, but it does
+      // for everything else — so an Esc that originates from the
+      // editor's host should still close the modal (current
+      // behaviour) and an Esc that originates anywhere else
+      // (PromptStrip, modal backdrop) should too.
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
   // Fetch the block's captured bytes. The two IPC paths exist

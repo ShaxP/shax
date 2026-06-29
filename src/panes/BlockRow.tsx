@@ -366,6 +366,94 @@ function BlockRowInner({
   // duration, and the small "interactive session" label below.
   const interactive = block.interactive;
 
+  // Listen for block-focus-mode action dispatches addressed to
+  // this block: Tab toggles FMT/RAW, `y` yanks, `h`/`←` collapse,
+  // `l`/`→` expand. The keyboard handler lives in TerminalPane;
+  // targeting a specific block via `detail.blockId` keeps
+  // BlockRow out of the global keymap.
+  useEffect(() => {
+    const onAction = (e: Event): void => {
+      const detail = (
+        e as CustomEvent<{
+          pty: PtyId | null;
+          blockId: string;
+          kind: "toggle-fmt-raw" | "yank" | "collapse" | "expand";
+        }>
+      ).detail;
+      // Pane-scope filter: only react when the event originated
+      // from this row's pane. Without it, an inspected-block row
+      // (search jump) carries the same id as the live row in
+      // another pane, so a single key press would expand both.
+      if (detail?.pty !== pty) return;
+      if (detail.blockId !== block.id) return;
+      if (detail.kind === "toggle-fmt-raw") {
+        // Mirror the inline pill's `null → default` logic: if the
+        // user has never toggled, switch to whichever isn't the
+        // current effective mode. If they have, flip it.
+        if (formatter === null) return;
+        setFormatMode((prev) => {
+          const cur = prev ?? "fmt";
+          return cur === "fmt" ? "raw" : "fmt";
+        });
+        return;
+      }
+      if (detail.kind === "yank") {
+        if (typeof navigator === "undefined" || navigator.clipboard === undefined) return;
+        // Copy the block as a unit: command line + output, with
+        // no prompt-style prefix (the toolbar copy button is
+        // command-only and produces `ls -l` — `y` matches that
+        // for the command portion and appends the output). Either
+        // half may be unavailable (interactive block, historical
+        // row not yet fetched, prompt with no command captured);
+        // we copy whichever parts we have and bail only when
+        // both are empty.
+        const parts: string[] = [];
+        if (block.command !== null && block.command.length > 0) {
+          parts.push(block.command);
+        }
+        if (outputText !== null && outputText.length > 0) {
+          parts.push(outputText);
+        }
+        if (parts.length === 0) return;
+        void navigator.clipboard.writeText(parts.join("\n")).catch(() => undefined);
+        return;
+      }
+      if (detail.kind === "expand") {
+        // No-op for blocks that can't expand (alt-screen, still
+        // running — both rendered specially). For everything
+        // else, set the user-open override and lazy-fetch the
+        // bytes if this is a historical row.
+        if (isRunning || interactive) return;
+        setUserOpen(true);
+        if (!fetched && liveOutput === undefined && getOutput !== undefined) {
+          setFetched(true);
+          void getOutput(pty, block.id).then((bytes) => {
+            setFetchedOutput(TEXT_DECODER.decode(bytes));
+          });
+        }
+        return;
+      }
+      if (detail.kind === "collapse") {
+        if (isRunning || interactive) return;
+        setUserOpen(false);
+        return;
+      }
+    };
+    window.addEventListener("shax:block-action", onAction);
+    return () => window.removeEventListener("shax:block-action", onAction);
+  }, [
+    block.id,
+    block.command,
+    formatter,
+    outputText,
+    isRunning,
+    interactive,
+    fetched,
+    liveOutput,
+    getOutput,
+    pty,
+  ]);
+
   // Natural default: open whenever we already have the bytes in memory, OR
   // the block is still running (always-open is the rule for running). For
   // historical blocks the natural default is closed — we don't want to fire
