@@ -5,7 +5,7 @@
  * strips scripts, event handlers, and `javascript:` URLs.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, expect, it } from "vitest";
 import { MarkdownView } from "./MarkdownView";
@@ -71,13 +71,8 @@ describe("MarkdownView", () => {
     expect(screen.getByTestId("markdown-rendered").querySelector("script")).toBeNull();
   });
 
-  it("toggles between rendered and source", () => {
-    render(<MarkdownView text={"# Title"} />);
-    expect(screen.queryByTestId("markdown-rendered")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("markdown-toggle-source"));
-    expect(screen.queryByTestId("markdown-rendered")).toBeNull();
-    expect(screen.getByTestId("viewer")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("markdown-toggle-rendered"));
-    expect(screen.queryByTestId("markdown-rendered")).toBeInTheDocument();
-  });
+  // The in-component rendered ↔ source toggle was removed in
+  // M4.5 slice 1 — that decision is now made by the BlockRow /
+  // Modal FMT/SRC/RAW lens at the surface level, and the
+  // MarkdownView only ever renders the rendered HTML.
 });

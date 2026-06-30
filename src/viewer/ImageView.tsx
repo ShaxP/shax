@@ -33,23 +33,6 @@ export interface ImageViewProps {
 }
 
 const WRAPPER: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  minHeight: 0,
-};
-
-const HEADER: CSSProperties = {
-  padding: "6px 12px",
-  background: "var(--pane2)",
-  borderBottom: "1px solid var(--border)",
-  fontFamily: "var(--font-ui)",
-  fontSize: 11,
-  color: "var(--fg-faint)",
-  letterSpacing: 0.4,
-  textTransform: "uppercase",
-};
-
-const BODY: CSSProperties = {
   flex: 1,
   minHeight: 0,
   display: "flex",
@@ -182,18 +165,15 @@ export function ImageView({
 
   return (
     <div style={{ ...WRAPPER, ...style }} data-testid="image-view">
-      <div style={HEADER}>{kind === "svg" ? "svg · sanitised" : "image"}</div>
-      <div style={BODY}>
-        {kind === "raster" ? (
-          <img data-testid="image-view-img" alt="block output" src={blobUrl} style={IMAGE_STYLE} />
-        ) : (
-          <div
-            data-testid="image-view-svg"
-            style={SVG_HOST}
-            dangerouslySetInnerHTML={{ __html: safeSvg }}
-          />
-        )}
-      </div>
+      {kind === "raster" ? (
+        <img data-testid="image-view-img" alt="block output" src={blobUrl} style={IMAGE_STYLE} />
+      ) : (
+        <div
+          data-testid="image-view-svg"
+          style={SVG_HOST}
+          dangerouslySetInnerHTML={{ __html: safeSvg }}
+        />
+      )}
     </div>
   );
 }
