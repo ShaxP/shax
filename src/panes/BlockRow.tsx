@@ -523,7 +523,33 @@ function BlockRowInner({
   // 50 concurrent IPC fetches on boot to populate seeded rows that the user
   // may never look at.
   const naturalOpen = isRunning || liveOutput !== undefined;
-  const open = interactive ? false : isRunning ? true : (userOpen ?? naturalOpen);
+  // Fit-to-pane forces the row open — a maximised collapsed
+  // block would just show the command header filling the pane
+  // with nothing to actually look at.
+  const open = interactive
+    ? false
+    : isRunning
+      ? true
+      : isMaximized
+        ? true
+        : (userOpen ?? naturalOpen);
+
+  // For historical blocks (no live bytes, not yet fetched),
+  // maximising should also trigger the same lazy IPC fetch
+  // the user would have gotten by clicking expand. Without
+  // this, an unfetched row fills the pane with the command
+  // header and an empty output area.
+  useEffect(() => {
+    if (!isMaximized) return;
+    if (fetched) return;
+    if (liveOutput !== undefined) return;
+    if (getOutput === undefined) return;
+    if (isRunning || interactive) return;
+    setFetched(true);
+    void getOutput(pty, block.id).then((bytes) => {
+      setFetchedOutput(TEXT_DECODER.decode(bytes));
+    });
+  }, [isMaximized, fetched, liveOutput, getOutput, isRunning, interactive, pty, block.id]);
 
   const toggleOpen = (): void => {
     if (isRunning || interactive) return;
