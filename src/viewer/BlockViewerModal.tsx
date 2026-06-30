@@ -28,7 +28,7 @@ import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
-import { stripAnsi } from "./stripAnsi";
+import { stripAnsi, stripShellArtifacts } from "./stripAnsi";
 import { Viewer } from "./Viewer";
 
 export interface BlockViewerModalProps {
@@ -280,7 +280,7 @@ export function BlockViewerModal({
   // the command happened to operate on.
   const capturedText = useMemo(() => {
     if (bytes === null) return "";
-    return stripAnsi(TEXT_DECODER.decode(bytes));
+    return stripShellArtifacts(stripAnsi(TEXT_DECODER.decode(bytes)));
   }, [bytes]);
 
   const language = useMemo(() => {
@@ -304,7 +304,7 @@ export function BlockViewerModal({
   const formatterCtx: FormatterContext | null = useMemo(() => {
     if (bytes === null) return null;
     const rawText = TEXT_DECODER.decode(bytes);
-    const capturedText = stripAnsi(rawText);
+    const capturedText = stripShellArtifacts(stripAnsi(rawText));
     return {
       argv,
       cwd: block.cwd,

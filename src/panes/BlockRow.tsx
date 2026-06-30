@@ -52,6 +52,19 @@ const TEXT_DECODER = new TextDecoder();
  * two-path.md` — the bytes are still available via the live buffer,
  * we just don't render the escape codes as literal text.
  */
+/**
+ * Strip zsh's missing-newline-at-EOF indicator (`%` + padding
+ * + `\r`) from the tail of captured stdout. The styling is
+ * gone after `stripAnsi`, but the literal `%` survives and
+ * would otherwise leak into every formatter and into RAW.
+ * See `viewer/stripAnsi.ts` for the shared variant; this is
+ * the inline copy to avoid coupling BlockRow to that module
+ * (kept symmetric with the local `stripAnsi` below).
+ */
+function stripShellArtifacts(input: string): string {
+  return input.replace(/\n?%[ \t\r]*$/, "");
+}
+
 function stripAnsi(input: string): string {
   let out = "";
   let i = 0;
@@ -314,7 +327,12 @@ function BlockRowInner({
   // the human-readable text. Coloured rendering is M4 formatter work.
   const liveText = liveOutput !== undefined ? TEXT_DECODER.decode(liveOutput) : null;
   const rawText = liveText ?? fetchedOutput;
-  const outputText = rawText !== null ? stripAnsi(rawText) : null;
+  // Strip ANSI first, then zsh's missing-newline `%` indicator
+  // (a literal char that survives ANSI strip). Without the
+  // second step every formatter that parses ctx.stdout — wc,
+  // future text formatters — sees a stray `%` row at the end
+  // and renders it, and RAW shows a trailing `%` too.
+  const outputText = rawText !== null ? stripShellArtifacts(stripAnsi(rawText)) : null;
 
   // Formatter resolution. The argv is tokenised from the block's
   // command; cwd / exit / duration come from the block summary;
