@@ -135,6 +135,19 @@ const TOGGLE_OFF: CSSProperties = {
   color: "var(--fg-faint)",
 };
 
+const COMMUNITY_PILL: CSSProperties = {
+  marginLeft: 8,
+  padding: "1px 6px",
+  borderRadius: 4,
+  border: "1px solid color-mix(in srgb, var(--amber) 40%, transparent)",
+  color: "var(--amber)",
+  fontFamily: "var(--font-ui)",
+  fontSize: 10,
+  letterSpacing: "0.05em",
+  textTransform: "lowercase",
+  cursor: "help",
+};
+
 // Wrapper around a modal-rendered formatter. The flex:1 sizing
 // + `--formatter-max-height: 100%` override lets each formatter's
 // own `max-height` track the modal panel instead of the
@@ -412,27 +425,38 @@ export function BlockViewerModal({
             {block.command ?? "(no command)"}
           </span>
           {modalFormatter !== null && (
-            <div data-testid="block-viewer-fmt-raw" style={TOGGLE_GROUP}>
-              <button
-                type="button"
-                data-testid="block-viewer-fmt-pill"
-                style={modalMode === "fmt" ? TOGGLE_ON : TOGGLE_OFF}
-                data-active={modalMode === "fmt" ? "true" : "false"}
-                title={`formatter: ${modalFormatter.name}`}
-                onClick={() => setModalMode("fmt")}
-              >
-                FMT
-              </button>
-              <button
-                type="button"
-                data-testid="block-viewer-raw-pill"
-                style={modalMode === "raw" ? TOGGLE_ON : TOGGLE_OFF}
-                data-active={modalMode === "raw" ? "true" : "false"}
-                onClick={() => setModalMode("raw")}
-              >
-                RAW
-              </button>
-            </div>
+            <>
+              <div data-testid="block-viewer-fmt-raw" style={TOGGLE_GROUP}>
+                <button
+                  type="button"
+                  data-testid="block-viewer-fmt-pill"
+                  style={modalMode === "fmt" ? TOGGLE_ON : TOGGLE_OFF}
+                  data-active={modalMode === "fmt" ? "true" : "false"}
+                  title={`formatter: ${modalFormatter.name}`}
+                  onClick={() => setModalMode("fmt")}
+                >
+                  FMT
+                </button>
+                <button
+                  type="button"
+                  data-testid="block-viewer-raw-pill"
+                  style={modalMode === "raw" ? TOGGLE_ON : TOGGLE_OFF}
+                  data-active={modalMode === "raw" ? "true" : "false"}
+                  onClick={() => setModalMode("raw")}
+                >
+                  RAW
+                </button>
+              </div>
+              {modalFormatter.source === "community" && (
+                <span
+                  data-testid="block-viewer-community-pill"
+                  style={COMMUNITY_PILL}
+                  title="Community formatter — runs sandboxed in a Web Worker with no access to your filesystem, network, or Shax internals. Can only display text / tables it returns through the schema."
+                >
+                  community
+                </span>
+              )}
+            </>
           )}
           <button
             type="button"

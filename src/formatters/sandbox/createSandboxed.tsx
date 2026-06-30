@@ -40,6 +40,7 @@ export function createSandboxedFormatter(def: SandboxedFormatterDef): Formatter 
     name: def.name,
     matcher: def.matcher,
     priority: def.priority,
+    source: "community",
     render: (ctx: FormatterContext) => {
       // The render needs the worker round-trip, which is async.
       // The formatter API is synchronous; we render a host

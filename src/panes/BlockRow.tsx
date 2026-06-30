@@ -277,6 +277,19 @@ const FMT_PILL_OFF: CSSProperties = {
   color: "var(--fg-faint)",
 };
 
+const COMMUNITY_PILL: CSSProperties = {
+  ...FMT_PILL_BASE,
+  background: "transparent",
+  color: "var(--amber)",
+  border: "1px solid color-mix(in srgb, var(--amber) 40%, transparent)",
+  padding: "1px 6px",
+  fontWeight: 500,
+  textTransform: "lowercase",
+  letterSpacing: "0.05em",
+  cursor: "help",
+  marginLeft: 6,
+};
+
 const ACTION_ICON: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -671,6 +684,15 @@ function BlockRowInner({
                   RAW
                 </button>
               </div>
+              {formatter !== null && formatter.source === "community" && (
+                <span
+                  data-testid="block-community-pill"
+                  style={COMMUNITY_PILL}
+                  title="Community formatter — runs sandboxed in a Web Worker with no access to your filesystem, network, or Shax internals. Can only display text / tables it returns through the schema."
+                >
+                  community
+                </span>
+              )}
             </>
           )}
 
