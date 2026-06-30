@@ -449,3 +449,27 @@ export async function gitDiff(cwd: string, args: readonly string[]): Promise<str
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("git_diff", { cwd, args: [...args] });
 }
+
+/**
+ * One community formatter discovered on disk. Shape matches the
+ * Rust `CommunityFormatterPayload`.
+ */
+export interface CommunityFormatterPayload {
+  name: string;
+  manifest_json: string;
+  source_js: string;
+}
+
+/**
+ * Read every community formatter from
+ * `~/.config/shax/formatters/`. Returns an empty list when the
+ * directory doesn't exist (the common case for a fresh install).
+ * Per-formatter parse / size failures are logged on the backend
+ * and silently skipped — a single malformed add-on doesn't break
+ * the rest of the load.
+ */
+export async function listCommunityFormatters(): Promise<CommunityFormatterPayload[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CommunityFormatterPayload[]>("list_community_formatters");
+}

@@ -19,6 +19,7 @@ import { gitDiffFormatter } from "./gitDiff";
 import { gitStatusFormatter } from "./gitStatus";
 import { jsonFormatter } from "./json";
 import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
+import { loadCommunityFormatters } from "./sandbox/loader";
 import { wcSandboxFormatter } from "./sandbox/samples/wc";
 
 // Side-effect registration on first import. Idempotent: `register`
@@ -33,10 +34,19 @@ register(gitStatusFormatter);
 register(gitDiffFormatter);
 register(jsonFormatter);
 // `wc` is the first sandboxed-shape formatter — runs in a Web
-// Worker via the slice-4.6b1 scaffolding even though it ships
-// bundled with the app. Disk-loaded community formatters land
-// in 4.6b2 and flow through the same factory.
+// Worker via the slice-4.6b1 scaffolding. Bundled with the app
+// so the sandbox pipeline is exercised even without any
+// user-installed add-ons.
 register(wcSandboxFormatter);
+
+// Disk-loaded community formatters from
+// `~/.config/shax/formatters/`. Fired off without `await` so
+// the formatter registry is available immediately for the
+// built-ins; disk-loaded add-ons register themselves as their
+// scans complete. Built-ins are registered first → they win
+// registration-order ties → a malicious add-on cannot shadow
+// `git diff`, `ls`, etc.
+void loadCommunityFormatters();
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";
