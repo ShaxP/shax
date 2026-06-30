@@ -67,6 +67,8 @@ export async function invokeSandboxFormatter(
   if (typeof Worker === "undefined") return null;
   const worker = getOrSpawnWorker(name, source);
   if (worker === null) return null;
+  invocationCount++;
+  publishDebugHandle();
   return new Promise((resolve) => {
     const id = nextRequestId();
     let resolved = false;
@@ -124,6 +126,13 @@ function getOrSpawnWorker(name: string, source: string): Worker | null {
     // its own reference to the source until terminated.
     URL.revokeObjectURL(url);
     WORKERS.set(name, worker);
+    // Visible diagnostic so reviewers / users can verify in
+    // DevTools that the formatter actually runs in a separate
+    // thread (and not just on the main thread as a shim). Also
+    // exposes the live worker set on `window.__shaxSandbox` so
+    // it can be inspected from the console.
+    console.info(`[shax sandbox] spawned worker for "${name}"`);
+    publishDebugHandle();
     return worker;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -131,6 +140,28 @@ function getOrSpawnWorker(name: string, source: string): Worker | null {
     return null;
   }
 }
+
+interface ShaxSandboxDebug {
+  /** Names of currently-spawned community formatter workers. */
+  readonly active: readonly string[];
+  /** Total invocation count since app start (for spot-checking
+   *  that the worker is actually being called per block). */
+  readonly invocations: number;
+}
+
+function publishDebugHandle(): void {
+  // Only meaningful in a browser-like environment. Cheap to
+  // mirror — set on every spawn/teardown so a console reader
+  // sees the current set.
+  if (typeof window === "undefined") return;
+  const debug: ShaxSandboxDebug = {
+    active: Array.from(WORKERS.keys()),
+    invocations: invocationCount,
+  };
+  (window as unknown as { __shaxSandbox?: ShaxSandboxDebug }).__shaxSandbox = debug;
+}
+
+let invocationCount = 0;
 
 function tearDownWorker(name: string): void {
   const worker = WORKERS.get(name);
@@ -141,6 +172,8 @@ function tearDownWorker(name: string): void {
     // best-effort
   }
   WORKERS.delete(name);
+  console.info(`[shax sandbox] tore down worker for "${name}"`);
+  publishDebugHandle();
 }
 
 function validateWorkerReply(data: unknown): SandboxNode | null {
