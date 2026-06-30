@@ -212,19 +212,43 @@ export function BlockViewerModal({
   // at the host element below this listener and short-circuits
   // before bubbling up, so this doesn't double-fire when the user
   // intended an in-editor Esc.
+  // Key handler — Esc closes, Tab cycles the FMT/SRC/RAW lens.
+  // Registered in **capture** phase so we beat PromptStrip's
+  // React onKeyDown (which maps Esc to byte 0x1b and stops
+  // propagation) and the browser's default Tab focus-shift.
+  // Refs keep the latest state visible to the closure without
+  // re-registering on every render.
+  const modalModeRef = useRef<"fmt" | "src" | "raw">("fmt");
+  const modalSrcAvailableRef = useRef(false);
+  const hasFormatterRef = useRef(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key !== "Escape") return;
-      // Don't close if the focus is inside CodeMirror (the user
-      // might be exiting vim insert mode etc.). Viewer.tsx
-      // explicitly does NOT stopPropagation for Esc, but it does
-      // for everything else — so an Esc that originates from the
-      // editor's host should still close the modal (current
-      // behaviour) and an Esc that originates anywhere else
-      // (PromptStrip, modal backdrop) should too.
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
+      if (e.key === "Escape") {
+        // Viewer.tsx explicitly does NOT stopPropagation for Esc
+        // but does for other keys — Esc anywhere (prompt strip,
+        // editor host, backdrop) closes the modal.
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Cycle the lens. Without a formatter the toggle isn't
+        // rendered, so let Tab fall through (the modal has no
+        // other focusable chrome that benefits from default
+        // Tab behaviour either, but we don't want to swallow
+        // keystrokes we have no use for).
+        if (!hasFormatterRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const cycle: ("fmt" | "src" | "raw")[] = modalSrcAvailableRef.current
+          ? ["fmt", "src", "raw"]
+          : ["fmt", "raw"];
+        const idx = cycle.indexOf(modalModeRef.current);
+        const next = cycle[(idx + 1) % cycle.length] ?? "fmt";
+        setModalMode(next);
+        return;
+      }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
@@ -350,6 +374,7 @@ export function BlockViewerModal({
   // SRC button only appears when the content type has a
   // distinct source view (markdown / image / svg).
   const [modalMode, setModalMode] = useState<"fmt" | "src" | "raw">("fmt");
+  modalModeRef.current = modalMode;
   // When opening a new block, snap back to FMT — the previous
   // toggle state is meaningless across blocks.
   useEffect(() => {
@@ -357,6 +382,11 @@ export function BlockViewerModal({
   }, [block.id]);
 
   const modalSrcAvailable = modalFormatter !== null && hasDistinctSource(contentType);
+  // Mirror toggle state into refs so the capture-phase key
+  // handler picks the latest values without re-registering on
+  // every render.
+  modalSrcAvailableRef.current = modalSrcAvailable;
+  hasFormatterRef.current = modalFormatter !== null;
 
   const formatterOutput = useMemo(() => {
     if (modalFormatter === null || formatterCtx === null) return null;

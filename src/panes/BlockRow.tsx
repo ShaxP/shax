@@ -430,13 +430,18 @@ function BlockRowInner({
       if (detail?.pty !== pty) return;
       if (detail.blockId !== block.id) return;
       if (detail.kind === "toggle-fmt-raw") {
-        // Mirror the inline pill's `null → default` logic: if the
-        // user has never toggled, switch to whichever isn't the
-        // current effective mode. If they have, flip it.
+        // Cycle through every lens the row currently exposes.
+        // Two-state row (no SRC available) cycles FMT → RAW →
+        // FMT; three-state row (cat on markdown / image / svg)
+        // cycles FMT → SRC → RAW → FMT.
         if (formatter === null) return;
         setFormatMode((prev) => {
           const cur = prev ?? "fmt";
-          return cur === "fmt" ? "raw" : "fmt";
+          const cycle: ("raw" | "fmt" | "src")[] = srcAvailable
+            ? ["fmt", "src", "raw"]
+            : ["fmt", "raw"];
+          const idx = cycle.indexOf(cur);
+          return cycle[(idx + 1) % cycle.length] ?? "fmt";
         });
         return;
       }
@@ -495,6 +500,7 @@ function BlockRowInner({
     liveOutput,
     getOutput,
     pty,
+    srcAvailable,
   ]);
 
   // Natural default: open whenever we already have the bytes in memory, OR
