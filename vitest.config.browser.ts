@@ -7,6 +7,7 @@
  * Run with: `pnpm test:browser`.
  */
 import { defineConfig } from "vitest/config";
+import { playwright } from "@vitest/browser-playwright";
 
 export default defineConfig({
   test: {
@@ -14,7 +15,7 @@ export default defineConfig({
     include: ["src/**/*.browser.test.{ts,tsx}"],
     browser: {
       enabled: true,
-      provider: "playwright",
+      provider: playwright(),
       headless: true,
       instances: [{ browser: "chromium" }],
     },
