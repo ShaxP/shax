@@ -272,6 +272,17 @@ export function BlockViewerModal({
     return stripAnsi(TEXT_DECODER.decode(renderBytes));
   }, [renderBytes, contentType]);
 
+  // Captured-only text: what the command actually wrote to its
+  // stdout (ANSI-stripped). Distinct from `text` above (which
+  // prefers the disk-read override for the file-viewer fallback).
+  // The RAW-mode branch of the modal uses this so "raw" on a
+  // formatter block shows the *command's* output, not the file
+  // the command happened to operate on.
+  const capturedText = useMemo(() => {
+    if (bytes === null) return "";
+    return stripAnsi(TEXT_DECODER.decode(bytes));
+  }, [bytes]);
+
   const language = useMemo(() => {
     if (text === null) return "plaintext" as const;
     return detectLanguage(text, argv);
@@ -449,6 +460,14 @@ export function BlockViewerModal({
           <div data-testid="block-viewer-formatter" style={FORMATTER_HOST}>
             {formatterOutput}
           </div>
+        ) : modalFormatter !== null && modalMode === "raw" ? (
+          // RAW on a formatter block — show the *command's*
+          // captured output, not the disk-read fallback. Without
+          // this branch a wc / json / ls block in RAW would
+          // render the file the command happened to operate on
+          // (rendered markdown for `wc README.md`, etc.), which
+          // is misleading.
+          <Viewer text={capturedText} language={"plaintext" as const} style={{ flex: 1 }} />
         ) : contentType === "image" ? (
           <ImageView
             bytes={renderBytes ?? bytes}
