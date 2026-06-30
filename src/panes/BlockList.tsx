@@ -44,6 +44,13 @@ export interface BlockListProps {
   inspectedBlock?: UiBlock | null;
   /** Click-to-select on any row. */
   onSelectBlock?: (id: BlockId) => void;
+  /** When non-null, the named block fills the pane and every
+   *  other row is hidden. Driven by TerminalPane's
+   *  `maximizedBlockId` state — toggled by `f` or by clicking
+   *  the maximise icon. */
+  maximizedBlockId?: BlockId | null;
+  /** Click handler for the per-row maximise icon. */
+  onToggleMaximize?: (id: BlockId) => void;
 }
 
 export function BlockList({
@@ -54,6 +61,8 @@ export function BlockList({
   selectedBlockId = null,
   inspectedBlock = null,
   onSelectBlock,
+  maximizedBlockId = null,
+  onToggleMaximize,
 }: BlockListProps): React.ReactElement {
   // Stick to the bottom of the list so the most recent block is always
   // visible. Watching the `blocks` reference catches new blocks, completion
@@ -179,6 +188,13 @@ export function BlockList({
                 getOutput={getOutput}
                 selected={inspectedBlock.id === selectedBlockId}
                 onSelect={() => onSelectBlock?.(inspectedBlock.id)}
+                isMaximized={inspectedBlock.id === maximizedBlockId}
+                hidden={maximizedBlockId !== null && inspectedBlock.id !== maximizedBlockId}
+                onToggleMaximize={
+                  onToggleMaximize === undefined
+                    ? undefined
+                    : () => onToggleMaximize(inspectedBlock.id)
+                }
               />
             )}
           </div>
@@ -209,6 +225,11 @@ export function BlockList({
                   getOutput={getOutput}
                   selected={block.id === selectedBlockId}
                   onSelect={() => onSelectBlock?.(block.id)}
+                  isMaximized={block.id === maximizedBlockId}
+                  hidden={maximizedBlockId !== null && block.id !== maximizedBlockId}
+                  onToggleMaximize={
+                    onToggleMaximize === undefined ? undefined : () => onToggleMaximize(block.id)
+                  }
                 />
               ),
             )}

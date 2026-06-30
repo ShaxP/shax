@@ -35,6 +35,8 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
 import { shellTokenize } from "../lib/shellTokenize";
 import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
+import { hasDistinctSource } from "../viewer/ContentView";
+import { detectContentType } from "../viewer/detectContentType";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
@@ -137,6 +139,17 @@ export interface BlockRowProps {
   selected?: boolean;
   /** Called when the user clicks anywhere on the row. */
   onSelect?: () => void;
+  /** True when this row is currently fit-to-pane. The row's
+   *  container becomes absolute-positioned, filling the pane,
+   *  covering the prompt strip. The action toolbar swaps the
+   *  maximise icon for a minimise icon. */
+  isMaximized?: boolean;
+  /** Hide the row from the layout entirely. Used by BlockList
+   *  to suppress every block other than the maximised one. */
+  hidden?: boolean;
+  /** Click handler for the per-row maximise icon. Toggles
+   *  `isMaximized` in the parent's state. */
+  onToggleMaximize?: () => void;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -310,6 +323,9 @@ function BlockRowInner({
   now = Date.now,
   selected = false,
   onSelect,
+  isMaximized = false,
+  hidden = false,
+  onToggleMaximize,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -318,11 +334,13 @@ function BlockRowInner({
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [fetchedOutput, setFetchedOutput] = useState<string | null>(null);
   const [fetched, setFetched] = useState<boolean>(false);
-  // FMT/RAW user toggle. `null` = follow the natural default
-  // (FMT when a formatter applies, RAW otherwise). Once the user
-  // explicitly picks a side, we honour it for the lifetime of
-  // the row.
-  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | null>(null);
+  // FMT/SRC/RAW user toggle. `null` = follow the natural
+  // default (FMT when a formatter applies, RAW otherwise).
+  // Once the user explicitly picks a side, we honour it for
+  // the lifetime of the row. SRC is only ever set when the
+  // block's content type has a distinct source view; the
+  // surface hides the SRC button otherwise.
+  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | "src" | null>(null);
 
   const status = statusFor(block);
   const isRunning = status === "running";
@@ -372,18 +390,26 @@ function BlockRowInner({
     () => (formatterCtx === null ? null : findFormatter(formatterCtx)),
     [formatterCtx],
   );
+  // Per spec §07: a SRC button is only meaningful when the
+  // block's content type has a *distinct* source view (markdown
+  // rendered vs. markdown source; image vs. hex). For plain
+  // source / `ls` / `git diff` etc., FMT already IS the source
+  // view so SRC would just duplicate it.
+  const contentType = useMemo(() => detectContentType({ argv }), [argv]);
+  const srcAvailable = formatter !== null && hasDistinctSource(contentType);
   // The "natural" mode: FMT when a formatter applies, else RAW.
-  // Per spec §02 the highest-tier render is the default; the user
-  // toggle can flip it.
-  const effectiveMode: "raw" | "fmt" = formatMode ?? (formatter !== null ? "fmt" : "raw");
-  // Render the formatter output once when we're in FMT mode + a
-  // formatter is registered. The invoke wrapper turns any throw
-  // into PASS, which we then treat identically to "no formatter"
-  // and fall back to RAW.
+  // Per spec §02 the highest-tier render is the default; the
+  // user toggle can flip it.
+  const effectiveMode: "raw" | "fmt" | "src" = formatMode ?? (formatter !== null ? "fmt" : "raw");
+  // Render the formatter output when we're in FMT or SRC mode +
+  // a formatter is registered. The invoke wrapper turns any
+  // throw into PASS, which we then treat identically to "no
+  // formatter" and fall back to RAW.
   const formatterOutput = useMemo(() => {
-    if (effectiveMode !== "fmt") return null;
+    if (effectiveMode === "raw") return null;
     if (formatter === null || formatterCtx === null) return null;
-    const result = invokeFormatter(formatter, formatterCtx);
+    const lens = effectiveMode === "src" ? "source" : "rendered";
+    const result = invokeFormatter(formatter, formatterCtx, lens);
     return isPass(result) ? null : result;
   }, [effectiveMode, formatter, formatterCtx]);
   // The RAW fallback chain: if the user picked FMT but the
@@ -418,13 +444,18 @@ function BlockRowInner({
       if (detail?.pty !== pty) return;
       if (detail.blockId !== block.id) return;
       if (detail.kind === "toggle-fmt-raw") {
-        // Mirror the inline pill's `null → default` logic: if the
-        // user has never toggled, switch to whichever isn't the
-        // current effective mode. If they have, flip it.
+        // Cycle through every lens the row currently exposes.
+        // Two-state row (no SRC available) cycles FMT → RAW →
+        // FMT; three-state row (cat on markdown / image / svg)
+        // cycles FMT → SRC → RAW → FMT.
         if (formatter === null) return;
         setFormatMode((prev) => {
           const cur = prev ?? "fmt";
-          return cur === "fmt" ? "raw" : "fmt";
+          const cycle: ("raw" | "fmt" | "src")[] = srcAvailable
+            ? ["fmt", "src", "raw"]
+            : ["fmt", "raw"];
+          const idx = cycle.indexOf(cur);
+          return cycle[(idx + 1) % cycle.length] ?? "fmt";
         });
         return;
       }
@@ -483,6 +514,7 @@ function BlockRowInner({
     liveOutput,
     getOutput,
     pty,
+    srcAvailable,
   ]);
 
   // Natural default: open whenever we already have the bytes in memory, OR
@@ -491,7 +523,33 @@ function BlockRowInner({
   // 50 concurrent IPC fetches on boot to populate seeded rows that the user
   // may never look at.
   const naturalOpen = isRunning || liveOutput !== undefined;
-  const open = interactive ? false : isRunning ? true : (userOpen ?? naturalOpen);
+  // Fit-to-pane forces the row open — a maximised collapsed
+  // block would just show the command header filling the pane
+  // with nothing to actually look at.
+  const open = interactive
+    ? false
+    : isRunning
+      ? true
+      : isMaximized
+        ? true
+        : (userOpen ?? naturalOpen);
+
+  // For historical blocks (no live bytes, not yet fetched),
+  // maximising should also trigger the same lazy IPC fetch
+  // the user would have gotten by clicking expand. Without
+  // this, an unfetched row fills the pane with the command
+  // header and an empty output area.
+  useEffect(() => {
+    if (!isMaximized) return;
+    if (fetched) return;
+    if (liveOutput !== undefined) return;
+    if (getOutput === undefined) return;
+    if (isRunning || interactive) return;
+    setFetched(true);
+    void getOutput(pty, block.id).then((bytes) => {
+      setFetchedOutput(TEXT_DECODER.decode(bytes));
+    });
+  }, [isMaximized, fetched, liveOutput, getOutput, isRunning, interactive, pty, block.id]);
 
   const toggleOpen = (): void => {
     if (isRunning || interactive) return;
@@ -513,6 +571,37 @@ function BlockRowInner({
     void navigator.clipboard.writeText(block.command).catch(() => undefined);
   };
 
+  // While maximised, override the row's normal flow with an
+  // absolute overlay that fills the pane. Also lift the
+  // formatter's max-height so e.g. the CodeMirror viewer and
+  // the markdown renderer expand to fill the available space.
+  const containerStyle: CSSProperties = hidden
+    ? { display: "none" }
+    : isMaximized
+      ? {
+          // Keep ROW's flex *row* direction — the edge bar +
+          // content area sit side by side, same as inline mode.
+          // What changes is only the row becoming a fill-the-
+          // pane overlay; the CONTENT child takes the remaining
+          // horizontal space and (because of align-items:
+          // stretch) the full pane height.
+          ...ROW,
+          position: "absolute",
+          inset: 0,
+          zIndex: 30,
+          background: "var(--bg)",
+          margin: 0,
+          maxWidth: "none",
+          // `--formatter-flex: 1 1 0` flips the cat formatter's
+          // host from a fixed-height box (the inline default)
+          // to a flex item that grows to fill the formatter-
+          // output wrapper — which itself becomes flex:1 inside
+          // CONTENT's column below.
+          ["--formatter-flex" as never]: "1 1 0",
+          ["--formatter-max-height" as never]: "100%",
+        }
+      : ROW;
+
   return (
     <div
       className="block-row"
@@ -520,7 +609,8 @@ function BlockRowInner({
       data-block-id={block.id}
       data-status={status}
       data-selected={selected ? "true" : "false"}
-      style={ROW}
+      data-maximized={isMaximized ? "true" : "false"}
+      style={containerStyle}
       onClick={onSelect}
     >
       {/*
@@ -671,6 +761,21 @@ function BlockRowInner({
                 >
                   FMT
                 </button>
+                {srcAvailable && (
+                  <button
+                    type="button"
+                    data-testid="block-src-pill"
+                    style={effectiveMode === "src" ? FMT_PILL_ON : FMT_PILL_OFF}
+                    data-active={effectiveMode === "src" ? "true" : "false"}
+                    title="View source (markdown source, image hex, …)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFormatMode("src");
+                    }}
+                  >
+                    SRC
+                  </button>
+                )}
                 <button
                   type="button"
                   data-testid="block-raw-pill"
@@ -723,6 +828,23 @@ function BlockRowInner({
             >
               {"\uF06E"}
             </span>
+            {onToggleMaximize !== undefined && (
+              <span
+                title={
+                  isMaximized
+                    ? "Restore (f)"
+                    : "Fit to pane (f) — fills the pane and covers the prompt"
+                }
+                data-testid="block-maximize"
+                style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleMaximize();
+                }}
+              >
+                {isMaximized ? "✕" : "⛶"}
+              </span>
+            )}
             <span
               title="rerun"
               style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
@@ -793,10 +915,32 @@ function BlockRowInner({
             interactive session
           </div>
         )}
-        {open && showFormatted && <div data-testid="block-formatter-output">{formatterOutput}</div>}
+        {open && showFormatted && (
+          <div
+            data-testid="block-formatter-output"
+            style={
+              isMaximized
+                ? {
+                    // Fill the remaining height in CONTENT's flex
+                    // column — that's pane height minus the
+                    // command header and meta strip. Display flex
+                    // column lets the cat formatter's HOST grow
+                    // into us via `--formatter-flex: 1 1 0`.
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                  }
+                : undefined
+            }
+          >
+            {formatterOutput}
+          </div>
+        )}
         {open && !showFormatted && (
           <pre
             data-testid="block-output"
+            data-block-scroll-host="raw"
             style={{
               margin: "4px 0 0 0",
               whiteSpace: "pre-wrap",
@@ -809,6 +953,16 @@ function BlockRowInner({
               // glyphs (eza icons, devicons, powerline arrows, …) render
               // the same as they do in the rest of the UI.
               fontFamily: "inherit",
+              ...(isMaximized
+                ? {
+                    // RAW mode in fit-to-pane: fill the remaining
+                    // height and scroll internally instead of
+                    // overflowing the pane.
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: "auto",
+                  }
+                : undefined),
             }}
           >
             {outputText ?? "…"}

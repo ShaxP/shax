@@ -133,7 +133,12 @@ describe("BlockViewerModal", () => {
     expect(screen.queryByTestId("block-viewer-fmt-raw")).toBeNull();
   });
 
-  it("hides the FMT/RAW toggle for cat blocks (useInModal: false)", async () => {
+  it("shows the FMT/RAW toggle for cat blocks (now content-aware in the modal)", async () => {
+    // M4.5 slice 1 flipped cat to `useInModal: true` — the
+    // formatter now drives the modal's render through the
+    // shared ContentView. The user gets FMT/SRC/RAW per the
+    // lens system instead of the modal's old hard-coded
+    // content-type routing.
     mockGetBlockOutput.mockResolvedValueOnce(new TextEncoder().encode("# title\n"));
     render(
       <BlockViewerModal
@@ -143,7 +148,7 @@ describe("BlockViewerModal", () => {
       />,
     );
     await act(() => Promise.resolve());
-    expect(screen.queryByTestId("block-viewer-fmt-raw")).toBeNull();
+    expect(screen.queryByTestId("block-viewer-fmt-raw")).toBeInTheDocument();
   });
 
   it("shows the FMT/RAW toggle and renders the formatter for ls blocks", async () => {

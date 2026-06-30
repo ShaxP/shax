@@ -131,6 +131,20 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
     if (host === null) return;
     const cleanText = stripAnsi(text);
     const extensions: Extension[] = [
+      // CodeMirror 6 defaults to `height: auto` — content grows
+      // past any bounded parent and gets clipped by the host's
+      // `overflow: hidden`, with no internal scroller. This
+      // matters in two surfaces:
+      //   - the inline cat formatter (fixed-height host) just
+      //     showed the top of long files with no way to scroll;
+      //   - the fit-to-pane / modal hosts had the same problem.
+      // Pin the editor to 100% of its host and let `.cm-scroller`
+      // own the overflow. Vim `j/k` then scroll the editor as
+      // they move the cursor, and the mouse wheel works too.
+      EditorView.theme({
+        "&": { height: "100%" },
+        ".cm-scroller": { overflow: "auto" },
+      }),
       vim(),
       lineNumbers(),
       highlightActiveLineGutter(),

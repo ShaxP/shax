@@ -83,9 +83,13 @@ function matches(formatter: Formatter, ctx: FormatterContext): boolean {
  * a developer can see in dev tools when a formatter is silently
  * falling back.
  */
-export function invokeFormatter(formatter: Formatter, ctx: FormatterContext): FormatterResult {
+export function invokeFormatter(
+  formatter: Formatter,
+  ctx: FormatterContext,
+  lens?: "rendered" | "source",
+): FormatterResult {
   try {
-    return formatter.render(ctx);
+    return formatter.render(ctx, lens);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`formatter ${formatter.name} threw, falling back to RAW: ${msg}`);

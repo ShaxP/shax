@@ -178,6 +178,12 @@ function TerminalPaneInner({
   // navigation keys defined in `panes/blockFocus.ts`. Entry is via
   // Ctrl+J (handled below); exit via Esc or another Ctrl+J.
   const [blockFocus, setBlockFocus] = useState(false);
+  // Block "fit-to-pane": when set, the named block fills the
+  // whole pane (covering the prompt strip and every other
+  // block). Navigation is suspended in this state — the only
+  // valid keys are the lens cycle (Tab), yank (y), and a
+  // second `f` (or Esc) to restore normal view.
+  const [maximizedBlockId, setMaximizedBlockId] = useState<BlockId | null>(null);
   // Refs let the keydown handler read the latest state without
   // re-registering on every block-list change.
   const blocksRef = useRef<UiBlock[]>([]);
@@ -185,10 +191,12 @@ function TerminalPaneInner({
   const blockFocusRef = useRef(false);
   const activeRef = useRef(active);
   const chordStateRef = useRef<KeyState>(INITIAL_KEY_STATE);
+  const maximizedBlockIdRef = useRef<BlockId | null>(null);
   blocksRef.current = blockState.blocks;
   selectedIdRef.current = blockState.selectedBlockId;
   blockFocusRef.current = blockFocus;
   activeRef.current = active;
+  maximizedBlockIdRef.current = maximizedBlockId;
 
   // Every block is navigable, including interactive ones (vim,
   // less, htop). The user still needs to reach them to yank the
@@ -206,7 +214,24 @@ function TerminalPaneInner({
 
   const getScrollHost = (blockId: BlockId): HTMLElement | null => {
     const block = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`);
-    return block?.querySelector<HTMLElement>("[data-block-scroll-host]") ?? null;
+    if (block === null) return null;
+    // Formatters that opt into the navigation API tag their
+    // scroller explicitly (ls, git diff).
+    const tagged = block.querySelector<HTMLElement>("[data-block-scroll-host]");
+    if (tagged !== null) return tagged;
+    // Fit-to-pane: every other formatter's scroller has to be
+    // findable too. Walk the block for the most-likely
+    // scrollable elements — CodeMirror's `.cm-scroller`, the
+    // markdown view, the hex view — and pick the first one
+    // whose content actually overflows. Capped query list
+    // keeps the lookup O(handful), not full-DOM.
+    const candidates = block.querySelectorAll<HTMLElement>(
+      ".cm-scroller, [data-testid='markdown-rendered'], [data-testid='hex-view']",
+    );
+    for (const el of Array.from(candidates)) {
+      if (el.scrollHeight > el.clientHeight + 1) return el;
+    }
+    return null;
   };
 
   const scrollFrame = (host: HTMLElement | null): ScrollFrame | null => {
@@ -281,6 +306,55 @@ function TerminalPaneInner({
 
   const performAction = (action: BlockKeyAction): void => {
     const currentId = selectedIdRef.current;
+    // Fit-to-pane: the visible UI hides every other row, so
+    // "advance to next block" makes no sense. Instead, redirect
+    // every navigation action to *scroll within* the maximised
+    // block's content. Lens-cycle / yank / open-modal /
+    // un-maximise still pass through to their normal handlers.
+    if (maximizedBlockIdRef.current !== null) {
+      const id = currentId;
+      const host = id !== null ? getScrollHost(id) : null;
+      switch (action.kind) {
+        case "exit":
+          // Esc un-maximises first; a second Esc exits block-focus.
+          setMaximizedBlockId(null);
+          return;
+        case "advance-down":
+          if (host !== null) host.scrollTop += LINE_PX;
+          return;
+        case "advance-up":
+          if (host !== null) host.scrollTop -= LINE_PX;
+          return;
+        case "page-down":
+          if (host !== null) host.scrollTop += host.clientHeight * PAGE_FRACTION;
+          return;
+        case "page-up":
+          if (host !== null) host.scrollTop -= host.clientHeight * PAGE_FRACTION;
+          return;
+        case "first-block":
+        case "scroll-top":
+          if (host !== null) host.scrollTop = 0;
+          return;
+        case "last-block":
+        case "scroll-bottom":
+          if (host !== null) host.scrollTop = host.scrollHeight;
+          return;
+        case "focus":
+          // Block-list clicks are meaningless while one block
+          // owns the pane.
+          return;
+        case "noop":
+          return;
+        case "toggle-fmt-raw":
+        case "toggle-maximize":
+        case "yank":
+        case "collapse":
+        case "expand":
+        case "open-modal":
+          // Fall through to the normal handlers below.
+          break;
+      }
+    }
     switch (action.kind) {
       case "noop":
         return;
@@ -384,6 +458,11 @@ function TerminalPaneInner({
           }
         }
         return;
+      case "toggle-maximize":
+        if (currentId !== null) {
+          setMaximizedBlockId((prev) => (prev === currentId ? null : currentId));
+        }
+        return;
       case "toggle-fmt-raw":
       case "yank":
       case "collapse":
@@ -456,8 +535,11 @@ function TerminalPaneInner({
         selectBlock(latest);
         return;
       }
-      // Other keys only intercept while in block-focus mode.
-      if (!blockFocusRef.current) return;
+      // Other keys only intercept while in block-focus mode OR
+      // while a block is maximised — the maximised block owns
+      // the pane visually, so every visible key should route
+      // there too (j/k/etc. scroll its content).
+      if (!blockFocusRef.current && maximizedBlockIdRef.current === null) return;
       const { action, state: nextChord } = dispatchBlockKey(
         {
           key: e.key,
@@ -866,6 +948,16 @@ function TerminalPaneInner({
             liveOutputs={blockState.liveOutputs}
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
+            maximizedBlockId={maximizedBlockId}
+            onToggleMaximize={(id) => {
+              setMaximizedBlockId((prev) => (prev === id ? null : id));
+              // Clicking ⛶ also selects the block — the key
+              // handler scrolls *that* block's content, so the
+              // selection has to point at it. (Pressing `f`
+              // from block-focus mode already had the selection
+              // right; this catches the click path.)
+              dispatch({ type: "select_block", id });
+            }}
             onSelectBlock={(id) => {
               // Click highlights the row but does NOT engage
               // block-focus mode — engaging it would silently
@@ -929,7 +1021,7 @@ function TerminalPaneInner({
           </div>
         )}
       </div>
-      {!altScreen && exitedCode === null && (
+      {!altScreen && exitedCode === null && maximizedBlockId === null && (
         <PromptStrip
           ref={promptStripRef}
           cwd={cwd}

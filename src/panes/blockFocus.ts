@@ -103,6 +103,7 @@ export type BlockKeyAction =
   | { kind: "last-block" }
   | { kind: "open-modal" }
   | { kind: "toggle-fmt-raw" }
+  | { kind: "toggle-maximize" }
   | { kind: "yank" }
   | { kind: "collapse" }
   | { kind: "expand" };
@@ -171,7 +172,10 @@ export function dispatchBlockKey(
   if (key === "l" || key === "ArrowRight") {
     return { action: { kind: "expand" }, state: INITIAL_KEY_STATE };
   }
-  if (key === " " || key === "f") {
+  // Space is the conventional pager step; vim's `Ctrl+F` also
+  // pages down. `f` used to alias here but it's a much better
+  // mnemonic for "fit to pane" — see `toggle-maximize` below.
+  if (key === " ") {
     return { action: { kind: "page-down" }, state: INITIAL_KEY_STATE };
   }
   if (key === "b") {
@@ -182,6 +186,12 @@ export function dispatchBlockKey(
   }
   if (key === "Tab") {
     return { action: { kind: "toggle-fmt-raw" }, state: INITIAL_KEY_STATE };
+  }
+  if (key === "f") {
+    // Fit-to-pane: maximise the focused block within its pane.
+    // Press `f` again or Esc to restore normal view. Navigation
+    // is suspended while the block is maximised.
+    return { action: { kind: "toggle-maximize" }, state: INITIAL_KEY_STATE };
   }
   if (key === "y") {
     return { action: { kind: "yank" }, state: INITIAL_KEY_STATE };

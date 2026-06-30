@@ -53,8 +53,21 @@ describe("cat formatter", () => {
     expect(result).not.toBeNull();
   });
 
-  it("returns PASS for empty stdout", () => {
-    const result = catFormatter.render({ ...BASE_CTX, stdout: "" });
+  it("returns PASS for empty stdout AND no filename in argv", () => {
+    // M4.5 slice 1: cat can disk-read by filename even when
+    // stdout is empty (the user might have piped to a file
+    // that wrote a `%`-only block, say). So PASS now requires
+    // *both* halves missing: no captured text *and* no
+    // filename to fall back on.
+    const result = catFormatter.render({ ...BASE_CTX, argv: ["cat"], stdout: "" });
     expect(isPass(result)).toBe(true);
+  });
+
+  it("renders even with empty stdout when a filename is available", () => {
+    // The disk-read effect inside the rendered component can
+    // still pull content. The render returns a node; the
+    // surface decides whether to mount it.
+    const result = catFormatter.render({ ...BASE_CTX, stdout: "" });
+    expect(isPass(result)).toBe(false);
   });
 });
