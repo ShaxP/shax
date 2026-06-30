@@ -178,6 +178,12 @@ function TerminalPaneInner({
   // navigation keys defined in `panes/blockFocus.ts`. Entry is via
   // Ctrl+J (handled below); exit via Esc or another Ctrl+J.
   const [blockFocus, setBlockFocus] = useState(false);
+  // Block "fit-to-pane": when set, the named block fills the
+  // whole pane (covering the prompt strip and every other
+  // block). Navigation is suspended in this state — the only
+  // valid keys are the lens cycle (Tab), yank (y), and a
+  // second `f` (or Esc) to restore normal view.
+  const [maximizedBlockId, setMaximizedBlockId] = useState<BlockId | null>(null);
   // Refs let the keydown handler read the latest state without
   // re-registering on every block-list change.
   const blocksRef = useRef<UiBlock[]>([]);
@@ -185,10 +191,12 @@ function TerminalPaneInner({
   const blockFocusRef = useRef(false);
   const activeRef = useRef(active);
   const chordStateRef = useRef<KeyState>(INITIAL_KEY_STATE);
+  const maximizedBlockIdRef = useRef<BlockId | null>(null);
   blocksRef.current = blockState.blocks;
   selectedIdRef.current = blockState.selectedBlockId;
   blockFocusRef.current = blockFocus;
   activeRef.current = active;
+  maximizedBlockIdRef.current = maximizedBlockId;
 
   // Every block is navigable, including interactive ones (vim,
   // less, htop). The user still needs to reach them to yank the
@@ -281,6 +289,32 @@ function TerminalPaneInner({
 
   const performAction = (action: BlockKeyAction): void => {
     const currentId = selectedIdRef.current;
+    // While a block is maximised the user can toggle lenses,
+    // yank, and unmaximise — but not navigate to other blocks.
+    // The visible UI hides the rest of the pane anyway, so we
+    // drop navigation actions silently rather than swap focus
+    // to a hidden row.
+    if (maximizedBlockIdRef.current !== null) {
+      switch (action.kind) {
+        case "toggle-fmt-raw":
+        case "toggle-maximize":
+        case "yank":
+        case "collapse":
+        case "expand":
+        case "open-modal":
+        case "exit":
+          // Esc / `exit` un-maximises first; the next press exits
+          // block-focus. `toggle-maximize` (a second `f`) also
+          // un-maximises.
+          break;
+        default:
+          return;
+      }
+      if (action.kind === "exit") {
+        setMaximizedBlockId(null);
+        return;
+      }
+    }
     switch (action.kind) {
       case "noop":
         return;
@@ -382,6 +416,11 @@ function TerminalPaneInner({
               }),
             );
           }
+        }
+        return;
+      case "toggle-maximize":
+        if (currentId !== null) {
+          setMaximizedBlockId((prev) => (prev === currentId ? null : currentId));
         }
         return;
       case "toggle-fmt-raw":
@@ -866,6 +905,8 @@ function TerminalPaneInner({
             liveOutputs={blockState.liveOutputs}
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
+            maximizedBlockId={maximizedBlockId}
+            onToggleMaximize={(id) => setMaximizedBlockId((prev) => (prev === id ? null : id))}
             onSelectBlock={(id) => {
               // Click highlights the row but does NOT engage
               // block-focus mode — engaging it would silently
@@ -929,7 +970,7 @@ function TerminalPaneInner({
           </div>
         )}
       </div>
-      {!altScreen && exitedCode === null && (
+      {!altScreen && exitedCode === null && maximizedBlockId === null && (
         <PromptStrip
           ref={promptStripRef}
           cwd={cwd}

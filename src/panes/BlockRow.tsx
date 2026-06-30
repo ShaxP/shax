@@ -139,6 +139,17 @@ export interface BlockRowProps {
   selected?: boolean;
   /** Called when the user clicks anywhere on the row. */
   onSelect?: () => void;
+  /** True when this row is currently fit-to-pane. The row's
+   *  container becomes absolute-positioned, filling the pane,
+   *  covering the prompt strip. The action toolbar swaps the
+   *  maximise icon for a minimise icon. */
+  isMaximized?: boolean;
+  /** Hide the row from the layout entirely. Used by BlockList
+   *  to suppress every block other than the maximised one. */
+  hidden?: boolean;
+  /** Click handler for the per-row maximise icon. Toggles
+   *  `isMaximized` in the parent's state. */
+  onToggleMaximize?: () => void;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -312,6 +323,9 @@ function BlockRowInner({
   now = Date.now,
   selected = false,
   onSelect,
+  isMaximized = false,
+  hidden = false,
+  onToggleMaximize,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -531,6 +545,29 @@ function BlockRowInner({
     void navigator.clipboard.writeText(block.command).catch(() => undefined);
   };
 
+  // While maximised, override the row's normal flow with an
+  // absolute overlay that fills the pane. Also lift the
+  // formatter's max-height so e.g. the CodeMirror viewer and
+  // the markdown renderer expand to fill the available space.
+  const containerStyle: CSSProperties = hidden
+    ? { display: "none" }
+    : isMaximized
+      ? {
+          ...ROW,
+          position: "absolute",
+          inset: 0,
+          zIndex: 30,
+          background: "var(--bg)",
+          margin: 0,
+          maxWidth: "none",
+          display: "flex",
+          flexDirection: "column",
+          // The block fills the pane; the formatter inside expands
+          // to whatever's left after the header / meta strip.
+          ["--formatter-max-height" as never]: "100%",
+        }
+      : ROW;
+
   return (
     <div
       className="block-row"
@@ -538,7 +575,8 @@ function BlockRowInner({
       data-block-id={block.id}
       data-status={status}
       data-selected={selected ? "true" : "false"}
-      style={ROW}
+      data-maximized={isMaximized ? "true" : "false"}
+      style={containerStyle}
       onClick={onSelect}
     >
       {/*
@@ -756,6 +794,23 @@ function BlockRowInner({
             >
               {"\uF06E"}
             </span>
+            {onToggleMaximize !== undefined && (
+              <span
+                title={
+                  isMaximized
+                    ? "Restore (f)"
+                    : "Fit to pane (f) — fills the pane and covers the prompt"
+                }
+                data-testid="block-maximize"
+                style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleMaximize();
+                }}
+              >
+                {isMaximized ? "✕" : "⛶"}
+              </span>
+            )}
             <span
               title="rerun"
               style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}

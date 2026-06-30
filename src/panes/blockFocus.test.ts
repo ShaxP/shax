@@ -104,15 +104,23 @@ describe("dispatchBlockKey", () => {
     });
   });
 
-  it("Space / f → page-down, b → page-up", () => {
+  it("Space → page-down, b → page-up", () => {
+    // `f` used to alias here but moved to `toggle-maximize` in
+    // the M4.5 fit-to-pane slice; the vim convention is `Ctrl+F`
+    // for page-down and `Space` is the most universal alternative,
+    // so dropping the `f` alias is a small loss for a stronger
+    // mnemonic.
     expect(dispatchBlockKey(ev({ key: " " }), INITIAL_KEY_STATE).action).toEqual({
-      kind: "page-down",
-    });
-    expect(dispatchBlockKey(ev({ key: "f" }), INITIAL_KEY_STATE).action).toEqual({
       kind: "page-down",
     });
     expect(dispatchBlockKey(ev({ key: "b" }), INITIAL_KEY_STATE).action).toEqual({
       kind: "page-up",
+    });
+  });
+
+  it("f → toggle-maximize (fit-to-pane)", () => {
+    expect(dispatchBlockKey(ev({ key: "f" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "toggle-maximize",
     });
   });
 
