@@ -277,30 +277,35 @@ export function BlockViewerModal({
     return detectLanguage(text, argv);
   }, [text, argv]);
 
-  // Formatter lookup for the modal. We build a context with the
-  // text the modal would otherwise render — disk-read override
-  // when available, captured-then-ANSI-stripped fallback. For
-  // formatters that re-probe (ls, git status, git diff) the
-  // stdout field is irrelevant; for the trio plus future
-  // additions, the cwd from `block.cwd` is the key piece. The
-  // `pty` may be `null` (block from search, source pane gone);
-  // formatters that need a pane id should tolerate that
-  // (`paneId: ""` is the convention).
+  // Formatter lookup for the modal. ctx.stdout must be the
+  // *captured* command output, not the disk-read override —
+  // formatters that consume stdout (`wc`, future `json`, etc.)
+  // expect to parse what the command produced. The disk-read
+  // override exists for the *fallback* content-type renderers
+  // (MarkdownView / Viewer) when the user opens a cat-like
+  // block, and feeding it as ctx.stdout would mis-render any
+  // formatter that doesn't re-probe (the wc sample, for
+  // example, would parse README.md content as if it were wc's
+  // tabular output). Formatters that re-probe (ls, git status,
+  // git diff) don't read ctx.stdout, so they're unaffected.
+  // The `pty` may be `null` (block opened from search after
+  // the source pane closed); `paneId: ""` is the convention.
   const formatterCtx: FormatterContext | null = useMemo(() => {
     if (bytes === null) return null;
     const rawText = TEXT_DECODER.decode(bytes);
+    const capturedText = stripAnsi(rawText);
     return {
       argv,
       cwd: block.cwd,
       env: {},
       exitCode: block.exit_code,
       durationMs: block.duration_ms,
-      stdout: text ?? "",
+      stdout: capturedText,
       stderr: "",
       rawAnsi: rawText,
       paneId: pty ?? "",
     };
-  }, [bytes, argv, block.cwd, block.exit_code, block.duration_ms, text, pty]);
+  }, [bytes, argv, block.cwd, block.exit_code, block.duration_ms, pty]);
 
   const modalFormatter = useMemo(() => {
     if (formatterCtx === null) return null;
