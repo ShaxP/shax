@@ -579,6 +579,12 @@ function BlockRowInner({
     ? { display: "none" }
     : isMaximized
       ? {
+          // Keep ROW's flex *row* direction — the edge bar +
+          // content area sit side by side, same as inline mode.
+          // What changes is only the row becoming a fill-the-
+          // pane overlay; the CONTENT child takes the remaining
+          // horizontal space and (because of align-items:
+          // stretch) the full pane height.
           ...ROW,
           position: "absolute",
           inset: 0,
@@ -586,14 +592,11 @@ function BlockRowInner({
           background: "var(--bg)",
           margin: 0,
           maxWidth: "none",
-          display: "flex",
-          flexDirection: "column",
-          // The block fills the pane. `--formatter-flex: 1 1 0`
-          // flips the cat formatter's host from a fixed-height
-          // box to a flex item that grows to fill whatever's
-          // left after the row's command + meta strip — without
-          // overflowing the row's bottom edge as `height: 100%`
-          // did (height of a flex column ignores siblings).
+          // `--formatter-flex: 1 1 0` flips the cat formatter's
+          // host from a fixed-height box (the inline default)
+          // to a flex item that grows to fill the formatter-
+          // output wrapper — which itself becomes flex:1 inside
+          // CONTENT's column below.
           ["--formatter-flex" as never]: "1 1 0",
           ["--formatter-max-height" as never]: "100%",
         }
@@ -912,10 +915,32 @@ function BlockRowInner({
             interactive session
           </div>
         )}
-        {open && showFormatted && <div data-testid="block-formatter-output">{formatterOutput}</div>}
+        {open && showFormatted && (
+          <div
+            data-testid="block-formatter-output"
+            style={
+              isMaximized
+                ? {
+                    // Fill the remaining height in CONTENT's flex
+                    // column — that's pane height minus the
+                    // command header and meta strip. Display flex
+                    // column lets the cat formatter's HOST grow
+                    // into us via `--formatter-flex: 1 1 0`.
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                  }
+                : undefined
+            }
+          >
+            {formatterOutput}
+          </div>
+        )}
         {open && !showFormatted && (
           <pre
             data-testid="block-output"
+            data-block-scroll-host="raw"
             style={{
               margin: "4px 0 0 0",
               whiteSpace: "pre-wrap",
@@ -928,6 +953,16 @@ function BlockRowInner({
               // glyphs (eza icons, devicons, powerline arrows, …) render
               // the same as they do in the rest of the UI.
               fontFamily: "inherit",
+              ...(isMaximized
+                ? {
+                    // RAW mode in fit-to-pane: fill the remaining
+                    // height and scroll internally instead of
+                    // overflowing the pane.
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: "auto",
+                  }
+                : undefined),
             }}
           >
             {outputText ?? "…"}
