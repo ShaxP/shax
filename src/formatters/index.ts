@@ -33,10 +33,17 @@ register(gitStatusFormatter);
 register(gitDiffFormatter);
 register(jsonFormatter);
 // `wc` is the first sandboxed-shape formatter — runs in a Web
-// Worker via the slice-4.6b1 scaffolding even though it ships
-// bundled with the app. Disk-loaded community formatters land
-// in 4.6b2 and flow through the same factory.
+// Worker via the slice-4.6b1 scaffolding. Bundled with the app
+// so the sandbox pipeline is exercised even without any
+// user-installed add-ons.
 register(wcSandboxFormatter);
+
+// Disk-loaded community formatters from
+// `~/.config/shax/formatters/` are wired in at App mount, not
+// here at import time — so unit tests that touch the formatter
+// system don't need to mock the `listCommunityFormatters` IPC
+// surface. See `App.tsx`.
+export { loadCommunityFormatters } from "./sandbox/loader";
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";

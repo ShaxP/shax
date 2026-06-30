@@ -297,6 +297,120 @@ fn is_executable_perm(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// One community formatter discovered on disk. The frontend
+/// parses the `manifest_json` and `source_js`, validates them,
+/// then registers via `createSandboxedFormatter`.
+#[derive(Debug, serde::Serialize)]
+pub struct CommunityFormatterPayload {
+    pub name: String,
+    pub manifest_json: String,
+    pub source_js: String,
+}
+
+/// Where on disk community formatters live. Each immediate
+/// subdirectory of `~/.config/shax/formatters/` is a single
+/// formatter; the subdirectory's name is the formatter's id.
+fn community_formatters_root() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::PathBuf::from(home).join(".config/shax/formatters"))
+}
+
+/// Maximum size of a single community-formatter source file
+/// (bytes). A formatter that exceeds this is rejected — guards
+/// against pathologically large source slipping in via a typo
+/// or a packaging accident.
+const MAX_FORMATTER_SOURCE_BYTES: u64 = 256 * 1024; // 256 KiB
+
+/// Read every community formatter from `~/.config/shax/formatters/`.
+///
+/// One subdirectory per formatter. Each must contain
+/// `manifest.json` + `formatter.js`. The frontend handles
+/// validation + worker spawning; the backend only does the
+/// filesystem walk + a size sanity cap.
+///
+/// Missing directory → empty list (not an error). Bad permissions
+/// or per-formatter parse failures are skipped with a warn so a
+/// single malformed add-on doesn't break the whole load.
+#[tauri::command]
+pub async fn list_community_formatters() -> Result<Vec<CommunityFormatterPayload>, String> {
+    let root = match community_formatters_root() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let mut dir = match tokio::fs::read_dir(&root).await {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{e}")),
+    };
+    let mut out: Vec<CommunityFormatterPayload> = Vec::new();
+    while let Some(entry) = dir.next_entry().await.map_err(|e| format!("{e}"))? {
+        let entry_path = entry.path();
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("list_community_formatters: stat failed for {entry_path:?}: {e}");
+                continue;
+            }
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let name = match entry.file_name().to_str() {
+            Some(s) => s.to_string(),
+            None => {
+                tracing::warn!(
+                    "list_community_formatters: skipping non-utf8 dir name {entry_path:?}"
+                );
+                continue;
+            }
+        };
+        // Hidden dirs are ignored — keeps `.git` / `.DS_Store`
+        // and similar from poisoning the load.
+        if name.starts_with('.') {
+            continue;
+        }
+        let manifest_path = entry_path.join("manifest.json");
+        let source_path = entry_path.join("formatter.js");
+        let manifest_json = match tokio::fs::read_to_string(&manifest_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "list_community_formatters: {name} missing/unreadable manifest.json: {e}"
+                );
+                continue;
+            }
+        };
+        let source_meta = match tokio::fs::metadata(&source_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    "list_community_formatters: {name} missing/unreadable formatter.js: {e}"
+                );
+                continue;
+            }
+        };
+        if source_meta.len() > MAX_FORMATTER_SOURCE_BYTES {
+            tracing::warn!(
+                "list_community_formatters: {name} formatter.js exceeds {MAX_FORMATTER_SOURCE_BYTES} bytes, skipping"
+            );
+            continue;
+        }
+        let source_js = match tokio::fs::read_to_string(&source_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("list_community_formatters: {name} read failed: {e}");
+                continue;
+            }
+        };
+        out.push(CommunityFormatterPayload {
+            name,
+            manifest_json,
+            source_js,
+        });
+    }
+    Ok(out)
+}
+
 /// Run `git status --porcelain=v2 --branch -z` in `cwd` and return
 /// stdout. Why this and not "let the user pass arbitrary git
 /// args": narrowing the API keeps the backend from becoming a
