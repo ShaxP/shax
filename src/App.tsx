@@ -49,6 +49,7 @@ import {
   splitLeaf,
 } from "./panes/layout";
 import { appStateLoad, appStateSave } from "./lib/ipc";
+import { loadCommunityFormatters } from "./formatters";
 
 interface PaneMeta {
   cwd: string | null;
@@ -509,6 +510,15 @@ export default function App(): React.ReactElement {
       if (restored === null) return;
       dispatch({ type: "hydrate", state: restored });
     });
+  }, []);
+
+  // Discover and register disk-loaded community formatters from
+  // `~/.config/shax/formatters/`. Done on mount (not as a
+  // module-side-effect import) so tests that touch the formatter
+  // subsystem don't have to mock the `listCommunityFormatters`
+  // IPC surface — only App tests do, and they already mock IPC.
+  useEffect(() => {
+    void loadCommunityFormatters();
   }, []);
 
   // Persist the tab/layout snapshot on change, debounced so a divider drag

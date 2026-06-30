@@ -19,7 +19,6 @@ import { gitDiffFormatter } from "./gitDiff";
 import { gitStatusFormatter } from "./gitStatus";
 import { jsonFormatter } from "./json";
 import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
-import { loadCommunityFormatters } from "./sandbox/loader";
 import { wcSandboxFormatter } from "./sandbox/samples/wc";
 
 // Side-effect registration on first import. Idempotent: `register`
@@ -40,13 +39,11 @@ register(jsonFormatter);
 register(wcSandboxFormatter);
 
 // Disk-loaded community formatters from
-// `~/.config/shax/formatters/`. Fired off without `await` so
-// the formatter registry is available immediately for the
-// built-ins; disk-loaded add-ons register themselves as their
-// scans complete. Built-ins are registered first → they win
-// registration-order ties → a malicious add-on cannot shadow
-// `git diff`, `ls`, etc.
-void loadCommunityFormatters();
+// `~/.config/shax/formatters/` are wired in at App mount, not
+// here at import time — so unit tests that touch the formatter
+// system don't need to mock the `listCommunityFormatters` IPC
+// surface. See `App.tsx`.
+export { loadCommunityFormatters } from "./sandbox/loader";
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";
