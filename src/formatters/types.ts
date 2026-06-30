@@ -107,6 +107,14 @@ export interface Formatter {
    *  ImageView specialisations. The inline-block FMT pill still
    *  uses the formatter regardless of this flag. */
   readonly useInModal?: boolean;
+  /** Trust model. `built-in` formatters ship with Shax and run
+   *  on the main thread; `community` formatters run sandboxed
+   *  in a Web Worker with no DOM / network / Tauri access. The
+   *  UI surfaces this so users can tell at a glance which
+   *  trust model produced a given block's view. Defaults to
+   *  `built-in` when omitted — any formatter registered
+   *  without explicitly opting into the sandbox is trusted. */
+  readonly source?: "built-in" | "community";
   readonly render: (ctx: FormatterContext) => FormatterResult;
 }
 

@@ -19,6 +19,7 @@ import { gitDiffFormatter } from "./gitDiff";
 import { gitStatusFormatter } from "./gitStatus";
 import { jsonFormatter } from "./json";
 import { exaFormatter, ezaFormatter, lsFormatter } from "./ls";
+import { wcSandboxFormatter } from "./sandbox/samples/wc";
 
 // Side-effect registration on first import. Idempotent: `register`
 // no-ops on duplicate `name`. JSON wins on priority over `cat` so
@@ -31,6 +32,11 @@ register(exaFormatter);
 register(gitStatusFormatter);
 register(gitDiffFormatter);
 register(jsonFormatter);
+// `wc` is the first sandboxed-shape formatter — runs in a Web
+// Worker via the slice-4.6b1 scaffolding even though it ships
+// bundled with the app. Disk-loaded community formatters land
+// in 4.6b2 and flow through the same factory.
+register(wcSandboxFormatter);
 
 export { findFormatter, invokeFormatter, isPass, PASS } from "./registry";
 export type { Formatter, FormatterContext, FormatterResult, Matcher, Pass } from "./types";

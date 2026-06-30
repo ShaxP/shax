@@ -129,24 +129,36 @@ function extractLeadingJson(text: string): string | null {
 }
 
 /** Full probe: try to parse `text` as JSON and return the parsed
- *  value. Two routes, in order:
+ *  value. Three routes, in order:
  *
- *    1. JSON Lines — when there are ≥2 non-blank lines that
+ *    1. Strict single-parse — `JSON.parse` of the trimmed text.
+ *       Catches the common clean cases: `{...}`, `[...]`, and
+ *       bare `42` / `"hi"` / `true` / `null`. By going first
+ *       this also ensures a clean bare primitive isn't misread
+ *       as a JSON-Lines stream of one.
+ *    2. JSON Lines — when there are ≥2 non-blank lines that
  *       *all* parse standalone (`jq '.[]'`'s streaming output).
- *       Wrapped into a synthetic array. Has to run first so a
- *       multi-line stream of primitives like `1\n2\n3` isn't
- *       short-circuited by route 2 returning just `1`.
- *    2. Leading JSON value — extract the balanced prefix
- *       (`extractLeadingJson`) and `JSON.parse` it. Tolerates
- *       trailing noise (zsh `%` artifact, stray prompt bytes),
- *       which most PTY-captured output carries.
+ *       Wrapped into a synthetic array.
+ *    3. Leading JSON value, but **only when trailing content
+ *       looks like shell noise** — pure whitespace, or starts
+ *       with `%` (zsh's missing-newline indicator that leaks
+ *       past ANSI strip). Without the trailing-content check
+ *       this route would over-claim outputs like
+ *       `wc README.md`'s `42 README.md` as the bare number 42.
  *
  *  Returns `null` on parse failure / empty / not-JSON-shaped. */
 export function probeJson(text: string): JsonProbe | null {
   const trimmed = text.trim();
   if (trimmed === "") return null;
   if (!looksLikeJson(trimmed)) return null;
-  // 1. JSON Lines. Each non-blank line must parse standalone;
+  // 1. Strict single-parse on the trimmed text.
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    return { value };
+  } catch {
+    // fall through
+  }
+  // 2. JSON Lines. Each non-blank line must parse standalone;
   //    one failure forces the fall-through.
   const lines = trimmed
     .split("\n")
@@ -160,14 +172,19 @@ export function probeJson(text: string): JsonProbe | null {
       // fall through to leading-value extract
     }
   }
-  // 2. Leading-value extract + parse (tolerates trailing noise).
+  // 3. Leading-value extract + parse, gated on the post-value
+  //    trailing being shell noise (whitespace or `%`).
   const extracted = extractLeadingJson(trimmed);
   if (extracted !== null) {
-    try {
-      const value: unknown = JSON.parse(extracted);
-      return { value };
-    } catch {
-      return null;
+    const rest = trimmed.slice(extracted.length).trim();
+    const isShellNoise = rest.length === 0 || rest.startsWith("%");
+    if (isShellNoise) {
+      try {
+        const value: unknown = JSON.parse(extracted);
+        return { value };
+      } catch {
+        // fall through
+      }
     }
   }
   return null;

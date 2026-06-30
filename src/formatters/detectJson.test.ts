@@ -81,13 +81,13 @@ describe("probeJson", () => {
     expect(probeJson("   ")).toBeNull();
   });
 
-  it("returns the leading value when JSON Lines fails partway and there's a valid head", () => {
-    // `1\n2\nnot json\n4` can't form a clean JSON Lines stream
-    // (line 3 isn't JSON), so we fall through to the leading-
-    // value extract, which sees `1` followed by trailing noise.
-    // Returning the head is the same behaviour that rescues
-    // `{"a":"b"}\r\n%...` from PTY-captured jq output.
-    expect(probeJson("1\n2\nnot json\n4")?.value).toBe(1);
+  it("returns null when JSON Lines fails partway on non-shell-noise content", () => {
+    // `1\n2\nnot json\n4` isn't a clean JSON Lines stream and
+    // its trailing content (after the leading `1`) isn't
+    // recognisable shell noise (no `%` indicator) — so the
+    // leading-extract route also declines, preventing
+    // mis-classification of mixed text.
+    expect(probeJson("1\n2\nnot json\n4")).toBeNull();
   });
 
   it("handles trailing whitespace + newlines", () => {
@@ -123,6 +123,25 @@ describe("probeJson", () => {
 
   it("doesn't get confused by escaped quotes inside a string", () => {
     expect(probeJson('{"x":"\\"hi\\""}')?.value).toEqual({ x: '"hi"' });
+  });
+
+  it("rejects bare-primitive followed by non-noise content", () => {
+    // `wc README.md` output — leading number followed by more
+    // numbers + filename. The leading-extract path must not
+    // claim this as the bare number `6` (which would steal the
+    // match away from the sandboxed `wc` formatter).
+    expect(probeJson("       6      18     105 README.md\n")).toBeNull();
+    // `wc -l` form too.
+    expect(probeJson("       6 README.md\n")).toBeNull();
+    // Two numbers separated by space — also not JSON.
+    expect(probeJson("42 17\n")).toBeNull();
+  });
+
+  it("still tolerates trailing zsh noise after a bare primitive", () => {
+    // The original motivation for extractLeadingJson — these
+    // must still match.
+    expect(probeJson("42\n%   \r")?.value).toBe(42);
+    expect(probeJson("null\n%\r")?.value).toBeNull();
   });
 });
 
