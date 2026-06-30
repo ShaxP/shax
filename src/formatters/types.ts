@@ -115,7 +115,14 @@ export interface Formatter {
    *  `built-in` when omitted — any formatter registered
    *  without explicitly opting into the sandbox is trusted. */
   readonly source?: "built-in" | "community";
-  readonly render: (ctx: FormatterContext) => FormatterResult;
+  /** The lens the surface (BlockRow / Modal) wants rendered.
+   *  Content-aware formatters (cat, future ones) read this to
+   *  pick between "rendered" (FMT) and "source" (SRC) views;
+   *  formatters that don't care can ignore it. `undefined`
+   *  means "rendered" / default — the FMT pill is the only
+   *  visible option. RAW is handled at the surface, not in
+   *  the formatter, so this never sees "raw". */
+  readonly render: (ctx: FormatterContext, lens?: "rendered" | "source") => FormatterResult;
 }
 
 /**

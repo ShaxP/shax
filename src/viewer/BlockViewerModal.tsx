@@ -23,6 +23,7 @@ import {
   type PtyId,
 } from "../lib/ipc";
 import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
+import { hasDistinctSource } from "./ContentView";
 import { shellTokenize } from "../lib/shellTokenize";
 import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
@@ -343,20 +344,25 @@ export function BlockViewerModal({
     return f;
   }, [formatterCtx]);
 
-  // FMT/RAW toggle local to the modal. Defaults to FMT when a
-  // formatter applies. Hidden entirely when no formatter matches
-  // — non-formatter blocks keep today's look exactly.
-  const [modalMode, setModalMode] = useState<"fmt" | "raw">("fmt");
+  // FMT/SRC/RAW toggle local to the modal. Defaults to FMT
+  // when a formatter applies. Hidden entirely when no formatter
+  // matches — non-formatter blocks keep today's look exactly.
+  // SRC button only appears when the content type has a
+  // distinct source view (markdown / image / svg).
+  const [modalMode, setModalMode] = useState<"fmt" | "src" | "raw">("fmt");
   // When opening a new block, snap back to FMT — the previous
   // toggle state is meaningless across blocks.
   useEffect(() => {
     setModalMode("fmt");
   }, [block.id]);
 
+  const modalSrcAvailable = modalFormatter !== null && hasDistinctSource(contentType);
+
   const formatterOutput = useMemo(() => {
     if (modalFormatter === null || formatterCtx === null) return null;
-    if (modalMode !== "fmt") return null;
-    const result = invokeFormatter(modalFormatter, formatterCtx);
+    if (modalMode === "raw") return null;
+    const lens = modalMode === "src" ? "source" : "rendered";
+    const result = invokeFormatter(modalFormatter, formatterCtx, lens);
     return isPass(result) ? null : result;
   }, [modalFormatter, formatterCtx, modalMode]);
 
@@ -437,6 +443,18 @@ export function BlockViewerModal({
                 >
                   FMT
                 </button>
+                {modalSrcAvailable && (
+                  <button
+                    type="button"
+                    data-testid="block-viewer-src-pill"
+                    style={modalMode === "src" ? TOGGLE_ON : TOGGLE_OFF}
+                    data-active={modalMode === "src" ? "true" : "false"}
+                    title="View source (markdown source, image hex, …)"
+                    onClick={() => setModalMode("src")}
+                  >
+                    SRC
+                  </button>
+                )}
                 <button
                   type="button"
                   data-testid="block-viewer-raw-pill"

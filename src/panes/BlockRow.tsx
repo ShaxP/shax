@@ -35,6 +35,8 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
 import { shellTokenize } from "../lib/shellTokenize";
 import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
+import { hasDistinctSource } from "../viewer/ContentView";
+import { detectContentType } from "../viewer/detectContentType";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
 import "./BlockRow.css";
@@ -318,11 +320,13 @@ function BlockRowInner({
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [fetchedOutput, setFetchedOutput] = useState<string | null>(null);
   const [fetched, setFetched] = useState<boolean>(false);
-  // FMT/RAW user toggle. `null` = follow the natural default
-  // (FMT when a formatter applies, RAW otherwise). Once the user
-  // explicitly picks a side, we honour it for the lifetime of
-  // the row.
-  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | null>(null);
+  // FMT/SRC/RAW user toggle. `null` = follow the natural
+  // default (FMT when a formatter applies, RAW otherwise).
+  // Once the user explicitly picks a side, we honour it for
+  // the lifetime of the row. SRC is only ever set when the
+  // block's content type has a distinct source view; the
+  // surface hides the SRC button otherwise.
+  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | "src" | null>(null);
 
   const status = statusFor(block);
   const isRunning = status === "running";
@@ -372,18 +376,26 @@ function BlockRowInner({
     () => (formatterCtx === null ? null : findFormatter(formatterCtx)),
     [formatterCtx],
   );
+  // Per spec §07: a SRC button is only meaningful when the
+  // block's content type has a *distinct* source view (markdown
+  // rendered vs. markdown source; image vs. hex). For plain
+  // source / `ls` / `git diff` etc., FMT already IS the source
+  // view so SRC would just duplicate it.
+  const contentType = useMemo(() => detectContentType({ argv }), [argv]);
+  const srcAvailable = formatter !== null && hasDistinctSource(contentType);
   // The "natural" mode: FMT when a formatter applies, else RAW.
-  // Per spec §02 the highest-tier render is the default; the user
-  // toggle can flip it.
-  const effectiveMode: "raw" | "fmt" = formatMode ?? (formatter !== null ? "fmt" : "raw");
-  // Render the formatter output once when we're in FMT mode + a
-  // formatter is registered. The invoke wrapper turns any throw
-  // into PASS, which we then treat identically to "no formatter"
-  // and fall back to RAW.
+  // Per spec §02 the highest-tier render is the default; the
+  // user toggle can flip it.
+  const effectiveMode: "raw" | "fmt" | "src" = formatMode ?? (formatter !== null ? "fmt" : "raw");
+  // Render the formatter output when we're in FMT or SRC mode +
+  // a formatter is registered. The invoke wrapper turns any
+  // throw into PASS, which we then treat identically to "no
+  // formatter" and fall back to RAW.
   const formatterOutput = useMemo(() => {
-    if (effectiveMode !== "fmt") return null;
+    if (effectiveMode === "raw") return null;
     if (formatter === null || formatterCtx === null) return null;
-    const result = invokeFormatter(formatter, formatterCtx);
+    const lens = effectiveMode === "src" ? "source" : "rendered";
+    const result = invokeFormatter(formatter, formatterCtx, lens);
     return isPass(result) ? null : result;
   }, [effectiveMode, formatter, formatterCtx]);
   // The RAW fallback chain: if the user picked FMT but the
@@ -671,6 +683,21 @@ function BlockRowInner({
                 >
                   FMT
                 </button>
+                {srcAvailable && (
+                  <button
+                    type="button"
+                    data-testid="block-src-pill"
+                    style={effectiveMode === "src" ? FMT_PILL_ON : FMT_PILL_OFF}
+                    data-active={effectiveMode === "src" ? "true" : "false"}
+                    title="View source (markdown source, image hex, …)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFormatMode("src");
+                    }}
+                  >
+                    SRC
+                  </button>
+                )}
                 <button
                   type="button"
                   data-testid="block-raw-pill"
