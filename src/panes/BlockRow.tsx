@@ -280,8 +280,8 @@ const FMT_PILL_OFF: CSSProperties = {
 const COMMUNITY_PILL: CSSProperties = {
   ...FMT_PILL_BASE,
   background: "transparent",
-  color: "var(--amber)",
-  border: "1px solid color-mix(in srgb, var(--amber) 40%, transparent)",
+  color: "var(--fg-faint)",
+  border: "1px solid var(--border)",
   padding: "1px 6px",
   fontWeight: 500,
   textTransform: "lowercase",
@@ -688,9 +688,9 @@ function BlockRowInner({
                 <span
                   data-testid="block-community-pill"
                   style={COMMUNITY_PILL}
-                  title="Community formatter — runs sandboxed in a Web Worker with no access to your filesystem, network, or Shax internals. Can only display text / tables it returns through the schema."
+                  title="Add-on — runs in an isolated sandbox with no access to your files, network, or app internals."
                 >
-                  community
+                  add-on
                 </span>
               )}
             </>

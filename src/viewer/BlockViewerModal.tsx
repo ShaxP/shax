@@ -139,8 +139,8 @@ const COMMUNITY_PILL: CSSProperties = {
   marginLeft: 8,
   padding: "1px 6px",
   borderRadius: 4,
-  border: "1px solid color-mix(in srgb, var(--amber) 40%, transparent)",
-  color: "var(--amber)",
+  border: "1px solid var(--border)",
+  color: "var(--fg-faint)",
   fontFamily: "var(--font-ui)",
   fontSize: 10,
   letterSpacing: "0.05em",
@@ -451,9 +451,9 @@ export function BlockViewerModal({
                 <span
                   data-testid="block-viewer-community-pill"
                   style={COMMUNITY_PILL}
-                  title="Community formatter — runs sandboxed in a Web Worker with no access to your filesystem, network, or Shax internals. Can only display text / tables it returns through the schema."
+                  title="Add-on — runs in an isolated sandbox with no access to your files, network, or app internals."
                 >
-                  community
+                  add-on
                 </span>
               )}
             </>
