@@ -158,10 +158,15 @@ const FORMATTER_HOST: CSSProperties = {
   minHeight: 0,
   overflow: "auto",
   padding: "10px 14px",
-  // Custom property for the formatter's `max-height` fallback.
-  // CSSProperties type doesn't enumerate custom properties; the
-  // DOM accepts them fine.
+  // Custom properties for the formatter's layout. `--formatter-flex`
+  // flips the cat formatter's host from a fixed-height box to a
+  // flex item that grows to fill the modal panel (mirrors the
+  // fit-to-pane maximised row in BlockRow). CSSProperties type
+  // doesn't enumerate custom properties; the DOM accepts them fine.
+  ["--formatter-flex" as never]: "1 1 0",
   ["--formatter-max-height" as never]: "100%",
+  display: "flex",
+  flexDirection: "column",
 };
 
 /**

@@ -36,10 +36,21 @@ const TEXT_DECODER = new TextDecoder("utf-8", { fatal: false });
 const HOST: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  // Inline blocks get a fixed cap. The modal overrides
-  // `--formatter-max-height` (to e.g. `100%`) so the viewer
-  // fills the panel.
+  // Two layout modes via `--formatter-flex`:
+  //   - default (`none` ⇒ flex: 0 0 auto): inline block — the
+  //     host gets a fixed height (`--formatter-max-height`,
+  //     default 320px) so the row has a natural size inside
+  //     the BlockList.
+  //   - fit-to-pane / modal (`1 1 0`): the host grows to fill
+  //     the remaining space in its flex parent — exactly the
+  //     pane-height-minus-meta-and-command in the maximised
+  //     row, or the modal panel below the header. `height` is
+  //     ignored once flex-basis is `0`, so the fixed-height
+  //     value can stay as the default fallback for normal
+  //     mode.
+  flex: "var(--formatter-flex, none)",
   height: "var(--formatter-max-height, 320px)",
+  minHeight: 0,
   margin: "8px 0 0 0",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius-sm)",

@@ -588,8 +588,13 @@ function BlockRowInner({
           maxWidth: "none",
           display: "flex",
           flexDirection: "column",
-          // The block fills the pane; the formatter inside expands
-          // to whatever's left after the header / meta strip.
+          // The block fills the pane. `--formatter-flex: 1 1 0`
+          // flips the cat formatter's host from a fixed-height
+          // box to a flex item that grows to fill whatever's
+          // left after the row's command + meta strip — without
+          // overflowing the row's bottom edge as `height: 100%`
+          // did (height of a flex column ignores siblings).
+          ["--formatter-flex" as never]: "1 1 0",
           ["--formatter-max-height" as never]: "100%",
         }
       : ROW;

@@ -535,8 +535,11 @@ function TerminalPaneInner({
         selectBlock(latest);
         return;
       }
-      // Other keys only intercept while in block-focus mode.
-      if (!blockFocusRef.current) return;
+      // Other keys only intercept while in block-focus mode OR
+      // while a block is maximised — the maximised block owns
+      // the pane visually, so every visible key should route
+      // there too (j/k/etc. scroll its content).
+      if (!blockFocusRef.current && maximizedBlockIdRef.current === null) return;
       const { action, state: nextChord } = dispatchBlockKey(
         {
           key: e.key,
@@ -946,7 +949,15 @@ function TerminalPaneInner({
             selectedBlockId={blockState.selectedBlockId}
             inspectedBlock={blockState.inspectedBlock}
             maximizedBlockId={maximizedBlockId}
-            onToggleMaximize={(id) => setMaximizedBlockId((prev) => (prev === id ? null : id))}
+            onToggleMaximize={(id) => {
+              setMaximizedBlockId((prev) => (prev === id ? null : id));
+              // Clicking ⛶ also selects the block — the key
+              // handler scrolls *that* block's content, so the
+              // selection has to point at it. (Pressing `f`
+              // from block-focus mode already had the selection
+              // right; this catches the click path.)
+              dispatch({ type: "select_block", id });
+            }}
             onSelectBlock={(id) => {
               // Click highlights the row but does NOT engage
               // block-focus mode — engaging it would silently
