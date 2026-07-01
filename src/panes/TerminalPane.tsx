@@ -351,6 +351,7 @@ function TerminalPaneInner({
         case "noop":
           return;
         case "toggle-fmt-raw":
+        case "toggle-side-by-side":
         case "toggle-maximize":
         case "yank":
         case "collapse":
@@ -469,6 +470,7 @@ function TerminalPaneInner({
         }
         return;
       case "toggle-fmt-raw":
+      case "toggle-side-by-side":
       case "yank":
       case "collapse":
         if (currentId !== null) {

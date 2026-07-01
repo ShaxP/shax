@@ -23,7 +23,7 @@
  * formatter already does to fetch the diff.
  */
 
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { DiffFile, DiffHunk, DiffLine, ParsedDiff } from "../../formatters/parseGitDiff";
 
 /** Above this many files, everything starts collapsed —
@@ -193,10 +193,31 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
     initialCollapseState(parsed.files),
   );
   const stats = useMemo(() => computeStats(parsed.files), [parsed.files]);
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  // Listen for the `toggle-side-by-side` block action (fired by
+  // block-focus mode's `s` key). Filter by the enclosing block's
+  // `data-block-id` so pressing `s` while one block is focused
+  // doesn't toggle *every* git-diff widget on the page.
+  useEffect(() => {
+    const el = hostRef.current;
+    if (el === null) return;
+    const blockEl = el.closest<HTMLElement>("[data-block-id]");
+    const blockId = blockEl?.getAttribute("data-block-id") ?? null;
+    if (blockId === null) return;
+    const onAction = (e: Event): void => {
+      const detail = (e as CustomEvent<{ blockId: string; kind: string }>).detail;
+      if (detail?.blockId !== blockId) return;
+      if (detail.kind !== "toggle-side-by-side") return;
+      setView((v) => (v === "inline" ? "side-by-side" : "inline"));
+    };
+    window.addEventListener("shax:block-action", onAction);
+    return () => window.removeEventListener("shax:block-action", onAction);
+  }, []);
 
   if (parsed.files.length === 0) {
     return (
-      <div data-testid="widget-git-diff" style={HOST}>
+      <div data-testid="widget-git-diff" ref={hostRef} style={HOST}>
         <div style={SUMMARY_BAR}>
           <span style={{ flex: 1 }}>No changes.</span>
         </div>
@@ -205,7 +226,7 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
   }
 
   return (
-    <div data-testid="widget-git-diff" style={HOST}>
+    <div data-testid="widget-git-diff" ref={hostRef} style={HOST}>
       <div style={SUMMARY_BAR}>
         <span style={{ flex: 1 }} data-testid="widget-git-diff-summary">
           {parsed.files.length} file{parsed.files.length === 1 ? "" : "s"} changed
@@ -225,6 +246,7 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
             type="button"
             data-testid="widget-git-diff-view-inline"
             style={view === "inline" ? TOGGLE_BUTTON_ACTIVE : TOGGLE_BUTTON}
+            title="Inline diff (Ctrl+J → s)"
             onClick={() => setView("inline")}
           >
             INLINE
@@ -233,6 +255,7 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
             type="button"
             data-testid="widget-git-diff-view-side-by-side"
             style={view === "side-by-side" ? TOGGLE_BUTTON_ACTIVE : TOGGLE_BUTTON}
+            title="Side-by-side diff (Ctrl+J → s)"
             onClick={() => setView("side-by-side")}
           >
             SIDE-BY-SIDE

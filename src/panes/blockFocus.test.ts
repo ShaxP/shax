@@ -124,6 +124,12 @@ describe("dispatchBlockKey", () => {
     });
   });
 
+  it("s → toggle-side-by-side (widget-scoped)", () => {
+    expect(dispatchBlockKey(ev({ key: "s" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "toggle-side-by-side",
+    });
+  });
+
   it("first key g is a no-op that arms the chord", () => {
     const r = dispatchBlockKey(ev({ key: "g" }), INITIAL_KEY_STATE);
     expect(r.action).toEqual({ kind: "noop" });

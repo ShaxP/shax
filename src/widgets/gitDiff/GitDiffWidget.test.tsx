@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, expect, it } from "vitest";
 import { GitDiffWidget } from "./GitDiffWidget";
@@ -117,6 +117,68 @@ describe("GitDiffWidget", () => {
     expect(screen.getAllByTestId("widget-git-diff-line")).toHaveLength(2);
     fireEvent.click(screen.getByTestId("widget-git-diff-view-side-by-side"));
     expect(screen.queryAllByTestId("widget-git-diff-line-pair")).toHaveLength(1);
+  });
+
+  it("toggles side-by-side when the block-action event fires for its enclosing block", () => {
+    const parsed = mkDiff([
+      mkFile({
+        path: "a.ts",
+        hunks: [
+          {
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+              mkLine({ kind: "del", text: "x", newLine: null }),
+              mkLine({ kind: "add", text: "X", oldLine: null }),
+            ],
+          },
+        ],
+      }),
+    ]);
+    // Wrap the widget in a mock BlockRow with data-block-id so
+    // the event filter has a target to match.
+    render(
+      <div data-block-id="block-42">
+        <GitDiffWidget parsed={parsed} />
+      </div>,
+    );
+    expect(screen.queryByTestId("widget-git-diff-line-pair")).toBeNull();
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-action", {
+          detail: { pty: "pty-1", blockId: "block-42", kind: "toggle-side-by-side" },
+        }),
+      );
+    });
+    expect(screen.queryAllByTestId("widget-git-diff-line-pair")).toHaveLength(1);
+    // Second dispatch toggles back.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-action", {
+          detail: { pty: "pty-1", blockId: "block-42", kind: "toggle-side-by-side" },
+        }),
+      );
+    });
+    expect(screen.queryByTestId("widget-git-diff-line-pair")).toBeNull();
+  });
+
+  it("ignores side-by-side events targeted at a different block", () => {
+    const parsed = mkDiff([mkFile({ path: "a.ts", hunks: [] })]);
+    render(
+      <div data-block-id="block-42">
+        <GitDiffWidget parsed={parsed} />
+      </div>,
+    );
+    window.dispatchEvent(
+      new CustomEvent("shax:block-action", {
+        detail: { pty: "pty-1", blockId: "block-99", kind: "toggle-side-by-side" },
+      }),
+    );
+    // Still inline (default).
+    expect(screen.getByTestId("widget-git-diff-view-inline").getAttribute("data-testid")).toBe(
+      "widget-git-diff-view-inline",
+    );
   });
 
   it("shows a note on binary files instead of hunks", () => {
