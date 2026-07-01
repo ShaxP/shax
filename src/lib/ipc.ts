@@ -473,3 +473,47 @@ export async function listCommunityFormatters(): Promise<CommunityFormatterPaylo
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CommunityFormatterPayload[]>("list_community_formatters");
 }
+
+/**
+ * File statistics returned by `statFile`. Shape mirrors the
+ * backend `FileStat` (`serde` snake_case).
+ *
+ * - `created_unix_ms` is `null` on filesystems that don't
+ *   track birth time (older Linux ext4 without statx, some
+ *   network mounts).
+ * - `is_executable` is `null` on Windows (no equivalent bit;
+ *   the caller can fall back to extension heuristics).
+ * - `symlink_target` is populated only when `is_symlink` is
+ *   true and the target can be read.
+ */
+export interface FileStat {
+  name: string;
+  path: string;
+  size_bytes: number;
+  is_directory: boolean;
+  is_symlink: boolean;
+  is_executable: boolean | null;
+  created_unix_ms: number | null;
+  modified_unix_ms: number;
+  symlink_target: string | null;
+}
+
+/**
+ * Fetch filesystem metadata for a single path. Used by the
+ * INFO lens on cat / bat blocks — a universal `FILE` section
+ * on every text or binary file with a path in argv.
+ *
+ * Returns `null` outside a Tauri context (jsdom tests / browser
+ * preview) or if the path can't be stat'd — the caller
+ * gracefully falls back to hiding the FILE section.
+ */
+export async function statFile(path: string): Promise<FileStat | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return await invoke<FileStat>("stat_file", { path });
+  } catch (err) {
+    console.warn(`statFile(${path}) failed: ${String(err)}`);
+    return null;
+  }
+}

@@ -223,8 +223,9 @@ export function BlockViewerModal({
   // propagation) and the browser's default Tab focus-shift.
   // Refs keep the latest state visible to the closure without
   // re-registering on every render.
-  const modalModeRef = useRef<"fmt" | "src" | "raw">("fmt");
+  const modalModeRef = useRef<"fmt" | "src" | "info" | "raw">("fmt");
   const modalSrcAvailableRef = useRef(false);
+  const modalInfoAvailableRef = useRef(false);
   const hasFormatterRef = useRef(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -246,9 +247,12 @@ export function BlockViewerModal({
         if (!hasFormatterRef.current) return;
         e.preventDefault();
         e.stopPropagation();
-        const cycle: ("fmt" | "src" | "raw")[] = modalSrcAvailableRef.current
-          ? ["fmt", "src", "raw"]
-          : ["fmt", "raw"];
+        const cycle: ("fmt" | "src" | "info" | "raw")[] = [
+          "fmt",
+          ...(modalSrcAvailableRef.current ? (["src"] as const) : []),
+          ...(modalInfoAvailableRef.current ? (["info"] as const) : []),
+          "raw",
+        ];
         const idx = cycle.indexOf(modalModeRef.current);
         const next = cycle[(idx + 1) % cycle.length] ?? "fmt";
         setModalMode(next);
@@ -373,12 +377,12 @@ export function BlockViewerModal({
     return f;
   }, [formatterCtx]);
 
-  // FMT/SRC/RAW toggle local to the modal. Defaults to FMT
-  // when a formatter applies. Hidden entirely when no formatter
-  // matches — non-formatter blocks keep today's look exactly.
-  // SRC button only appears when the content type has a
-  // distinct source view (markdown / image / svg).
-  const [modalMode, setModalMode] = useState<"fmt" | "src" | "raw">("fmt");
+  // FMT/SRC/INFO/RAW toggle local to the modal. Defaults to
+  // FMT when a formatter applies. Hidden entirely when no
+  // formatter matches — non-formatter blocks keep today's look
+  // exactly. SRC / INFO buttons only appear when the content
+  // type / formatter opts in.
+  const [modalMode, setModalMode] = useState<"fmt" | "src" | "info" | "raw">("fmt");
   modalModeRef.current = modalMode;
   // When opening a new block, snap back to FMT — the previous
   // toggle state is meaningless across blocks.
@@ -387,16 +391,22 @@ export function BlockViewerModal({
   }, [block.id]);
 
   const modalSrcAvailable = modalFormatter !== null && hasDistinctSource(contentType);
+  const modalInfoAvailable =
+    modalFormatter !== null &&
+    modalFormatter.supportsInfo !== undefined &&
+    formatterCtx !== null &&
+    modalFormatter.supportsInfo(formatterCtx);
   // Mirror toggle state into refs so the capture-phase key
   // handler picks the latest values without re-registering on
   // every render.
   modalSrcAvailableRef.current = modalSrcAvailable;
+  modalInfoAvailableRef.current = modalInfoAvailable;
   hasFormatterRef.current = modalFormatter !== null;
 
   const formatterOutput = useMemo(() => {
     if (modalFormatter === null || formatterCtx === null) return null;
     if (modalMode === "raw") return null;
-    const lens = modalMode === "src" ? "source" : "rendered";
+    const lens = modalMode === "src" ? "source" : modalMode === "info" ? "info" : "rendered";
     const result = invokeFormatter(modalFormatter, formatterCtx, lens);
     return isPass(result) ? null : result;
   }, [modalFormatter, formatterCtx, modalMode]);
@@ -488,6 +498,18 @@ export function BlockViewerModal({
                     onClick={() => setModalMode("src")}
                   >
                     SRC
+                  </button>
+                )}
+                {modalInfoAvailable && (
+                  <button
+                    type="button"
+                    data-testid="block-viewer-info-pill"
+                    style={modalMode === "info" ? TOGGLE_ON : TOGGLE_OFF}
+                    data-active={modalMode === "info" ? "true" : "false"}
+                    title="File info (name, size, dates, format-specific stats)"
+                    onClick={() => setModalMode("info")}
+                  >
+                    INFO
                   </button>
                 )}
                 <button

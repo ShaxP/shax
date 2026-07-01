@@ -151,6 +151,104 @@ pub async fn read_file_bytes(path: String) -> Result<String, String> {
     Ok(B64.encode(&bytes))
 }
 
+/// File statistics for the INFO lens (M4.5 slice 2). Populated
+/// from `std::fs::Metadata` — everything is best-effort:
+///  - `created_unix_ms` is `None` on filesystems that don't track
+///    birth time (older Linux ext4 without statx, some
+///    network mounts).
+///  - `is_executable` is `Some(bool)` on unix and `None` on
+///    Windows (there's no equivalent bit — the frontend can
+///    fall back to extension heuristics if it wants to).
+#[derive(Debug, serde::Serialize)]
+pub struct FileStat {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+    pub is_executable: Option<bool>,
+    /// Milliseconds since epoch (UTC). `None` if unknown.
+    pub created_unix_ms: Option<i64>,
+    /// Milliseconds since epoch (UTC).
+    pub modified_unix_ms: i64,
+    /// Symlink target as a path string, or `None` when the entry
+    /// isn't a symlink or the target can't be read.
+    pub symlink_target: Option<String>,
+}
+
+fn system_time_to_unix_ms(time: std::time::SystemTime) -> Option<i64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
+/// Return filesystem metadata for a single path. Used by the
+/// INFO lens on cat/bat blocks — a universal `FILE` section on
+/// every text or binary file with a path in argv.
+///
+/// The path is *not* sandboxed against a project root — the
+/// user asked to see stats for whatever they cat'd, and cat
+/// itself has no such constraint.
+#[tauri::command]
+pub async fn stat_file(path: String) -> Result<FileStat, String> {
+    // `symlink_metadata` returns info about the link itself; we
+    // then re-stat via `metadata` if it *isn't* a link so we get
+    // the usual file stats. If it *is* a link, we return the
+    // link's own stats plus the resolved target string, which is
+    // what the user cares about seeing in the UI.
+    let symlink_meta = tokio::fs::symlink_metadata(&path)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    let is_symlink = symlink_meta.file_type().is_symlink();
+    let symlink_target = if is_symlink {
+        match tokio::fs::read_link(&path).await {
+            Ok(p) => p.to_str().map(|s| s.to_string()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    // For non-symlinks the symlink_meta is the file's own
+    // metadata already; there's no need for a second syscall.
+    let meta = symlink_meta;
+    let modified_unix_ms = meta
+        .modified()
+        .ok()
+        .and_then(system_time_to_unix_ms)
+        .ok_or_else(|| "modified time not available".to_string())?;
+    let created_unix_ms = meta.created().ok().and_then(system_time_to_unix_ms);
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&path)
+        .to_string();
+    Ok(FileStat {
+        name,
+        path: path.clone(),
+        size_bytes: meta.len(),
+        is_directory: meta.is_dir(),
+        is_symlink,
+        is_executable: executable_perm(&meta),
+        created_unix_ms,
+        modified_unix_ms,
+        symlink_target,
+    })
+}
+
+#[cfg(unix)]
+fn executable_perm(meta: &std::fs::Metadata) -> Option<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    if meta.is_dir() {
+        return None;
+    }
+    Some(meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_perm(_meta: &std::fs::Metadata) -> Option<bool> {
+    None
+}
+
 /// Authoritative metadata for one entry inside a directory.
 /// Returned by `read_dir_entries`; used by the `ls` formatter to
 /// render rows without parsing what the shell happened to print.
