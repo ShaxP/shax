@@ -616,8 +616,19 @@ function TerminalPaneInner({
       if (blockEl !== null) {
         const id = blockEl.getAttribute("data-block-id");
         if (id !== null) {
-          selectBlock(id);
-          if (!blockFocusRef.current) setBlockFocus(true);
+          // Defer state updates to a macrotask so React doesn't
+          // re-render between mousedown and click. Without this,
+          // clicking a tool button on an unselected block
+          // (copy / ⛶ maximise / open-in-viewer) would select
+          // the block but the button's onClick would sometimes
+          // fail to run: the mid-flight re-render swaps the
+          // element's props before the native click dispatches.
+          // Selection can wait one tick — the visual delay is
+          // ~4ms, imperceptible.
+          setTimeout(() => {
+            selectBlock(id);
+            if (!blockFocusRef.current) setBlockFocus(true);
+          }, 0);
         }
         return;
       }
@@ -626,12 +637,14 @@ function TerminalPaneInner({
       // user just clicked can consume keys normally, and clear
       // the row highlight — a lingering blue ring on a row the
       // user has explicitly stepped away from reads as noise,
-      // not context.
-      if (blockFocusRef.current) {
-        setBlockFocus(false);
-        chordStateRef.current = INITIAL_KEY_STATE;
-      }
-      selectBlock(null);
+      // not context. Same macrotask defer for symmetry.
+      setTimeout(() => {
+        if (blockFocusRef.current) {
+          setBlockFocus(false);
+          chordStateRef.current = INITIAL_KEY_STATE;
+        }
+        selectBlock(null);
+      }, 0);
     };
     root.addEventListener("mousedown", onMouseDown, true);
     return () => root.removeEventListener("mousedown", onMouseDown, true);
