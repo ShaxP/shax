@@ -51,6 +51,34 @@
   --amber: oklch(0.8 0.11 80);
   --cyan: oklch(0.78 0.09 205);
 
+  /*
+   * ANSI SGR palette (M4.5 slice 3).
+   *
+   * The 8 standard + 8 bright colours used by the ANSI parser
+   * for palette-indexed spans (SGR 30-37, 90-97, 40-47, 100-107,
+   * and 256-color indices 0-15). Hexes are the widely-adopted
+   * xterm defaults, biased for legible contrast on our dark
+   * `--bg`. Users can retheme later by overriding just these
+   * variables — the parser and renderer don't hard-code any of
+   * them.
+   */
+  --ansi-black: #3b3d47;
+  --ansi-red: #e05561;
+  --ansi-green: #7ec174;
+  --ansi-yellow: #d4bf70;
+  --ansi-blue: #7ea6d8;
+  --ansi-magenta: #c58af0;
+  --ansi-cyan: #6cb8c1;
+  --ansi-white: #c0c4cf;
+  --ansi-bright-black: #565b66;
+  --ansi-bright-red: #ff6b7a;
+  --ansi-bright-green: #93d68a;
+  --ansi-bright-yellow: #e8d78a;
+  --ansi-bright-blue: #96beea;
+  --ansi-bright-magenta: #d5a5f5;
+  --ansi-bright-cyan: #8ecfd8;
+  --ansi-bright-white: #f0f2f8;
+
   /* Geometry */
   --radius: 6px;
   --radius-sm: 4px;
