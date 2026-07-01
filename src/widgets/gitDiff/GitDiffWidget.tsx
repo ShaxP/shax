@@ -195,8 +195,22 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
   const stats = useMemo(() => computeStats(parsed.files), [parsed.files]);
   const hostRef = useRef<HTMLDivElement>(null);
 
-  // Listen for the `toggle-side-by-side` block action (fired by
-  // block-focus mode's `s` key). Filter by the enclosing block's
+  // Focused-file index for keyboard navigation. `null` when
+  // no file is focused yet (initial state); j/k / arrows
+  // move it. The focused file gets a subtle accent border
+  // and scrolls into view on change.
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  // Refs mirror state so the widget-nav event listener (below)
+  // can consult the latest values without re-registering on
+  // every render — parity with the block-focus pattern in
+  // TerminalPane.
+  const focusedIndexRef = useRef<number | null>(null);
+  focusedIndexRef.current = focusedIndex;
+  const filesRef = useRef(parsed.files);
+  filesRef.current = parsed.files;
+
+  // Listen for block-focus actions (`toggle-side-by-side` from
+  // the `s` key) — filter by the enclosing block's
   // `data-block-id` so pressing `s` while one block is focused
   // doesn't toggle *every* git-diff widget on the page.
   useEffect(() => {
@@ -214,6 +228,79 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
     window.addEventListener("shax:block-action", onAction);
     return () => window.removeEventListener("shax:block-action", onAction);
   }, []);
+
+  // Listen for widget-nav events (j / k / h / l and their
+  // arrow-key aliases). Consume when we can move focus /
+  // collapse / expand; leave `claimed` false at the file-list
+  // boundaries so nav gracefully falls through to normal
+  // block-focus (advance to the next block, etc.).
+  useEffect(() => {
+    const el = hostRef.current;
+    if (el === null) return;
+    const blockEl = el.closest<HTMLElement>("[data-block-id]");
+    const blockId = blockEl?.getAttribute("data-block-id") ?? null;
+    if (blockId === null) return;
+    const onNav = (e: Event): void => {
+      const detail = (
+        e as CustomEvent<{
+          blockId: string;
+          direction: "up" | "down" | "left" | "right";
+          claimed: boolean;
+        }>
+      ).detail;
+      if (detail?.blockId !== blockId) return;
+      const files = filesRef.current;
+      if (files.length === 0) return;
+      const cur = focusedIndexRef.current;
+      switch (detail.direction) {
+        case "down": {
+          const next = cur === null ? 0 : cur + 1;
+          if (next < files.length) {
+            setFocusedIndex(next);
+            detail.claimed = true;
+          }
+          return;
+        }
+        case "up": {
+          if (cur === null || cur <= 0) return;
+          setFocusedIndex(cur - 1);
+          detail.claimed = true;
+          return;
+        }
+        case "left": {
+          if (cur === null) return;
+          const file = files[cur];
+          if (file === undefined) return;
+          setCollapsed((prev) => ({ ...prev, [fileKey(file)]: true }));
+          detail.claimed = true;
+          return;
+        }
+        case "right": {
+          if (cur === null) return;
+          const file = files[cur];
+          if (file === undefined) return;
+          setCollapsed((prev) => ({ ...prev, [fileKey(file)]: false }));
+          detail.claimed = true;
+          return;
+        }
+      }
+    };
+    window.addEventListener("shax:widget-nav", onNav);
+    return () => window.removeEventListener("shax:widget-nav", onNav);
+  }, []);
+
+  // Scroll the focused file's card into view as focus moves.
+  useEffect(() => {
+    if (focusedIndex === null) return;
+    const el = hostRef.current;
+    if (el === null) return;
+    const cards = el.querySelectorAll<HTMLElement>('[data-testid="widget-git-diff-file"]');
+    const card = cards[focusedIndex];
+    if (card === undefined) return;
+    if (typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [focusedIndex]);
 
   if (parsed.files.length === 0) {
     return (
@@ -278,18 +365,20 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
         </div>
       </div>
       <div style={SCROLLER} data-block-scroll-host="git-diff-widget">
-        {parsed.files.map((file) => (
+        {parsed.files.map((file, index) => (
           <FileCard
             key={fileKey(file)}
             file={file}
             view={view}
             collapsed={collapsed[fileKey(file)] === true}
-            onToggle={() =>
+            focused={focusedIndex === index}
+            onToggle={() => {
+              setFocusedIndex(index);
               setCollapsed((prev) => ({
                 ...prev,
                 [fileKey(file)]: !(prev[fileKey(file)] === true),
-              }))
-            }
+              }));
+            }}
           />
         ))}
       </div>
@@ -361,10 +450,11 @@ interface FileCardProps {
   file: DiffFile;
   view: ViewMode;
   collapsed: boolean;
+  focused: boolean;
   onToggle: () => void;
 }
 
-function FileCard({ file, view, collapsed, onToggle }: FileCardProps): React.ReactElement {
+function FileCard({ file, view, collapsed, focused, onToggle }: FileCardProps): React.ReactElement {
   const stats = useMemo(() => statsFor(file), [file]);
   const label = fileHeaderLabel(file);
   const opBadge = opBadgeText(file.op);
@@ -374,6 +464,8 @@ function FileCard({ file, view, collapsed, onToggle }: FileCardProps): React.Rea
       data-testid="widget-git-diff-file"
       data-op={file.op ?? "modified"}
       data-collapsed={collapsed}
+      data-focused={focused}
+      style={focused ? { boxShadow: "inset 3px 0 0 var(--accent)" } : undefined}
     >
       <div style={FILE_HEADER} onClick={onToggle} data-testid="widget-git-diff-file-header">
         <span

@@ -199,6 +199,88 @@ describe("GitDiffWidget", () => {
     );
   });
 
+  it("widget-nav down / up walks the file focus", () => {
+    const parsed = mkDiff([
+      mkFile({ path: "a.ts", hunks: [] }),
+      mkFile({ path: "b.ts", hunks: [] }),
+      mkFile({ path: "c.ts", hunks: [] }),
+    ]);
+    render(
+      <div data-block-id="block-42">
+        <GitDiffWidget parsed={parsed} />
+      </div>,
+    );
+    const send = (direction: "up" | "down" | "left" | "right") => {
+      const detail: { blockId: string; direction: typeof direction; claimed: boolean } = {
+        blockId: "block-42",
+        direction,
+        claimed: false,
+      };
+      act(() => {
+        window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+      });
+      return detail.claimed;
+    };
+    // Initial: no focus.
+    for (const f of screen.getAllByTestId("widget-git-diff-file"))
+      expect(f).toHaveAttribute("data-focused", "false");
+    // First down claims + moves to file 0.
+    expect(send("down")).toBe(true);
+    let files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[0]).toHaveAttribute("data-focused", "true");
+    expect(send("down")).toBe(true);
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[1]).toHaveAttribute("data-focused", "true");
+    expect(send("down")).toBe(true);
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[2]).toHaveAttribute("data-focused", "true");
+    // Past the last file — don't claim so the shell can advance to
+    // the next block.
+    expect(send("down")).toBe(false);
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[2]).toHaveAttribute("data-focused", "true");
+    // Up walks back.
+    expect(send("up")).toBe(true);
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[1]).toHaveAttribute("data-focused", "true");
+    expect(send("up")).toBe(true);
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[0]).toHaveAttribute("data-focused", "true");
+    // Up past the first — don't claim.
+    expect(send("up")).toBe(false);
+  });
+
+  it("widget-nav left / right collapses and expands the focused file", () => {
+    const parsed = mkDiff([mkFile({ path: "a.ts", hunks: [] })]);
+    render(
+      <div data-block-id="block-42">
+        <GitDiffWidget parsed={parsed} />
+      </div>,
+    );
+    const send = (direction: "up" | "down" | "left" | "right") => {
+      const detail: { blockId: string; direction: typeof direction; claimed: boolean } = {
+        blockId: "block-42",
+        direction,
+        claimed: false,
+      };
+      act(() => {
+        window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+      });
+      return detail.claimed;
+    };
+    // No focus yet → left / right don't claim.
+    expect(send("left")).toBe(false);
+    expect(send("right")).toBe(false);
+    // Give focus to file 0.
+    send("down");
+    // Left collapses.
+    expect(send("left")).toBe(true);
+    expect(screen.getByTestId("widget-git-diff-file")).toHaveAttribute("data-collapsed", "true");
+    // Right expands.
+    expect(send("right")).toBe(true);
+    expect(screen.getByTestId("widget-git-diff-file")).toHaveAttribute("data-collapsed", "false");
+  });
+
   it("shows a note on binary files instead of hunks", () => {
     const parsed = mkDiff([mkFile({ path: "logo.png", binary: true, hunks: [] })]);
     render(<GitDiffWidget parsed={parsed} />);

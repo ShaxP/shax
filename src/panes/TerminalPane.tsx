@@ -248,6 +248,23 @@ function TerminalPaneInner({
     };
   };
 
+  /** Dispatch a `shax:widget-nav` event for a directional
+   *  key press (`j`/`k`/`h`/`l` and their arrow-key aliases).
+   *  Widgets that own file / item navigation listen for these,
+   *  set `detail.claimed = true` when they moved focus, and
+   *  we return `true` so the caller skips its default action.
+   *  When no widget is present or the widget is at a boundary
+   *  it leaves `claimed` false and normal scroll / block
+   *  advance / block collapse-expand takes over. */
+  const dispatchWidgetNav = (
+    blockId: BlockId,
+    direction: "up" | "down" | "left" | "right",
+  ): boolean => {
+    const detail = { blockId, direction, claimed: false };
+    window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+    return detail.claimed;
+  };
+
   /** Drop the new block into a sensible scroll position when
    *  focus advances continuously: top-edge when going down,
    *  bottom-edge when going up. Mimics RSS / mail readers. */
@@ -388,6 +405,13 @@ function TerminalPaneInner({
       }
       case "advance-down": {
         if (currentId === null) return;
+        // Widgets in the current block get first refusal on
+        // j / ArrowDown: the git-diff widget moves its focused
+        // file down, claims the event, and we return. When
+        // the widget is at its last file (or absent) the
+        // event isn't claimed and we fall through to the
+        // usual scroll-then-advance path.
+        if (dispatchWidgetNav(currentId, "down")) return;
         const host = getScrollHost(currentId);
         const decision = smartScrollDown(scrollFrame(host), LINE_PX);
         if (decision.kind === "scroll-within" && host !== null) {
@@ -399,6 +423,7 @@ function TerminalPaneInner({
       }
       case "advance-up": {
         if (currentId === null) return;
+        if (dispatchWidgetNav(currentId, "up")) return;
         const host = getScrollHost(currentId);
         const decision = smartScrollUp(scrollFrame(host), LINE_PX);
         if (decision.kind === "scroll-within" && host !== null) {
@@ -472,7 +497,6 @@ function TerminalPaneInner({
       case "toggle-fmt-raw":
       case "toggle-side-by-side":
       case "yank":
-      case "collapse":
         if (currentId !== null) {
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {
@@ -481,8 +505,23 @@ function TerminalPaneInner({
           );
         }
         return;
-      case "expand":
+      case "collapse":
+        // h / ArrowLeft: widget owns file-collapse when
+        // it has a focused file; otherwise collapse the
+        // whole block.
         if (currentId !== null) {
+          if (dispatchWidgetNav(currentId, "left")) return;
+          window.dispatchEvent(
+            new CustomEvent("shax:block-action", {
+              detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
+            }),
+          );
+        }
+        return;
+      case "expand":
+        // l / ArrowRight: same but for expand.
+        if (currentId !== null) {
+          if (dispatchWidgetNav(currentId, "right")) return;
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {
               detail: { pty: ptyIdRef.current, blockId: currentId, kind: action.kind },
