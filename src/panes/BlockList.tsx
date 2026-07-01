@@ -123,10 +123,15 @@ export function BlockList({
     };
   }, []);
 
-  // Whenever the selection moves (search jump), scroll the selected row
-  // into view. `block: "center"` keeps the row near the middle so the
-  // border-with-rounded-corners highlight reads clearly even for blocks
-  // that would otherwise sit at the very top or bottom.
+  // Whenever the selection moves, make sure the selected row is
+  // *at least* visible. Search-jump lands on an out-of-view row
+  // and needs the scroll; click-selection lands on a row that's
+  // already visible (the user's cursor is on it) and must NOT
+  // scroll — a smooth scroll between mousedown and click shifts
+  // the DOM under the cursor and any tool-button click that
+  // follows lands on empty space instead of the button. `nearest`
+  // is the semantic we want: scroll only far enough to reveal
+  // the row, otherwise leave the viewport alone.
   useLayoutEffect(() => {
     if (selectedBlockId === null) return;
     const list = scrollRef.current;
@@ -134,7 +139,7 @@ export function BlockList({
     const row = list.querySelector<HTMLElement>(`[data-block-id="${selectedBlockId}"]`);
     if (row === null) return;
     if (typeof row.scrollIntoView === "function") {
-      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [selectedBlockId]);
 
