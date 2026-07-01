@@ -252,34 +252,48 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
       const files = filesRef.current;
       if (files.length === 0) return;
       const cur = focusedIndexRef.current;
+      // Move focus + update ref together so a second key press
+      // in the same event loop tick sees the latest index. React
+      // batches state updates from native listeners; without the
+      // eager ref update the second nav read the pre-first-press
+      // value and h/l always targeted file 0.
+      const moveFocus = (next: number): void => {
+        focusedIndexRef.current = next;
+        setFocusedIndex(next);
+      };
       switch (detail.direction) {
         case "down": {
           const next = cur === null ? 0 : cur + 1;
           if (next < files.length) {
-            setFocusedIndex(next);
+            moveFocus(next);
             detail.claimed = true;
           }
           return;
         }
         case "up": {
-          if (cur === null || cur <= 0) return;
-          setFocusedIndex(cur - 1);
+          // Give the first key press a landing site so the user
+          // doesn't have to press `j` before `k`; a `k` at file 0
+          // still no-ops (falls through to advance-to-prev-block).
+          if (cur === null) {
+            moveFocus(0);
+            detail.claimed = true;
+            return;
+          }
+          if (cur <= 0) return;
+          moveFocus(cur - 1);
           detail.claimed = true;
           return;
         }
-        case "left": {
-          if (cur === null) return;
-          const file = files[cur];
-          if (file === undefined) return;
-          setCollapsed((prev) => ({ ...prev, [fileKey(file)]: true }));
-          detail.claimed = true;
-          return;
-        }
+        case "left":
         case "right": {
-          if (cur === null) return;
-          const file = files[cur];
+          // First press auto-focuses file 0 so `h` / `l` don't
+          // silently no-op when nothing is focused yet.
+          const target = cur === null ? 0 : cur;
+          const file = files[target];
           if (file === undefined) return;
-          setCollapsed((prev) => ({ ...prev, [fileKey(file)]: false }));
+          if (cur === null) moveFocus(0);
+          const collapse = detail.direction === "left";
+          setCollapsed((prev) => ({ ...prev, [fileKey(file)]: collapse }));
           detail.claimed = true;
           return;
         }
@@ -465,9 +479,25 @@ function FileCard({ file, view, collapsed, focused, onToggle }: FileCardProps): 
       data-op={file.op ?? "modified"}
       data-collapsed={collapsed}
       data-focused={focused}
-      style={focused ? { boxShadow: "inset 3px 0 0 var(--accent)" } : undefined}
     >
-      <div style={FILE_HEADER} onClick={onToggle} data-testid="widget-git-diff-file-header">
+      <div
+        style={{
+          ...FILE_HEADER,
+          // Focus cue lives on the header itself so it stays
+          // visible even when the file is collapsed. Painted
+          // via inset box-shadow (no layout shift) plus a tint
+          // on the header background so the accent stripe reads
+          // clearly against the surface color.
+          ...(focused
+            ? {
+                boxShadow: "inset 3px 0 0 var(--accent)",
+                background: "color-mix(in srgb, var(--accent) 12%, var(--surface))",
+              }
+            : undefined),
+        }}
+        onClick={onToggle}
+        data-testid="widget-git-diff-file-header"
+      >
         <span
           style={{
             ...FILE_HEADER_CHEVRON,

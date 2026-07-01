@@ -250,8 +250,12 @@ describe("GitDiffWidget", () => {
     expect(send("up")).toBe(false);
   });
 
-  it("widget-nav left / right collapses and expands the focused file", () => {
-    const parsed = mkDiff([mkFile({ path: "a.ts", hunks: [] })]);
+  it("widget-nav left / right collapses / expands the *focused* file (not always file 0)", () => {
+    const parsed = mkDiff([
+      mkFile({ path: "a.ts", hunks: [] }),
+      mkFile({ path: "b.ts", hunks: [] }),
+      mkFile({ path: "c.ts", hunks: [] }),
+    ]);
     render(
       <div data-block-id="block-42">
         <GitDiffWidget parsed={parsed} />
@@ -268,17 +272,52 @@ describe("GitDiffWidget", () => {
       });
       return detail.claimed;
     };
-    // No focus yet → left / right don't claim.
-    expect(send("left")).toBe(false);
-    expect(send("right")).toBe(false);
-    // Give focus to file 0.
+    // Move focus to file 1 via two `down` presses (first
+    // auto-focuses 0, second moves to 1).
     send("down");
-    // Left collapses.
+    send("down");
+    let files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[1]).toHaveAttribute("data-focused", "true");
+    // `left` targets file 1 — NOT file 0. This was the bug
+    // before the ref-mirror fix: the widget's focused-index
+    // ref stayed stale and h/l always hit index 0.
     expect(send("left")).toBe(true);
-    expect(screen.getByTestId("widget-git-diff-file")).toHaveAttribute("data-collapsed", "true");
-    // Right expands.
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[0]).toHaveAttribute("data-collapsed", "false");
+    expect(files[1]).toHaveAttribute("data-collapsed", "true");
+    expect(files[2]).toHaveAttribute("data-collapsed", "false");
+    // `right` re-expands file 1.
     expect(send("right")).toBe(true);
-    expect(screen.getByTestId("widget-git-diff-file")).toHaveAttribute("data-collapsed", "false");
+    files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[1]).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it("widget-nav left / right auto-focuses file 0 when nothing is focused yet", () => {
+    const parsed = mkDiff([
+      mkFile({ path: "a.ts", hunks: [] }),
+      mkFile({ path: "b.ts", hunks: [] }),
+    ]);
+    render(
+      <div data-block-id="block-42">
+        <GitDiffWidget parsed={parsed} />
+      </div>,
+    );
+    const send = (direction: "up" | "down" | "left" | "right") => {
+      const detail: { blockId: string; direction: typeof direction; claimed: boolean } = {
+        blockId: "block-42",
+        direction,
+        claimed: false,
+      };
+      act(() => {
+        window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+      });
+      return detail.claimed;
+    };
+    // No focus yet → `left` still claims and collapses file 0.
+    expect(send("left")).toBe(true);
+    const files = screen.getAllByTestId("widget-git-diff-file");
+    expect(files[0]).toHaveAttribute("data-collapsed", "true");
+    expect(files[0]).toHaveAttribute("data-focused", "true");
   });
 
   it("shows a note on binary files instead of hunks", () => {
