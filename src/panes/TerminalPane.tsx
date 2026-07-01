@@ -623,11 +623,15 @@ function TerminalPaneInner({
       }
       // Click outside any block — prompt strip, meta chrome,
       // empty pane area. Exit block-focus so the surface the
-      // user just clicked can consume keys normally.
+      // user just clicked can consume keys normally, and clear
+      // the row highlight — a lingering blue ring on a row the
+      // user has explicitly stepped away from reads as noise,
+      // not context.
       if (blockFocusRef.current) {
         setBlockFocus(false);
         chordStateRef.current = INITIAL_KEY_STATE;
       }
+      selectBlock(null);
     };
     root.addEventListener("mousedown", onMouseDown, true);
     return () => root.removeEventListener("mousedown", onMouseDown, true);
