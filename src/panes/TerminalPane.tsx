@@ -342,9 +342,13 @@ function TerminalPaneInner({
           setMaximizedBlockId(null);
           return;
         case "advance-down":
+          // Give widgets first refusal so a fit-to-pane git-diff
+          // widget still walks its file list on j / ArrowDown.
+          if (id !== null && dispatchWidgetNav(id, "down")) return;
           if (host !== null) host.scrollTop += LINE_PX;
           return;
         case "advance-up":
+          if (id !== null && dispatchWidgetNav(id, "up")) return;
           if (host !== null) host.scrollTop -= LINE_PX;
           return;
         case "page-down":
