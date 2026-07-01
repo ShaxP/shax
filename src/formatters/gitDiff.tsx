@@ -15,6 +15,8 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { gitDiff } from "../lib/ipc";
+import { GitDiffWidget } from "../widgets/gitDiff/GitDiffWidget";
+import { isWidgetPromotable } from "../widgets/gitDiff/promotionGate";
 import {
   parseGitDiff,
   type DiffFile,
@@ -145,6 +147,15 @@ function GitDiffView({ ctx }: GitDiffViewProps): React.ReactElement {
         Probing git diff…
       </div>
     );
+  }
+  // Widget promotion (M5 slice 1). Bare `git diff`, `git diff
+  // HEAD`, `git diff --cached`, `git diff -- path/…` and other
+  // invocations that emit standard unified-diff output render
+  // as the interactive widget. Args that reshape the output
+  // (`--stat`, `--name-only`, …) fall through to the static
+  // formatter below.
+  if (isWidgetPromotable(args)) {
+    return <GitDiffWidget parsed={diff} />;
   }
   if (diff.files.length === 0) {
     return (
