@@ -104,6 +104,7 @@ export type BlockKeyAction =
   | { kind: "open-modal" }
   | { kind: "toggle-fmt-raw" }
   | { kind: "toggle-maximize" }
+  | { kind: "toggle-side-by-side" }
   | { kind: "yank" }
   | { kind: "collapse" }
   | { kind: "expand" };
@@ -192,6 +193,14 @@ export function dispatchBlockKey(
     // Press `f` again or Esc to restore normal view. Navigation
     // is suspended while the block is maximised.
     return { action: { kind: "toggle-maximize" }, state: INITIAL_KEY_STATE };
+  }
+  if (key === "s") {
+    // Widget-scoped: toggles side-by-side view on widgets that
+    // support it (git diff today). Widgets listen for the
+    // dispatched `shax:block-action` event and no-op if they
+    // don't care about the key. Non-widget blocks see no
+    // effect.
+    return { action: { kind: "toggle-side-by-side" }, state: INITIAL_KEY_STATE };
   }
   if (key === "y") {
     return { action: { kind: "yank" }, state: INITIAL_KEY_STATE };
