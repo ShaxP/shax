@@ -86,7 +86,7 @@ function matches(formatter: Formatter, ctx: FormatterContext): boolean {
 export function invokeFormatter(
   formatter: Formatter,
   ctx: FormatterContext,
-  lens?: "rendered" | "source",
+  lens?: "rendered" | "source" | "info",
 ): FormatterResult {
   try {
     return formatter.render(ctx, lens);

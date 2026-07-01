@@ -24,7 +24,9 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { readFileBytes, type BlockId } from "../lib/ipc";
+import { readFileBytes, statFile, type BlockId, type FileStat } from "../lib/ipc";
+import { buildMetadata } from "../metadata/buildMetadata";
+import { MetadataRenderer } from "../metadata/renderMetadata";
 import { ContentView, type ContentLens } from "../viewer/ContentView";
 import { detectContentType, firstFilenameArg } from "../viewer/detectContentType";
 import { detectLanguage } from "../viewer/detectLanguage";
@@ -76,10 +78,12 @@ function CatView({ ctx, lens }: CatViewProps): React.ReactElement {
 
   const [diskBytes, setDiskBytes] = useState<Uint8Array | null>(null);
   const [diskRead, setDiskRead] = useState(false);
+  const [fileStat, setFileStat] = useState<FileStat | null>(null);
 
   useEffect(() => {
     setDiskBytes(null);
     setDiskRead(false);
+    setFileStat(null);
     if (filename === null) {
       setDiskRead(true);
       return;
@@ -90,6 +94,9 @@ function CatView({ ctx, lens }: CatViewProps): React.ReactElement {
       return;
     }
     let cancelled = false;
+    // Two independent fetches: bytes for FMT / SRC, stats for
+    // INFO. Race them so lens switches don't wait on the wrong
+    // one.
     void readFileBytes(path).then(
       (bytes) => {
         if (cancelled) return;
@@ -103,6 +110,10 @@ function CatView({ ctx, lens }: CatViewProps): React.ReactElement {
         setDiskRead(true);
       },
     );
+    void statFile(path).then((stat) => {
+      if (cancelled) return;
+      setFileStat(stat);
+    });
     return () => {
       cancelled = true;
     };
@@ -136,17 +147,51 @@ function CatView({ ctx, lens }: CatViewProps): React.ReactElement {
   // immediately and let the disk-read override land when ready.
   void diskRead;
 
+  // INFO lens: universal FILE stats + format-specific parsers
+  // (PNG / JPEG / GIF) + TEXT for non-image content. Composed
+  // synchronously off whatever we currently have — bytes may
+  // still be captured stdout (mojibake for binaries), which is
+  // fine because the signature parsers only touch the first
+  // few bytes and gracefully return null when they don't
+  // match.
+  const metadataView = useMemo(() => {
+    if (lens !== "info") return null;
+    if (fileStat === null) return null;
+    return buildMetadata({ stat: fileStat, bytes, contentType, text, language });
+  }, [lens, fileStat, bytes, contentType, text, language]);
+
   return (
     <div data-testid="formatter-cat" style={HOST}>
-      <ContentView
-        contentType={contentType}
-        bytes={bytes}
-        text={text}
-        language={language}
-        mode={lens}
-        filenameHint={filename}
-        style={{ flex: 1 }}
-      />
+      {lens === "info" ? (
+        metadataView === null ? (
+          <div
+            data-testid="formatter-cat-info-loading"
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--fg-faint)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 12,
+            }}
+          >
+            Reading file stats…
+          </div>
+        ) : (
+          <MetadataRenderer sections={metadataView} style={{ flex: 1 }} />
+        )
+      ) : (
+        <ContentView
+          contentType={contentType}
+          bytes={bytes}
+          text={text}
+          language={language}
+          mode={lens}
+          filenameHint={filename}
+          style={{ flex: 1 }}
+        />
+      )}
     </div>
   );
 }
@@ -172,6 +217,14 @@ function render(ctx: FormatterContext, lens?: ContentLens): React.ReactNode | ty
   return <CatView ctx={ctx} lens={lens ?? "rendered"} />;
 }
 
+/** INFO needs a real file to stat, so it's only supported when
+ *  the argv has a filename we can resolve to an absolute path. */
+function catSupportsInfo(ctx: FormatterContext): boolean {
+  const filename = firstFilenameArg(ctx.argv);
+  if (filename === null) return false;
+  return resolvePath(filename, ctx.cwd) !== null;
+}
+
 export const catFormatter: Formatter = {
   name: "cat",
   matcher: { kind: "argv0", argv0: "cat" },
@@ -181,6 +234,7 @@ export const catFormatter: Formatter = {
   // SRC for content that has a meaningful source view.
   useInModal: true,
   render,
+  supportsInfo: catSupportsInfo,
 };
 
 /** `bat` is `cat` with extra chrome the user already gets from
@@ -190,4 +244,5 @@ export const batFormatter: Formatter = {
   matcher: { kind: "argv0", argv0: "bat" },
   useInModal: true,
   render,
+  supportsInfo: catSupportsInfo,
 };

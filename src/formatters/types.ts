@@ -117,12 +117,22 @@ export interface Formatter {
   readonly source?: "built-in" | "community";
   /** The lens the surface (BlockRow / Modal) wants rendered.
    *  Content-aware formatters (cat, future ones) read this to
-   *  pick between "rendered" (FMT) and "source" (SRC) views;
-   *  formatters that don't care can ignore it. `undefined`
-   *  means "rendered" / default — the FMT pill is the only
-   *  visible option. RAW is handled at the surface, not in
-   *  the formatter, so this never sees "raw". */
-  readonly render: (ctx: FormatterContext, lens?: "rendered" | "source") => FormatterResult;
+   *  pick between "rendered" (FMT), "source" (SRC), and
+   *  "info" (INFO) views; formatters that don't care can
+   *  ignore it. `undefined` means "rendered" / default — the
+   *  FMT pill is the only visible option. RAW is handled at
+   *  the surface, not in the formatter, so this never sees
+   *  "raw". */
+  readonly render: (
+    ctx: FormatterContext,
+    lens?: "rendered" | "source" | "info",
+  ) => FormatterResult;
+  /** True iff this formatter can render an INFO view for the
+   *  given context. The surface uses this to decide whether
+   *  to draw an INFO pill; only cat / bat set it today, and
+   *  only when the argv carries a filename (INFO needs
+   *  filesystem stats to render anything meaningful). */
+  readonly supportsInfo?: (ctx: FormatterContext) => boolean;
 }
 
 /**

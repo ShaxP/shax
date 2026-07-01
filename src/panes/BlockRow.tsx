@@ -340,7 +340,7 @@ function BlockRowInner({
   // the lifetime of the row. SRC is only ever set when the
   // block's content type has a distinct source view; the
   // surface hides the SRC button otherwise.
-  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | "src" | null>(null);
+  const [formatMode, setFormatMode] = useState<"raw" | "fmt" | "src" | "info" | null>(null);
 
   const status = statusFor(block);
   const isRunning = status === "running";
@@ -397,18 +397,25 @@ function BlockRowInner({
   // view so SRC would just duplicate it.
   const contentType = useMemo(() => detectContentType({ argv }), [argv]);
   const srcAvailable = formatter !== null && hasDistinctSource(contentType);
+  const infoAvailable =
+    formatter !== null &&
+    formatter.supportsInfo !== undefined &&
+    formatterCtx !== null &&
+    formatter.supportsInfo(formatterCtx);
   // The "natural" mode: FMT when a formatter applies, else RAW.
   // Per spec §02 the highest-tier render is the default; the
   // user toggle can flip it.
-  const effectiveMode: "raw" | "fmt" | "src" = formatMode ?? (formatter !== null ? "fmt" : "raw");
-  // Render the formatter output when we're in FMT or SRC mode +
-  // a formatter is registered. The invoke wrapper turns any
-  // throw into PASS, which we then treat identically to "no
+  const effectiveMode: "raw" | "fmt" | "src" | "info" =
+    formatMode ?? (formatter !== null ? "fmt" : "raw");
+  // Render the formatter output when we're in FMT / SRC / INFO
+  // mode + a formatter is registered. The invoke wrapper turns
+  // any throw into PASS, which we then treat identically to "no
   // formatter" and fall back to RAW.
   const formatterOutput = useMemo(() => {
     if (effectiveMode === "raw") return null;
     if (formatter === null || formatterCtx === null) return null;
-    const lens = effectiveMode === "src" ? "source" : "rendered";
+    const lens =
+      effectiveMode === "src" ? "source" : effectiveMode === "info" ? "info" : "rendered";
     const result = invokeFormatter(formatter, formatterCtx, lens);
     return isPass(result) ? null : result;
   }, [effectiveMode, formatter, formatterCtx]);
@@ -445,15 +452,19 @@ function BlockRowInner({
       if (detail.blockId !== block.id) return;
       if (detail.kind === "toggle-fmt-raw") {
         // Cycle through every lens the row currently exposes.
-        // Two-state row (no SRC available) cycles FMT → RAW →
-        // FMT; three-state row (cat on markdown / image / svg)
-        // cycles FMT → SRC → RAW → FMT.
+        // Order: FMT → (SRC?) → (INFO?) → RAW → FMT.
+        //   - two-state row (no SRC / no INFO): FMT ↔ RAW
+        //   - cat on markdown / image / svg: FMT → SRC → INFO → RAW
+        //   - cat on plain code: FMT → INFO → RAW
         if (formatter === null) return;
         setFormatMode((prev) => {
           const cur = prev ?? "fmt";
-          const cycle: ("raw" | "fmt" | "src")[] = srcAvailable
-            ? ["fmt", "src", "raw"]
-            : ["fmt", "raw"];
+          const cycle: ("raw" | "fmt" | "src" | "info")[] = [
+            "fmt",
+            ...(srcAvailable ? (["src"] as const) : []),
+            ...(infoAvailable ? (["info"] as const) : []),
+            "raw",
+          ];
           const idx = cycle.indexOf(cur);
           return cycle[(idx + 1) % cycle.length] ?? "fmt";
         });
@@ -515,6 +526,7 @@ function BlockRowInner({
     getOutput,
     pty,
     srcAvailable,
+    infoAvailable,
   ]);
 
   // Natural default: open whenever we already have the bytes in memory, OR
@@ -774,6 +786,21 @@ function BlockRowInner({
                     }}
                   >
                     SRC
+                  </button>
+                )}
+                {infoAvailable && (
+                  <button
+                    type="button"
+                    data-testid="block-info-pill"
+                    style={effectiveMode === "info" ? FMT_PILL_ON : FMT_PILL_OFF}
+                    data-active={effectiveMode === "info" ? "true" : "false"}
+                    title="File info (name, size, dates, format-specific stats)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFormatMode("info");
+                    }}
+                  >
+                    INFO
                   </button>
                 )}
                 <button

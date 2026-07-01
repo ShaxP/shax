@@ -33,7 +33,7 @@ import type { ContentType } from "./detectContentType";
 import type { LanguageId } from "./detectLanguage";
 import type { CSSProperties } from "react";
 
-export type ContentLens = "rendered" | "source" | "raw";
+export type ContentLens = "rendered" | "source" | "info" | "raw";
 
 export interface ContentViewProps {
   contentType: ContentType;
