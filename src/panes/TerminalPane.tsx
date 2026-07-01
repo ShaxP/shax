@@ -99,6 +99,11 @@ function TerminalPaneInner({
   onPtyIdChange,
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Wraps the entire pane (title-bar-below-chrome + block list +
+  // prompt strip). The mousedown listener below uses it to route
+  // clicks: inside a block row engages block-focus + selects;
+  // anywhere else (prompt / meta / empty area) exits block-focus.
+  const paneRootRef = useRef<HTMLDivElement>(null);
   // Held as refs so the cleanup closure always sees the live values without
   // adding them to any effect dependency array.
   const terminalRef = useRef<Terminal | null>(null);
@@ -582,6 +587,56 @@ function TerminalPaneInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  // Route clicks to a coherent block-focus state. Two bugs
+  // this fixes:
+  //   1. Ctrl+J engaged block-focus, then the user clicked the
+  //      prompt to type — block-focus stayed on, so Tab / f /
+  //      Enter were still hijacked by the block-focus handler
+  //      even though the prompt visibly had focus.
+  //   2. The user clicked a block to interact with it, expected
+  //      it to be the active surface, but block-focus stayed
+  //      off — so Tab / f / Enter fell through to the prompt.
+  // A click inside a block row engages block-focus and selects
+  // that block; a click anywhere else in the pane exits it.
+  // Fires in capture phase so we win against the block row's
+  // own onClick (which only wants selection, not focus).
+  useEffect(() => {
+    const root = paneRootRef.current;
+    if (root === null) return;
+    const onMouseDown = (e: MouseEvent): void => {
+      // Ignore synthetic / non-primary clicks. Left-button only.
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement | null;
+      if (target === null) return;
+      // The BlockViewerModal renders under document.body via a
+      // portal-ish absolute positioning; those clicks don't
+      // reach us here. Search overlay is the same. So we don't
+      // need to guard against them explicitly.
+      const blockEl = target.closest<HTMLElement>("[data-block-id]");
+      if (blockEl !== null) {
+        const id = blockEl.getAttribute("data-block-id");
+        if (id !== null) {
+          selectBlock(id);
+          if (!blockFocusRef.current) setBlockFocus(true);
+        }
+        return;
+      }
+      // Click outside any block — prompt strip, meta chrome,
+      // empty pane area. Exit block-focus so the surface the
+      // user just clicked can consume keys normally, and clear
+      // the row highlight — a lingering blue ring on a row the
+      // user has explicitly stepped away from reads as noise,
+      // not context.
+      if (blockFocusRef.current) {
+        setBlockFocus(false);
+        chordStateRef.current = INITIAL_KEY_STATE;
+      }
+      selectBlock(null);
+    };
+    root.addEventListener("mousedown", onMouseDown, true);
+    return () => root.removeEventListener("mousedown", onMouseDown, true);
+  }, []);
+
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
@@ -871,6 +926,7 @@ function TerminalPaneInner({
   return (
     <div
       data-testid="terminal-pane"
+      ref={paneRootRef}
       style={{
         width: "100%",
         height: "100%",
