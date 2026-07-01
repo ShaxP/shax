@@ -34,6 +34,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type { PtyId } from "../lib/ipc";
 import { shellTokenize } from "../lib/shellTokenize";
+import { AnsiSpans } from "../ansi/AnsiSpans";
 import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
 import { hasDistinctSource } from "../viewer/ContentView";
 import { detectContentType } from "../viewer/detectContentType";
@@ -364,6 +365,11 @@ function BlockRowInner({
   // future text formatters — sees a stray `%` row at the end
   // and renders it, and RAW shows a trailing `%` too.
   const outputText = rawText !== null ? stripShellArtifacts(stripAnsi(rawText)) : null;
+  // ANSI-preserving variant of the captured text — used by the
+  // RAW view so SGR colour / bold / underline survive into the
+  // rendered <pre>. `outputText` (ANSI-stripped) is still what
+  // formatters see because they parse plain text.
+  const rawDisplayText = rawText !== null ? stripShellArtifacts(rawText) : null;
 
   // Formatter resolution. The argv is tokenised from the block's
   // command; cwd / exit / duration come from the block summary;
@@ -992,7 +998,7 @@ function BlockRowInner({
                 : undefined),
             }}
           >
-            {outputText ?? "…"}
+            {rawDisplayText === null ? "…" : <AnsiSpans text={rawDisplayText} />}
           </pre>
         )}
       </div>

@@ -22,6 +22,7 @@ import {
   type BlockSummary,
   type PtyId,
 } from "../lib/ipc";
+import { AnsiSpans } from "../ansi/AnsiSpans";
 import { findFormatter, invokeFormatter, isPass, type FormatterContext } from "../formatters";
 import { hasDistinctSource } from "./ContentView";
 import { shellTokenize } from "../lib/shellTokenize";
@@ -325,9 +326,13 @@ export function BlockViewerModal({
   // The RAW-mode branch of the modal uses this so "raw" on a
   // formatter block shows the *command's* output, not the file
   // the command happened to operate on.
-  const capturedText = useMemo(() => {
+  // ANSI-preserving variant of the captured text, used by the
+  // RAW view so SGR colour / bold / underline survive. The
+  // ANSI-stripped variant used by formatters is computed
+  // separately inside the `formatterCtx` memo below.
+  const rawDisplayText = useMemo(() => {
     if (bytes === null) return "";
-    return stripShellArtifacts(stripAnsi(TEXT_DECODER.decode(bytes)));
+    return stripShellArtifacts(TEXT_DECODER.decode(bytes));
   }, [bytes]);
 
   const language = useMemo(() => {
@@ -565,8 +570,28 @@ export function BlockViewerModal({
           // this branch a wc / json / ls block in RAW would
           // render the file the command happened to operate on
           // (rendered markdown for `wc README.md`, etc.), which
-          // is misleading.
-          <Viewer text={capturedText} language={"plaintext" as const} style={{ flex: 1 }} />
+          // is misleading. Rendered as a styled `<pre>` so
+          // ANSI SGR (colour / bold / underline) survives — RAW
+          // is "look at the truth" and colours are part of it.
+          <pre
+            data-testid="block-viewer-raw"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
+              margin: 0,
+              padding: "10px 14px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: "var(--fg-dim)",
+              background: "var(--pane)",
+            }}
+          >
+            <AnsiSpans text={rawDisplayText} />
+          </pre>
         ) : contentType === "image" ? (
           <ImageView
             bytes={renderBytes ?? bytes}
