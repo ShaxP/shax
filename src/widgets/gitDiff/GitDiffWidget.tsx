@@ -241,6 +241,21 @@ export function GitDiffWidget({ parsed }: GitDiffWidgetProps): React.ReactElemen
             </>
           )}
         </span>
+        <button
+          type="button"
+          data-testid="widget-git-diff-expand-toggle"
+          style={{
+            ...TOGGLE_BUTTON,
+            border: "1px solid var(--border-strong)",
+            borderRadius: 3,
+          }}
+          title="Expand or collapse every file (click a header to toggle just one)"
+          onClick={() =>
+            setCollapsed(bulkCollapseState(parsed.files, anyExpanded(parsed, collapsed)))
+          }
+        >
+          {anyExpanded(parsed, collapsed) ? "COLLAPSE ALL" : "EXPAND ALL"}
+        </button>
         <div style={TOGGLE_GROUP} data-testid="widget-git-diff-view-toggle">
           <button
             type="button"
@@ -293,6 +308,22 @@ function initialCollapseState(files: DiffFile[]): Record<string, boolean> {
   const collapse = files.length > EXPANDED_BY_DEFAULT_MAX_FILES;
   for (const file of files) state[fileKey(file)] = collapse;
   return state;
+}
+
+function bulkCollapseState(files: DiffFile[], collapse: boolean): Record<string, boolean> {
+  const state: Record<string, boolean> = {};
+  for (const file of files) state[fileKey(file)] = collapse;
+  return state;
+}
+
+/** True iff at least one file is currently expanded — used by
+ *  the header button to swap its label between "COLLAPSE ALL"
+ *  and "EXPAND ALL". */
+function anyExpanded(parsed: ParsedDiff, collapsed: Record<string, boolean>): boolean {
+  for (const file of parsed.files) {
+    if (collapsed[fileKey(file)] !== true) return true;
+  }
+  return false;
 }
 
 interface FileStats {

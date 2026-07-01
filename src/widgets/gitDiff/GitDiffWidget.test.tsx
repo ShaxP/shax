@@ -83,6 +83,24 @@ describe("GitDiffWidget", () => {
     }
   });
 
+  it("expand-all / collapse-all button flips every file", () => {
+    // 5 files → all collapsed by default.
+    const files = Array.from({ length: 5 }, (_, i) => mkFile({ path: `f${i}.ts`, hunks: [] }));
+    render(<GitDiffWidget parsed={mkDiff(files)} />);
+    // Label reads EXPAND ALL when everything is collapsed.
+    expect(screen.getByTestId("widget-git-diff-expand-toggle")).toHaveTextContent("EXPAND ALL");
+    fireEvent.click(screen.getByTestId("widget-git-diff-expand-toggle"));
+    for (const el of screen.getAllByTestId("widget-git-diff-file")) {
+      expect(el).toHaveAttribute("data-collapsed", "false");
+    }
+    // Now reads COLLAPSE ALL.
+    expect(screen.getByTestId("widget-git-diff-expand-toggle")).toHaveTextContent("COLLAPSE ALL");
+    fireEvent.click(screen.getByTestId("widget-git-diff-expand-toggle"));
+    for (const el of screen.getAllByTestId("widget-git-diff-file")) {
+      expect(el).toHaveAttribute("data-collapsed", "true");
+    }
+  });
+
   it("clicking a file header toggles collapse", () => {
     const parsed = mkDiff([mkFile({ path: "a.ts", hunks: [] })]);
     render(<GitDiffWidget parsed={parsed} />);
