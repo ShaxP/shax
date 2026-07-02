@@ -374,6 +374,7 @@ function TerminalPaneInner({
         case "toggle-fmt-raw":
         case "toggle-side-by-side":
         case "toggle-maximize":
+        case "widget-primary":
         case "yank":
         case "collapse":
         case "expand":
@@ -434,6 +435,31 @@ function TerminalPaneInner({
           host.scrollTop += decision.deltaPx;
         } else {
           advanceFocus("prev");
+        }
+        return;
+      }
+      case "widget-primary": {
+        // Space: give widgets first refusal — a git-status
+        // widget emits a `git add / git reset HEAD` command
+        // for the focused entry, ls will `cd` on the focused
+        // row, etc. If nothing claims, fall through to
+        // page-down so bare blocks behave as they always did.
+        if (currentId === null) return;
+        const detail = { blockId: currentId, claimed: false };
+        window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail }));
+        if (detail.claimed) return;
+        // Fall through: same body as `page-down`.
+        const host = getScrollHost(currentId);
+        if (host === null) {
+          advanceFocus("next");
+          return;
+        }
+        const page = host.clientHeight * PAGE_FRACTION;
+        const decision = smartScrollDown(scrollFrame(host), page);
+        if (decision.kind === "scroll-within") {
+          host.scrollTop += decision.deltaPx;
+        } else {
+          advanceFocus("next");
         }
         return;
       }
@@ -925,6 +951,32 @@ function TerminalPaneInner({
     window.addEventListener("shax:refocus-pane", handler);
     return () => window.removeEventListener("shax:refocus-pane", handler);
   }, [active, altScreen, exitedCode]);
+
+  // Widgets that trigger side effects (git status widget's
+  // stage / unstage, ls widget's cd) emit `shax:emit-command`
+  // events per spec §08's visible-command rule: instead of
+  // mutating state silently, the widget dispatches the command
+  // it wants run and this pane writes it to its own PTY as if
+  // the user typed it. Newline is appended so the shell runs
+  // it; the scrollback captures the command the way OSC 133
+  // does for anything typed at the prompt, keeping the log
+  // honest.
+  //
+  // Filtering by `paneId` so a widget in pane A doesn't
+  // hijack pane B's shell. `paneId` is the caller's own view
+  // of the target — for widgets rendered by the git-status /
+  // git-diff formatters, it's `ctx.paneId`.
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const detail = (e as CustomEvent<{ paneId: string; command: string }>).detail;
+      if (detail?.paneId !== ptyIdRef.current) return;
+      const id = ptyIdRef.current;
+      if (id === null) return;
+      void writePty(id, new TextEncoder().encode(`${detail.command}\n`));
+    };
+    window.addEventListener("shax:emit-command", handler);
+    return () => window.removeEventListener("shax:emit-command", handler);
+  }, []);
 
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
   // local-echoes; the shell's own echo (via `prompt_chunk`) drives the

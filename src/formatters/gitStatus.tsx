@@ -9,8 +9,11 @@
  */
 
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { gitStatusPorcelain } from "../lib/ipc";
+import { GitStatusWidget } from "../widgets/gitStatus/GitStatusWidget";
+import { isWidgetPromotable } from "../widgets/gitStatus/promotionGate";
+import { argsAfterSubcommand, findGitDashC, findGitSubcommand } from "./gitArgs";
 import { parseGitStatus, type GitStatus, type StatusEntry } from "./parseGitStatus";
 import { PASS, type Formatter, type FormatterContext } from "./types";
 
@@ -77,17 +80,23 @@ interface GitStatusViewProps {
 }
 
 function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
+  const args = useMemo(() => argsAfterSubcommand(ctx.argv), [ctx.argv]);
+  // `-C <path>` wins over the shell's cwd — the user explicitly
+  // scoped the command to that repo, and that's the repo the
+  // widget needs to target for subsequent actions (staging,
+  // refresh, …). Falls back to `ctx.cwd` when no `-C`.
+  const effectiveCwd = useMemo(() => findGitDashC(ctx.argv) ?? ctx.cwd, [ctx.argv, ctx.cwd]);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setStatus(null);
     setError(null);
-    if (ctx.cwd === null) {
+    if (effectiveCwd === null) {
       setError("git status: no cwd available");
       return;
     }
     let cancelled = false;
-    void gitStatusPorcelain(ctx.cwd).then(
+    void gitStatusPorcelain(effectiveCwd).then(
       (output) => {
         if (cancelled) return;
         setStatus(parseGitStatus(output));
@@ -101,7 +110,7 @@ function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [ctx.cwd]);
+  }, [effectiveCwd]);
 
   if (error !== null) {
     return (
@@ -116,6 +125,12 @@ function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
         Probing git status…
       </div>
     );
+  }
+
+  // Widget renders for the promotable invocation set;
+  // anything else uses the static grouped view below.
+  if (isWidgetPromotable(args)) {
+    return <GitStatusWidget status={status} paneId={ctx.paneId} cwd={effectiveCwd} />;
   }
 
   return (
@@ -188,12 +203,21 @@ function Section({ title, entries, kind }: SectionProps): React.ReactElement | n
 }
 
 function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
-  if (ctx.cwd === null) return PASS;
+  // Fall back to raw when neither `-C` nor OSC 133 A gave us
+  // a directory — with no cwd there's no repo to probe.
+  if (ctx.cwd === null && findGitDashC(ctx.argv) === null) return PASS;
   return <GitStatusView ctx={ctx} />;
 }
 
 export const gitStatusFormatter: Formatter = {
   name: "git-status",
-  matcher: { kind: "argv0-subcommand", argv0: "git", subcommand: "status" },
+  // Predicate matcher so `git -C /repo status` matches the same
+  // as bare `git status`. The generic `argv0-subcommand`
+  // matcher stops at the first non-flag token (`/repo`)
+  // without knowing that `-C` consumes it.
+  matcher: {
+    kind: "predicate",
+    test: (ctx) => findGitSubcommand(ctx.argv) === "status",
+  },
   render,
 };
