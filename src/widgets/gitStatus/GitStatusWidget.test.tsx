@@ -200,11 +200,19 @@ describe("GitStatusWidget", () => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
     });
     expect(primaryDetail.claimed).toBe(true);
-    expect(spy).toHaveBeenCalled();
-    const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    expect(call.detail).toEqual({
+    // Two emitted commands: the action itself, then a
+    // `git status` refresh so the user sees the updated tree
+    // in a fresh block right below.
+    expect(spy).toHaveBeenCalledTimes(2);
+    const first = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    const second = spy.mock.calls[1]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    expect(first.detail).toEqual({
       paneId: "pty-42",
       command: "git -C /repo-a add -- src/foo.ts",
+    });
+    expect(second.detail).toEqual({
+      paneId: "pty-42",
+      command: "git -C /repo-a status",
     });
     window.removeEventListener("shax:emit-command", spy);
   });

@@ -275,6 +275,21 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
           detail: { paneId, command },
         }),
       );
+      // Follow the stage / unstage with a fresh `git status`
+      // so the user sees the updated tree in a new block
+      // right below the action. Per spec §08 the current
+      // widget stays frozen (it's history), but the new
+      // block below is the live snapshot. Same `-C` scope
+      // as the action so the follow-up hits the same repo
+      // even if the shell cwd has drifted.
+      const refresh = refreshCommand(cwdRef.current);
+      if (refresh !== null) {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: { paneId, command: refresh },
+          }),
+        );
+      }
       detail.claimed = true;
     };
     window.addEventListener("shax:widget-primary", onPrimary);
@@ -358,6 +373,14 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
                     detail: { paneId, command },
                   }),
                 );
+                const refresh = refreshCommand(cwd);
+                if (refresh !== null) {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:emit-command", {
+                      detail: { paneId, command: refresh },
+                    }),
+                  );
+                }
               }}
             />
           ))
@@ -365,6 +388,18 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
       </div>
     </div>
   );
+}
+
+/** Build the `git status` command the widget re-runs after a
+ *  stage / unstage so the user sees a fresh block below the
+ *  action. Scoped to the widget's origin cwd the same way
+ *  action commands are, so it always targets the right repo.
+ *  `null` when the widget has no origin cwd (matches
+ *  `commandForAction`'s refusal — no gambling on shell
+ *  state). */
+function refreshCommand(cwd: string | null): string | null {
+  if (cwd === null) return null;
+  return `git -C ${shellEscape(cwd)} status`;
 }
 
 /** Look up the flat-list index of a specific section's header
