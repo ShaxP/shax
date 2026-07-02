@@ -39,6 +39,14 @@ type SectionKind = "unmerged" | "staged" | "unstaged" | "untracked";
 interface GitStatusWidgetProps {
   status: GitStatus;
   paneId: PtyId;
+  /** The cwd at the time `git status` ran — captured from
+   *  OSC 133 A and passed through the FormatterContext. The
+   *  widget uses this to scope every emitted command with
+   *  `git -C <cwd>` so an action fired from a scrollback
+   *  block always operates on the repo the widget actually
+   *  represents, regardless of where the shell has since
+   *  cd'd. Refuses to act when `null`. */
+  cwd: string | null;
 }
 
 const HOST: CSSProperties = {
@@ -130,7 +138,7 @@ type FlatItem =
   | { kind: "section"; section: SectionKind }
   | { kind: "entry"; section: SectionKind; entry: StatusEntry };
 
-export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React.ReactElement {
+export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): React.ReactElement {
   const [collapsedSections, setCollapsedSections] = useState<Record<SectionKind, boolean>>({
     unmerged: false,
     staged: false,
@@ -141,6 +149,8 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
   const focusedIndexRef = useRef<number | null>(null);
   focusedIndexRef.current = focusedIndex;
   const hostRef = useRef<HTMLDivElement>(null);
+  const cwdRef = useRef<string | null>(cwd);
+  cwdRef.current = cwd;
 
   // Flatten sections + entries into an index-addressable list
   // so widget-nav j/k walk every focusable thing without
@@ -258,7 +268,7 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
       if (cur === null) return;
       const item = flatRef.current[cur];
       if (item === undefined || item.kind !== "entry") return;
-      const command = commandForAction(item.section, item.entry);
+      const command = commandForAction(item.section, item.entry, cwdRef.current);
       if (command === null) return;
       window.dispatchEvent(
         new CustomEvent("shax:emit-command", {
@@ -341,7 +351,7 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
               focusedIndex={focusedIndex}
               onFocusRow={(idx) => setFocusedIndex(idx)}
               onAction={(entry) => {
-                const command = commandForAction(kind, entry);
+                const command = commandForAction(kind, entry, cwd);
                 if (command === null) return;
                 window.dispatchEvent(
                   new CustomEvent("shax:emit-command", {
@@ -379,12 +389,31 @@ function flatIndexOfEntry(flat: FlatItem[], kind: SectionKind, path: string): nu
 
 /** Build the visible command a Space press should emit for
  *  the given entry. `null` means "no action" (unmerged
- *  conflict — resolving is out of scope for slice 2). */
-function commandForAction(section: SectionKind, entry: StatusEntry): string | null {
+ *  conflict — resolving is out of scope for slice 2, or the
+ *  widget has no origin cwd to scope the command to).
+ *
+ *  Every command is scoped with `git -C <cwd>` so a Space
+ *  press on a scrollback block always targets the repo the
+ *  widget represents. That fixes the "shell has cd'd
+ *  elsewhere since this block ran" hazard: the emitted
+ *  command works from any cwd — same repo, different repo,
+ *  no repo at all. If the origin cwd has been deleted since,
+ *  git prints "not a git repo" visibly in the scrollback,
+ *  which is honest failure. When the widget doesn't know its
+ *  origin cwd (rare — no OSC 133 A was captured for that
+ *  block) we refuse to act rather than gamble on the current
+ *  shell state. */
+function commandForAction(
+  section: SectionKind,
+  entry: StatusEntry,
+  cwd: string | null,
+): string | null {
+  if (cwd === null) return null;
   const path = shellEscape(entry.path);
-  if (section === "staged") return `git reset HEAD -- ${path}`;
-  if (section === "unstaged") return `git add -- ${path}`;
-  if (section === "untracked") return `git add -- ${path}`;
+  const scope = `git -C ${shellEscape(cwd)}`;
+  if (section === "staged") return `${scope} reset HEAD -- ${path}`;
+  if (section === "unstaged") return `${scope} add -- ${path}`;
+  if (section === "untracked") return `${scope} add -- ${path}`;
   return null;
 }
 
