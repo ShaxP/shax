@@ -126,10 +126,9 @@ const EMPTY_NOTE: CSSProperties = {
   fontSize: 12,
 };
 
-interface FlatEntry {
-  section: SectionKind;
-  entry: StatusEntry;
-}
+type FlatItem =
+  | { kind: "section"; section: SectionKind }
+  | { kind: "entry"; section: SectionKind; entry: StatusEntry };
 
 export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React.ReactElement {
   const [collapsedSections, setCollapsedSections] = useState<Record<SectionKind, boolean>>({
@@ -142,18 +141,22 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
   const focusedIndexRef = useRef<number | null>(null);
   focusedIndexRef.current = focusedIndex;
   const hostRef = useRef<HTMLDivElement>(null);
-  const collapsedSectionsRef = useRef(collapsedSections);
-  collapsedSectionsRef.current = collapsedSections;
 
-  // Flatten sections into an index-addressable list so
-  // widget-nav j/k walk every entry without re-solving
-  // section boundaries.
-  const flat = useMemo<FlatEntry[]>(() => {
-    const out: FlatEntry[] = [];
+  // Flatten sections + entries into an index-addressable list
+  // so widget-nav j/k walk every focusable thing without
+  // re-solving section boundaries. Section headers are
+  // *always* included when the section has content — that way
+  // a collapsed section remains focusable, and pressing `l`
+  // on it (or Space in a future revision) re-opens it.
+  // Entries only follow when the section is expanded.
+  const flat = useMemo<FlatItem[]>(() => {
+    const out: FlatItem[] = [];
     for (const kind of ["unmerged", "staged", "unstaged", "untracked"] as const) {
       const entries = status[kind];
+      if (entries.length === 0) continue;
+      out.push({ kind: "section", section: kind });
       if (collapsedSections[kind]) continue;
-      for (const entry of entries) out.push({ section: kind, entry });
+      for (const entry of entries) out.push({ kind: "entry", section: kind, entry });
     }
     return out;
   }, [status, collapsedSections]);
@@ -221,6 +224,10 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
           const item = items[target];
           if (item === undefined) return;
           if (cur === null) moveFocus(0);
+          // h / l on either a section header OR an entry
+          // affects the containing section. That way a
+          // collapsed section is re-openable by focusing its
+          // header and pressing `l` (or the arrow key).
           setCollapsedSections((prev) => ({
             ...prev,
             [item.section]: detail.direction === "left",
@@ -250,8 +257,8 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
       const cur = focusedIndexRef.current;
       if (cur === null) return;
       const item = flatRef.current[cur];
-      if (item === undefined) return;
-      const command = commandForAction(item);
+      if (item === undefined || item.kind !== "entry") return;
+      const command = commandForAction(item.section, item.entry);
       if (command === null) return;
       window.dispatchEvent(
         new CustomEvent("shax:emit-command", {
@@ -264,20 +271,20 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
     return () => window.removeEventListener("shax:widget-primary", onPrimary);
   }, [paneId]);
 
-  // Scroll the focused entry into view as focus moves.
+  // Scroll the focused row (section header OR entry) into
+  // view as focus moves. Uses `[data-focused="true"]` so it
+  // works for either kind without hard-coding the DOM shape.
   useEffect(() => {
     if (focusedIndex === null) return;
     const el = hostRef.current;
     if (el === null) return;
-    const rows = el.querySelectorAll<HTMLElement>('[data-testid="widget-git-status-entry"]');
-    const row = rows[focusedIndex];
-    if (row === undefined) return;
+    const row = el.querySelector<HTMLElement>('[data-focused="true"]');
+    if (row === null) return;
     if (typeof row.scrollIntoView === "function") {
       row.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [focusedIndex]);
 
-  const totalEntries = flat.length;
   const staged = status.staged.length;
   const unstaged = status.unstaged.length;
   const untracked = status.untracked.length;
@@ -329,11 +336,12 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
               onToggleSection={() =>
                 setCollapsedSections((prev) => ({ ...prev, [kind]: !prev[kind] }))
               }
-              flatBaseIndex={sectionBaseIndex(flat, kind)}
+              sectionHeaderIndex={flatIndexOfSectionHeader(flat, kind)}
+              indexOfEntry={(entry) => flatIndexOfEntry(flat, kind, entry.path)}
               focusedIndex={focusedIndex}
               onFocusRow={(idx) => setFocusedIndex(idx)}
               onAction={(entry) => {
-                const command = commandForAction({ section: kind, entry });
+                const command = commandForAction(kind, entry);
                 if (command === null) return;
                 window.dispatchEvent(
                   new CustomEvent("shax:emit-command", {
@@ -344,28 +352,35 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
             />
           ))
         )}
-        {!clean && totalEntries === 0 && (
-          <div style={EMPTY_NOTE}>All sections collapsed. Press `l` on a section to expand.</div>
-        )}
       </div>
     </div>
   );
 }
 
-/** Compute the flat-list index the first entry of this
- *  section occupies (given the current collapse state). */
-function sectionBaseIndex(flat: FlatEntry[], kind: SectionKind): number {
+/** Look up the flat-list index of a specific section's header
+ *  (or one of its entries) — used to align the section-level
+ *  DOM's `data-focused` / focus-follow logic with the flat
+ *  index. */
+function flatIndexOfSectionHeader(flat: FlatItem[], kind: SectionKind): number {
   for (let i = 0; i < flat.length; i++) {
-    if (flat[i]?.section === kind) return i;
+    const item = flat[i];
+    if (item?.kind === "section" && item.section === kind) return i;
+  }
+  return -1;
+}
+
+function flatIndexOfEntry(flat: FlatItem[], kind: SectionKind, path: string): number {
+  for (let i = 0; i < flat.length; i++) {
+    const item = flat[i];
+    if (item?.kind === "entry" && item.section === kind && item.entry.path === path) return i;
   }
   return -1;
 }
 
 /** Build the visible command a Space press should emit for
- *  the given entry. `null` means "no action" (untracked with
- *  no path, unmerged conflict — resolving is out of scope). */
-function commandForAction(item: FlatEntry): string | null {
-  const { section, entry } = item;
+ *  the given entry. `null` means "no action" (unmerged
+ *  conflict — resolving is out of scope for slice 2). */
+function commandForAction(section: SectionKind, entry: StatusEntry): string | null {
   const path = shellEscape(entry.path);
   if (section === "staged") return `git reset HEAD -- ${path}`;
   if (section === "unstaged") return `git add -- ${path}`;
@@ -387,40 +402,60 @@ interface SectionProps {
   entries: StatusEntry[];
   collapsed: boolean;
   onToggleSection: () => void;
-  flatBaseIndex: number;
+  sectionHeaderIndex: number;
+  indexOfEntry: (entry: StatusEntry) => number;
   focusedIndex: number | null;
   onFocusRow: (idx: number) => void;
   onAction: (entry: StatusEntry) => void;
 }
+
+const SECTION_HEADER_FOCUSED: CSSProperties = {
+  ...SECTION_HEADER_STYLE,
+  boxShadow: "inset 3px 0 0 var(--accent)",
+  background: "color-mix(in srgb, var(--accent) 14%, var(--surface))",
+};
 
 function Section({
   kind,
   entries,
   collapsed,
   onToggleSection,
-  flatBaseIndex,
+  sectionHeaderIndex,
+  indexOfEntry,
   focusedIndex,
   onFocusRow,
   onAction,
 }: SectionProps): React.ReactElement | null {
   if (entries.length === 0) return null;
   const title = sectionTitle(kind);
+  const headerFocused = focusedIndex === sectionHeaderIndex;
   return (
     <div data-testid={`widget-git-status-section-${kind}`} data-collapsed={collapsed}>
       <div
-        style={SECTION_HEADER_STYLE}
-        onClick={onToggleSection}
+        style={headerFocused ? SECTION_HEADER_FOCUSED : SECTION_HEADER_STYLE}
+        onClick={() => {
+          onFocusRow(sectionHeaderIndex);
+          onToggleSection();
+        }}
         data-testid={`widget-git-status-section-${kind}-header`}
+        data-focused={headerFocused}
       >
         <span style={{ width: 8, color: "var(--fg-faint)" }} aria-hidden="true">
           {collapsed ? "▸" : "▾"}
         </span>
         <span>{title}</span>
-        <span style={{ marginLeft: "auto", color: "var(--fg-faint)" }}>{entries.length}</span>
+        <span style={{ marginLeft: "auto", color: "var(--fg-faint)" }}>
+          {entries.length}
+          {headerFocused && (
+            <span style={{ ...HINT_STYLE, marginLeft: 8 }}>
+              {collapsed ? "l: expand" : "h: collapse"}
+            </span>
+          )}
+        </span>
       </div>
       {!collapsed &&
-        entries.map((entry, i) => {
-          const flatIndex = flatBaseIndex + i;
+        entries.map((entry) => {
+          const flatIndex = indexOfEntry(entry);
           const focused = focusedIndex === flatIndex;
           const { glyph, color } = statusGlyph(entry);
           const hint = actionHint(kind);

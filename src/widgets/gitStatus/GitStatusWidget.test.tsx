@@ -77,10 +77,7 @@ describe("GitStatusWidget", () => {
     );
   });
 
-  it("widget-nav down / up walks entries across sections", () => {
-    const parent = document.createElement("div");
-    parent.setAttribute("data-block-id", "b1");
-    document.body.appendChild(parent);
+  it("widget-nav down / up walks section headers and entries in order", () => {
     render(
       withBlock("b1")(
         <GitStatusWidget
@@ -103,14 +100,69 @@ describe("GitStatusWidget", () => {
       });
       return detail.claimed;
     };
+    // Order: staged header → a.ts → unstaged header → b.ts.
     expect(send("down")).toBe(true);
-    let rows = screen.getAllByTestId("widget-git-status-entry");
-    expect(rows[0]).toHaveAttribute("data-focused", "true");
+    expect(screen.getByTestId("widget-git-status-section-staged-header")).toHaveAttribute(
+      "data-focused",
+      "true",
+    );
     expect(send("down")).toBe(true);
-    rows = screen.getAllByTestId("widget-git-status-entry");
-    expect(rows[1]).toHaveAttribute("data-focused", "true");
-    // Past the last row → no claim so shell can advance.
+    const stagedEntries = screen
+      .getAllByTestId("widget-git-status-entry")
+      .filter((e) => e.getAttribute("data-section") === "staged");
+    expect(stagedEntries[0]).toHaveAttribute("data-focused", "true");
+    expect(send("down")).toBe(true);
+    expect(screen.getByTestId("widget-git-status-section-unstaged-header")).toHaveAttribute(
+      "data-focused",
+      "true",
+    );
+    expect(send("down")).toBe(true);
+    const unstagedEntries = screen
+      .getAllByTestId("widget-git-status-entry")
+      .filter((e) => e.getAttribute("data-section") === "unstaged");
+    expect(unstagedEntries[0]).toHaveAttribute("data-focused", "true");
+    // Past the last row → no claim so shell can advance to the next block.
     expect(send("down")).toBe(false);
+  });
+
+  it("widget-nav right on a collapsed section header re-expands it", () => {
+    render(
+      withBlock("b1a")(
+        <GitStatusWidget
+          status={mkStatus({
+            staged: [mkEntry("a.ts", { index: "M", worktree: "." })],
+          })}
+          paneId="pty-1"
+        />,
+      ),
+    );
+    const send = (direction: "up" | "down" | "left" | "right") => {
+      const detail: { blockId: string; direction: typeof direction; claimed: boolean } = {
+        blockId: "b1a",
+        direction,
+        claimed: false,
+      };
+      act(() => {
+        window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+      });
+      return detail.claimed;
+    };
+    // Focus the section header, collapse it, verify no entries
+    // are visible, then re-expand via `right` — the key path
+    // the original bug closed off.
+    send("down");
+    send("left");
+    expect(screen.getByTestId("widget-git-status-section-staged")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(screen.queryByTestId("widget-git-status-entry")).toBeNull();
+    send("right");
+    expect(screen.getByTestId("widget-git-status-section-staged")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+    expect(screen.getAllByTestId("widget-git-status-entry")).toHaveLength(1);
   });
 
   it("widget-primary on unstaged emits `git add -- <path>`", () => {
@@ -126,14 +178,17 @@ describe("GitStatusWidget", () => {
         />,
       ),
     );
-    // Move focus onto the entry.
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-nav", {
-          detail: { blockId: "b2", direction: "down", claimed: false },
-        }),
-      );
-    });
+    // Two `down` presses: first lands on the section header,
+    // second on the first entry.
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:widget-nav", {
+            detail: { blockId: "b2", direction: "down", claimed: false },
+          }),
+        );
+      });
+    }
     // Fire the primary action.
     const primaryDetail = { blockId: "b2", claimed: false };
     act(() => {
@@ -159,13 +214,15 @@ describe("GitStatusWidget", () => {
         />,
       ),
     );
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-nav", {
-          detail: { blockId: "b3", direction: "down", claimed: false },
-        }),
-      );
-    });
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:widget-nav", {
+            detail: { blockId: "b3", direction: "down", claimed: false },
+          }),
+        );
+      });
+    }
     const primaryDetail = { blockId: "b3", claimed: false };
     act(() => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
@@ -188,13 +245,15 @@ describe("GitStatusWidget", () => {
         />,
       ),
     );
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-nav", {
-          detail: { blockId: "b4", direction: "down", claimed: false },
-        }),
-      );
-    });
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:widget-nav", {
+            detail: { blockId: "b4", direction: "down", claimed: false },
+          }),
+        );
+      });
+    }
     const primaryDetail = { blockId: "b4", claimed: false };
     act(() => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
@@ -217,13 +276,15 @@ describe("GitStatusWidget", () => {
         />,
       ),
     );
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-nav", {
-          detail: { blockId: "b5", direction: "down", claimed: false },
-        }),
-      );
-    });
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:widget-nav", {
+            detail: { blockId: "b5", direction: "down", claimed: false },
+          }),
+        );
+      });
+    }
     act(() => {
       window.dispatchEvent(
         new CustomEvent("shax:widget-primary", {
@@ -248,14 +309,17 @@ describe("GitStatusWidget", () => {
         />,
       ),
     );
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-nav", {
-          detail: { blockId: "b6", direction: "down", claimed: false },
-        }),
-      );
-    });
-    // Focused on entry 0 → staged section.
+    // Two `down`s to reach the first staged entry (past the
+    // section header).
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:widget-nav", {
+            detail: { blockId: "b6", direction: "down", claimed: false },
+          }),
+        );
+      });
+    }
     act(() => {
       window.dispatchEvent(
         new CustomEvent("shax:widget-nav", {
