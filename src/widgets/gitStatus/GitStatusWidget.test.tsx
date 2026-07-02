@@ -1,0 +1,293 @@
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import "@testing-library/jest-dom";
+import { describe, expect, it, vi } from "vitest";
+import { GitStatusWidget } from "./GitStatusWidget";
+import type { GitStatus, StatusEntry } from "../../formatters/parseGitStatus";
+
+const EMPTY_BRANCH = { head: "main", oid: null, upstream: null, ahead: 0, behind: 0 };
+
+function mkStatus(overrides: Partial<GitStatus> = {}): GitStatus {
+  return {
+    branch: EMPTY_BRANCH,
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    ignored: [],
+    unmerged: [],
+    ...overrides,
+  };
+}
+
+function mkEntry(path: string, overrides: Partial<StatusEntry> = {}): StatusEntry {
+  return {
+    path,
+    origPath: null,
+    index: ".",
+    worktree: "M",
+    unmerged: false,
+    ...overrides,
+  };
+}
+
+function withBlock(id: string): (children: React.ReactElement) => React.ReactElement {
+  return (children) => <div data-block-id={id}>{children}</div>;
+}
+
+describe("GitStatusWidget", () => {
+  it("shows a clean-tree note when nothing has changed", () => {
+    render(<GitStatusWidget status={mkStatus()} paneId="pty-1" />);
+    expect(screen.getByTestId("widget-git-status")).toHaveTextContent(
+      "nothing to commit, working tree clean",
+    );
+  });
+
+  it("groups entries into staged / unstaged / untracked sections", () => {
+    render(
+      <GitStatusWidget
+        status={mkStatus({
+          staged: [mkEntry("src/a.ts", { index: "M", worktree: "." })],
+          unstaged: [mkEntry("src/b.ts", { index: ".", worktree: "M" })],
+          untracked: [mkEntry("new.txt", { index: "?", worktree: "?" })],
+        })}
+        paneId="pty-1"
+      />,
+    );
+    expect(screen.getByTestId("widget-git-status-section-staged")).toHaveTextContent("src/a.ts");
+    expect(screen.getByTestId("widget-git-status-section-unstaged")).toHaveTextContent("src/b.ts");
+    expect(screen.getByTestId("widget-git-status-section-untracked")).toHaveTextContent("new.txt");
+  });
+
+  it("renders the branch pill and summary counts", () => {
+    render(
+      <GitStatusWidget
+        status={mkStatus({
+          branch: { head: "feat/x", oid: null, upstream: "origin/feat/x", ahead: 2, behind: 0 },
+          staged: [mkEntry("a.ts", { index: "M", worktree: "." })],
+          unstaged: [
+            mkEntry("b.ts", { index: ".", worktree: "M" }),
+            mkEntry("c.ts", { index: ".", worktree: "M" }),
+          ],
+        })}
+        paneId="pty-1"
+      />,
+    );
+    expect(screen.getByTestId("widget-git-status-branch")).toHaveTextContent("feat/x");
+    expect(screen.getByTestId("widget-git-status-summary")).toHaveTextContent(
+      "1 staged · 2 unstaged",
+    );
+  });
+
+  it("widget-nav down / up walks entries across sections", () => {
+    const parent = document.createElement("div");
+    parent.setAttribute("data-block-id", "b1");
+    document.body.appendChild(parent);
+    render(
+      withBlock("b1")(
+        <GitStatusWidget
+          status={mkStatus({
+            staged: [mkEntry("a.ts", { index: "M", worktree: "." })],
+            unstaged: [mkEntry("b.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-1"
+        />,
+      ),
+    );
+    const send = (direction: "up" | "down" | "left" | "right") => {
+      const detail: { blockId: string; direction: typeof direction; claimed: boolean } = {
+        blockId: "b1",
+        direction,
+        claimed: false,
+      };
+      act(() => {
+        window.dispatchEvent(new CustomEvent("shax:widget-nav", { detail }));
+      });
+      return detail.claimed;
+    };
+    expect(send("down")).toBe(true);
+    let rows = screen.getAllByTestId("widget-git-status-entry");
+    expect(rows[0]).toHaveAttribute("data-focused", "true");
+    expect(send("down")).toBe(true);
+    rows = screen.getAllByTestId("widget-git-status-entry");
+    expect(rows[1]).toHaveAttribute("data-focused", "true");
+    // Past the last row → no claim so shell can advance.
+    expect(send("down")).toBe(false);
+  });
+
+  it("widget-primary on unstaged emits `git add -- <path>`", () => {
+    const spy = vi.fn();
+    window.addEventListener("shax:emit-command", spy);
+    render(
+      withBlock("b2")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-42"
+        />,
+      ),
+    );
+    // Move focus onto the entry.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b2", direction: "down", claimed: false },
+        }),
+      );
+    });
+    // Fire the primary action.
+    const primaryDetail = { blockId: "b2", claimed: false };
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
+    });
+    expect(primaryDetail.claimed).toBe(true);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    expect(call.detail).toEqual({ paneId: "pty-42", command: "git add -- src/foo.ts" });
+    window.removeEventListener("shax:emit-command", spy);
+  });
+
+  it("widget-primary on staged emits `git reset HEAD -- <path>`", () => {
+    const spy = vi.fn();
+    window.addEventListener("shax:emit-command", spy);
+    render(
+      withBlock("b3")(
+        <GitStatusWidget
+          status={mkStatus({
+            staged: [mkEntry("src/foo.ts", { index: "M", worktree: "." })],
+          })}
+          paneId="pty-42"
+        />,
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b3", direction: "down", claimed: false },
+        }),
+      );
+    });
+    const primaryDetail = { blockId: "b3", claimed: false };
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
+    });
+    const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    expect(call.detail.command).toBe("git reset HEAD -- src/foo.ts");
+    window.removeEventListener("shax:emit-command", spy);
+  });
+
+  it("widget-primary on a conflict is a no-op and does not claim", () => {
+    const spy = vi.fn();
+    window.addEventListener("shax:emit-command", spy);
+    render(
+      withBlock("b4")(
+        <GitStatusWidget
+          status={mkStatus({
+            unmerged: [mkEntry("src/foo.ts", { unmerged: true })],
+          })}
+          paneId="pty-42"
+        />,
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b4", direction: "down", claimed: false },
+        }),
+      );
+    });
+    const primaryDetail = { blockId: "b4", claimed: false };
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
+    });
+    expect(primaryDetail.claimed).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    window.removeEventListener("shax:emit-command", spy);
+  });
+
+  it("quotes paths with unusual characters", () => {
+    const spy = vi.fn();
+    window.addEventListener("shax:emit-command", spy);
+    render(
+      withBlock("b5")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("path with spaces/file.txt", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-42"
+        />,
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b5", direction: "down", claimed: false },
+        }),
+      );
+    });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-primary", {
+          detail: { blockId: "b5", claimed: false },
+        }),
+      );
+    });
+    const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    expect(call.detail.command).toBe("git add -- 'path with spaces/file.txt'");
+    window.removeEventListener("shax:emit-command", spy);
+  });
+
+  it("h collapses the focused entry's section", () => {
+    render(
+      withBlock("b6")(
+        <GitStatusWidget
+          status={mkStatus({
+            staged: [mkEntry("a.ts", { index: "M", worktree: "." })],
+            unstaged: [mkEntry("b.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-1"
+        />,
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b6", direction: "down", claimed: false },
+        }),
+      );
+    });
+    // Focused on entry 0 → staged section.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:widget-nav", {
+          detail: { blockId: "b6", direction: "left", claimed: false },
+        }),
+      );
+    });
+    expect(screen.getByTestId("widget-git-status-section-staged")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(screen.getByTestId("widget-git-status-section-unstaged")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+  });
+
+  it("clicking a section header toggles that section", () => {
+    render(
+      withBlock("b7")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("a.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-1"
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("widget-git-status-section-unstaged-header"));
+    expect(screen.getByTestId("widget-git-status-section-unstaged")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+  });
+});

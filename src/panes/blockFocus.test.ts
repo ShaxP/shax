@@ -104,14 +104,14 @@ describe("dispatchBlockKey", () => {
     });
   });
 
-  it("Space → page-down, b → page-up", () => {
-    // `f` used to alias here but moved to `toggle-maximize` in
-    // the M4.5 fit-to-pane slice; the vim convention is `Ctrl+F`
-    // for page-down and `Space` is the most universal alternative,
-    // so dropping the `f` alias is a small loss for a stronger
-    // mnemonic.
+  it("Space → widget-primary (with page-down fallback), b → page-up", () => {
+    // Space dispatches `widget-primary` — widgets consume for
+    // their per-widget primary action (git-status stages the
+    // focused file, ls will `cd`). TerminalPane falls back to
+    // page-down when no widget claims, so blocks without a
+    // widget still get the pager step users expect.
     expect(dispatchBlockKey(ev({ key: " " }), INITIAL_KEY_STATE).action).toEqual({
-      kind: "page-down",
+      kind: "widget-primary",
     });
     expect(dispatchBlockKey(ev({ key: "b" }), INITIAL_KEY_STATE).action).toEqual({
       kind: "page-up",

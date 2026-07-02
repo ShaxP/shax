@@ -9,10 +9,28 @@
  */
 
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { gitStatusPorcelain } from "../lib/ipc";
+import { GitStatusWidget } from "../widgets/gitStatus/GitStatusWidget";
+import { isWidgetPromotable } from "../widgets/gitStatus/promotionGate";
 import { parseGitStatus, type GitStatus, type StatusEntry } from "./parseGitStatus";
 import { PASS, type Formatter, type FormatterContext } from "./types";
+
+/** Pull the post-`status` portion of the user's argv. */
+function statusArgsFromCtx(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  let pastStatus = false;
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    if (tok === undefined) continue;
+    if (!pastStatus) {
+      if (tok === "status") pastStatus = true;
+      continue;
+    }
+    out.push(tok);
+  }
+  return out;
+}
 
 const HOST: CSSProperties = {
   margin: "4px 0 0 0",
@@ -77,6 +95,7 @@ interface GitStatusViewProps {
 }
 
 function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
+  const args = useMemo(() => statusArgsFromCtx(ctx.argv), [ctx.argv]);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -116,6 +135,12 @@ function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
         Probing git status…
       </div>
     );
+  }
+
+  // Widget renders for the promotable invocation set;
+  // anything else uses the static grouped view below.
+  if (isWidgetPromotable(args)) {
+    return <GitStatusWidget status={status} paneId={ctx.paneId} />;
   }
 
   return (
