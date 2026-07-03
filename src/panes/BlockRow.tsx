@@ -151,6 +151,12 @@ export interface BlockRowProps {
   /** Click handler for the per-row maximise icon. Toggles
    *  `isMaximized` in the parent's state. */
   onToggleMaximize?: () => void;
+  /** True when this row is the most recent block in its pane.
+   *  Interactive widgets (git status, ls) use this to gate
+   *  side effects: only the live block can emit commands;
+   *  historical widgets stay render-only per spec §08's
+   *  freeze rule. Read from the DOM via `data-is-latest`. */
+  isLatest?: boolean;
 }
 
 type Status = "running" | "ok" | "fail" | "aborted";
@@ -327,6 +333,7 @@ function BlockRowInner({
   isMaximized = false,
   hidden = false,
   onToggleMaximize,
+  isLatest = false,
 }: BlockRowProps): React.ReactElement {
   // `userOpen` is the user-toggled override:
   //   - null  → follow the natural default
@@ -628,6 +635,7 @@ function BlockRowInner({
       data-status={status}
       data-selected={selected ? "true" : "false"}
       data-maximized={isMaximized ? "true" : "false"}
+      data-is-latest={isLatest ? "true" : "false"}
       style={containerStyle}
       onClick={onSelect}
     >

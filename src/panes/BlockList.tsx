@@ -220,7 +220,7 @@ export function BlockList({
             )
           : // pty is set together with the first block; once we have blocks we
             // always have a pty id, so the non-null assertion is sound.
-            blocks.map((block) =>
+            blocks.map((block, index) =>
               pty === null ? null : (
                 <BlockRow
                   key={block.id}
@@ -232,6 +232,7 @@ export function BlockList({
                   onSelect={() => onSelectBlock?.(block.id)}
                   isMaximized={block.id === maximizedBlockId}
                   hidden={maximizedBlockId !== null && block.id !== maximizedBlockId}
+                  isLatest={index === blocks.length - 1}
                   onToggleMaximize={
                     onToggleMaximize === undefined ? undefined : () => onToggleMaximize(block.id)
                   }

@@ -105,6 +105,7 @@ export type BlockKeyAction =
   | { kind: "toggle-fmt-raw" }
   | { kind: "toggle-maximize" }
   | { kind: "toggle-side-by-side" }
+  | { kind: "widget-primary" }
   | { kind: "yank" }
   | { kind: "collapse" }
   | { kind: "expand" };
@@ -173,11 +174,13 @@ export function dispatchBlockKey(
   if (key === "l" || key === "ArrowRight") {
     return { action: { kind: "expand" }, state: INITIAL_KEY_STATE };
   }
-  // Space is the conventional pager step; vim's `Ctrl+F` also
-  // pages down. `f` used to alias here but it's a much better
-  // mnemonic for "fit to pane" — see `toggle-maximize` below.
+  // Space: widget-primary if a widget claims (git-status
+  // widget stages the focused file, ls widget will `cd` on
+  // the focused row, etc.). If nothing claims, the App layer
+  // falls back to page-down — the vim / less pager step —
+  // so blocks with no widget behave as they did before.
   if (key === " ") {
-    return { action: { kind: "page-down" }, state: INITIAL_KEY_STATE };
+    return { action: { kind: "widget-primary" }, state: INITIAL_KEY_STATE };
   }
   if (key === "b") {
     return { action: { kind: "page-up" }, state: INITIAL_KEY_STATE };

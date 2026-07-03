@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { gitDiff } from "../lib/ipc";
 import { GitDiffWidget } from "../widgets/gitDiff/GitDiffWidget";
 import { isWidgetPromotable } from "../widgets/gitDiff/promotionGate";
+import { argsAfterSubcommand, findGitDashC, findGitSubcommand } from "./gitArgs";
 import { parseGitDiff, type ParsedDiff } from "./parseGitDiff";
 import { PASS, type Formatter, type FormatterContext } from "./types";
 
@@ -31,37 +32,20 @@ interface GitDiffViewProps {
   ctx: FormatterContext;
 }
 
-/** Pull the post-`diff` portion of the user's argv. We skip the
- *  program name (`git`) and the subcommand (`diff`), then pass
- *  whatever remains to the backend. */
-function diffArgsFromCtx(argv: readonly string[]): string[] {
-  const out: string[] = [];
-  let pastDiff = false;
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i];
-    if (tok === undefined) continue;
-    if (!pastDiff) {
-      if (tok === "diff") pastDiff = true;
-      continue;
-    }
-    out.push(tok);
-  }
-  return out;
-}
-
 function GitDiffView({ ctx }: GitDiffViewProps): React.ReactElement {
-  const args = useMemo(() => diffArgsFromCtx(ctx.argv), [ctx.argv]);
+  const args = useMemo(() => argsAfterSubcommand(ctx.argv), [ctx.argv]);
+  const effectiveCwd = useMemo(() => findGitDashC(ctx.argv) ?? ctx.cwd, [ctx.argv, ctx.cwd]);
   const [diff, setDiff] = useState<ParsedDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setDiff(null);
     setError(null);
-    if (ctx.cwd === null) {
+    if (effectiveCwd === null) {
       setError("git diff: no cwd available");
       return;
     }
     let cancelled = false;
-    void gitDiff(ctx.cwd, args).then(
+    void gitDiff(effectiveCwd, args).then(
       (output) => {
         if (cancelled) return;
         setDiff(parseGitDiff(output));
@@ -75,7 +59,7 @@ function GitDiffView({ ctx }: GitDiffViewProps): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [ctx.cwd, args]);
+  }, [effectiveCwd, args]);
 
   if (error !== null) {
     return (
@@ -98,7 +82,9 @@ function GitDiffView({ ctx }: GitDiffViewProps): React.ReactElement {
 }
 
 function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
-  if (ctx.cwd === null) return PASS;
+  // Same fallback as git status: without any cwd we can't
+  // probe the diff.
+  if (ctx.cwd === null && findGitDashC(ctx.argv) === null) return PASS;
   // Decline for invocations that reshape git diff's output
   // (`--stat`, `--name-only`, `--numstat`, `--shortstat`,
   // `--summary`, `--dirstat`, `--check`, `--compact-summary`,
@@ -108,15 +94,17 @@ function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
   // changes." — misleading, since git *did* produce output.
   // Returning PASS routes the block to RAW, which preserves
   // git's actual `--stat` / summary text.
-  if (!isWidgetPromotable(diffArgsFromCtx(ctx.argv))) return PASS;
+  if (!isWidgetPromotable(argsAfterSubcommand(ctx.argv))) return PASS;
   return <GitDiffView ctx={ctx} />;
 }
 
 export const gitDiffFormatter: Formatter = {
   name: "git-diff",
-  matcher: { kind: "argv0-subcommand", argv0: "git", subcommand: "diff" },
+  // Predicate matcher: same reason as git-status — `git -C
+  // /repo diff` needs to match the same as bare `git diff`.
+  matcher: {
+    kind: "predicate",
+    test: (ctx) => findGitSubcommand(ctx.argv) === "diff",
+  },
   render,
 };
-
-// Exported for the unit test.
-export const __testing = { diffArgsFromCtx };
