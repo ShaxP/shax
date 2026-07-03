@@ -39,14 +39,6 @@ type SectionKind = "unmerged" | "staged" | "unstaged" | "untracked";
 interface GitStatusWidgetProps {
   status: GitStatus;
   paneId: PtyId;
-  /** The cwd at the time `git status` ran — captured from
-   *  OSC 133 A and passed through the FormatterContext. The
-   *  widget uses this to scope every emitted command with
-   *  `git -C <cwd>` so an action fired from a scrollback
-   *  block always operates on the repo the widget actually
-   *  represents, regardless of where the shell has since
-   *  cd'd. Refuses to act when `null`. */
-  cwd: string | null;
 }
 
 const HOST: CSSProperties = {
@@ -138,7 +130,7 @@ type FlatItem =
   | { kind: "section"; section: SectionKind }
   | { kind: "entry"; section: SectionKind; entry: StatusEntry };
 
-export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): React.ReactElement {
+export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React.ReactElement {
   const [collapsedSections, setCollapsedSections] = useState<Record<SectionKind, boolean>>({
     unmerged: false,
     staged: false,
@@ -149,8 +141,26 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
   const focusedIndexRef = useRef<number | null>(null);
   focusedIndexRef.current = focusedIndex;
   const hostRef = useRef<HTMLDivElement>(null);
-  const cwdRef = useRef<string | null>(cwd);
-  cwdRef.current = cwd;
+
+  // Per spec §08 only the most recent block stays live; older
+  // blocks freeze. Read the enclosing block's `data-is-latest`
+  // attribute (set by BlockList on the last row) and keep it
+  // in sync via a MutationObserver so the widget correctly
+  // downgrades to render-only when a newer block arrives.
+  const [isLive, setIsLive] = useState(true);
+  useEffect(() => {
+    const el = hostRef.current;
+    if (el === null) return;
+    const blockEl = el.closest<HTMLElement>("[data-block-id]");
+    if (blockEl === null) return;
+    const sync = (): void => {
+      setIsLive(blockEl.getAttribute("data-is-latest") === "true");
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(blockEl, { attributes: true, attributeFilter: ["data-is-latest"] });
+    return () => observer.disconnect();
+  }, []);
 
   // Flatten sections + entries into an index-addressable list
   // so widget-nav j/k walk every focusable thing without
@@ -259,37 +269,41 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
     const el = hostRef.current;
     if (el === null) return;
     const blockEl = el.closest<HTMLElement>("[data-block-id]");
-    const blockId = blockEl?.getAttribute("data-block-id") ?? null;
+    if (blockEl === null) return;
+    const blockId = blockEl.getAttribute("data-block-id");
     if (blockId === null) return;
     const onPrimary = (e: Event): void => {
       const detail = (e as CustomEvent<{ blockId: string; claimed: boolean }>).detail;
       if (detail?.blockId !== blockId) return;
+      // Historical (non-latest) widgets are frozen per spec
+      // §08. They render, they navigate, they do NOT act — a
+      // stage / unstage fired from scrollback would run in
+      // whatever cwd the shell has drifted to, mutating the
+      // wrong repo. Read `data-is-latest` at emit time (state
+      // can change while the widget is mounted).
+      if (blockEl.getAttribute("data-is-latest") !== "true") return;
       const cur = focusedIndexRef.current;
       if (cur === null) return;
       const item = flatRef.current[cur];
       if (item === undefined || item.kind !== "entry") return;
-      const command = commandForAction(item.section, item.entry, cwdRef.current);
+      const command = commandForAction(item.section, item.entry);
       if (command === null) return;
       window.dispatchEvent(
         new CustomEvent("shax:emit-command", {
           detail: { paneId, command },
         }),
       );
-      // Follow the stage / unstage with a fresh `git status`
-      // so the user sees the updated tree in a new block
-      // right below the action. Per spec §08 the current
-      // widget stays frozen (it's history), but the new
-      // block below is the live snapshot. Same `-C` scope
-      // as the action so the follow-up hits the same repo
-      // even if the shell cwd has drifted.
-      const refresh = refreshCommand(cwdRef.current);
-      if (refresh !== null) {
-        window.dispatchEvent(
-          new CustomEvent("shax:emit-command", {
-            detail: { paneId, command: refresh },
-          }),
-        );
-      }
+      // Follow the action with a fresh `git status` so the
+      // user sees the updated tree in a new block below.
+      // Bare form is safe because the live widget's cwd
+      // equals the shell's cwd (see the cwd JSDoc). The new
+      // status block becomes the live widget; this one is
+      // now frozen.
+      window.dispatchEvent(
+        new CustomEvent("shax:emit-command", {
+          detail: { paneId, command: "git status" },
+        }),
+      );
       detail.claimed = true;
     };
     window.addEventListener("shax:widget-primary", onPrimary);
@@ -317,7 +331,12 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
   const clean = staged === 0 && unstaged === 0 && untracked === 0 && unmerged === 0;
 
   return (
-    <div data-testid="widget-git-status" ref={hostRef} style={HOST}>
+    <div
+      data-testid="widget-git-status"
+      ref={hostRef}
+      data-is-live={isLive ? "true" : "false"}
+      style={{ ...HOST, ...(isLive ? undefined : { opacity: 0.72 }) }}
+    >
       <div style={HEADER}>
         {status.branch.head !== null && (
           <span style={BRANCH_PILL} data-testid="widget-git-status-branch">
@@ -333,6 +352,23 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
             {status.branch.behind > 0 && (
               <span style={{ color: "var(--red)" }}> ↓{status.branch.behind}</span>
             )}
+          </span>
+        )}
+        {!isLive && (
+          <span
+            data-testid="widget-git-status-historical"
+            style={{
+              fontSize: 10,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: "var(--fg-faint)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 3,
+              padding: "1px 6px",
+            }}
+            title="Historical block — re-run `git status` for a live widget"
+          >
+            historical
           </span>
         )}
         <span style={{ flex: 1, textAlign: "right" }} data-testid="widget-git-status-summary">
@@ -358,6 +394,7 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
               kind={kind}
               entries={status[kind]}
               collapsed={collapsedSections[kind]}
+              isLive={isLive}
               onToggleSection={() =>
                 setCollapsedSections((prev) => ({ ...prev, [kind]: !prev[kind] }))
               }
@@ -366,21 +403,25 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
               focusedIndex={focusedIndex}
               onFocusRow={(idx) => setFocusedIndex(idx)}
               onAction={(entry) => {
-                const command = commandForAction(kind, entry, cwd);
+                // Double-click acts only on the live widget —
+                // same rule as the Space handler above. Check
+                // the enclosing block's `data-is-latest` at
+                // click time (the state can change while the
+                // widget is mounted, as new blocks arrive).
+                const blockEl = hostRef.current?.closest<HTMLElement>("[data-block-id]");
+                if (blockEl?.getAttribute("data-is-latest") !== "true") return;
+                const command = commandForAction(kind, entry);
                 if (command === null) return;
                 window.dispatchEvent(
                   new CustomEvent("shax:emit-command", {
                     detail: { paneId, command },
                   }),
                 );
-                const refresh = refreshCommand(cwd);
-                if (refresh !== null) {
-                  window.dispatchEvent(
-                    new CustomEvent("shax:emit-command", {
-                      detail: { paneId, command: refresh },
-                    }),
-                  );
-                }
+                window.dispatchEvent(
+                  new CustomEvent("shax:emit-command", {
+                    detail: { paneId, command: "git status" },
+                  }),
+                );
               }}
             />
           ))
@@ -388,18 +429,6 @@ export function GitStatusWidget({ status, paneId, cwd }: GitStatusWidgetProps): 
       </div>
     </div>
   );
-}
-
-/** Build the `git status` command the widget re-runs after a
- *  stage / unstage so the user sees a fresh block below the
- *  action. Scoped to the widget's origin cwd the same way
- *  action commands are, so it always targets the right repo.
- *  `null` when the widget has no origin cwd (matches
- *  `commandForAction`'s refusal — no gambling on shell
- *  state). */
-function refreshCommand(cwd: string | null): string | null {
-  if (cwd === null) return null;
-  return `git -C ${shellEscape(cwd)} status`;
 }
 
 /** Look up the flat-list index of a specific section's header
@@ -423,32 +452,19 @@ function flatIndexOfEntry(flat: FlatItem[], kind: SectionKind, path: string): nu
 }
 
 /** Build the visible command a Space press should emit for
- *  the given entry. `null` means "no action" (unmerged
- *  conflict — resolving is out of scope for slice 2, or the
- *  widget has no origin cwd to scope the command to).
+ *  the given entry. `null` means "no action" — currently only
+ *  the unmerged / conflict case (resolving is out of scope).
  *
- *  Every command is scoped with `git -C <cwd>` so a Space
- *  press on a scrollback block always targets the repo the
- *  widget represents. That fixes the "shell has cd'd
- *  elsewhere since this block ran" hazard: the emitted
- *  command works from any cwd — same repo, different repo,
- *  no repo at all. If the origin cwd has been deleted since,
- *  git prints "not a git repo" visibly in the scrollback,
- *  which is honest failure. When the widget doesn't know its
- *  origin cwd (rare — no OSC 133 A was captured for that
- *  block) we refuse to act rather than gamble on the current
- *  shell state. */
-function commandForAction(
-  section: SectionKind,
-  entry: StatusEntry,
-  cwd: string | null,
-): string | null {
-  if (cwd === null) return null;
+ *  Bare form because commands only fire from a *live* widget
+ *  (per spec §08 the widget freezes when the next command
+ *  runs). A live widget's origin cwd equals the shell cwd,
+ *  so no `-C <path>` scope is needed. Historical widgets are
+ *  gated out at the caller. */
+function commandForAction(section: SectionKind, entry: StatusEntry): string | null {
   const path = shellEscape(entry.path);
-  const scope = `git -C ${shellEscape(cwd)}`;
-  if (section === "staged") return `${scope} reset HEAD -- ${path}`;
-  if (section === "unstaged") return `${scope} add -- ${path}`;
-  if (section === "untracked") return `${scope} add -- ${path}`;
+  if (section === "staged") return `git reset HEAD -- ${path}`;
+  if (section === "unstaged") return `git add -- ${path}`;
+  if (section === "untracked") return `git add -- ${path}`;
   return null;
 }
 
@@ -471,6 +487,9 @@ interface SectionProps {
   focusedIndex: number | null;
   onFocusRow: (idx: number) => void;
   onAction: (entry: StatusEntry) => void;
+  /** When false, hides the "Space: git add" style hints so
+   *  the entry row doesn't lie about being actionable. */
+  isLive: boolean;
 }
 
 const SECTION_HEADER_FOCUSED: CSSProperties = {
@@ -489,6 +508,7 @@ function Section({
   focusedIndex,
   onFocusRow,
   onAction,
+  isLive,
 }: SectionProps): React.ReactElement | null {
   if (entries.length === 0) return null;
   const title = sectionTitle(kind);
@@ -540,7 +560,7 @@ function Section({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
                 {entry.origPath !== null ? `${entry.origPath} → ${entry.path}` : entry.path}
               </span>
-              {focused && hint !== null && <span style={HINT_STYLE}>{hint}</span>}
+              {focused && isLive && hint !== null && <span style={HINT_STYLE}>{hint}</span>}
             </div>
           );
         })}

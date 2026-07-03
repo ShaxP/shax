@@ -29,13 +29,25 @@ function mkEntry(path: string, overrides: Partial<StatusEntry> = {}): StatusEntr
   };
 }
 
-function withBlock(id: string): (children: React.ReactElement) => React.ReactElement {
-  return (children) => <div data-block-id={id}>{children}</div>;
+/** Wrap the widget in a fake BlockRow ancestor with the
+ *  `data-block-id` + `data-is-latest` attributes the widget
+ *  reads. Default to the *live* case so most tests exercise
+ *  the interactive path; the historical case gets its own
+ *  test with `isLatest: false`. */
+function withBlock(
+  id: string,
+  { isLatest = true }: { isLatest?: boolean } = {},
+): (children: React.ReactElement) => React.ReactElement {
+  return (children) => (
+    <div data-block-id={id} data-is-latest={isLatest ? "true" : "false"}>
+      {children}
+    </div>
+  );
 }
 
 describe("GitStatusWidget", () => {
   it("shows a clean-tree note when nothing has changed", () => {
-    render(<GitStatusWidget status={mkStatus()} paneId="pty-1" cwd="/repo-a" />);
+    render(<GitStatusWidget status={mkStatus()} paneId="pty-1" />);
     expect(screen.getByTestId("widget-git-status")).toHaveTextContent(
       "nothing to commit, working tree clean",
     );
@@ -50,7 +62,6 @@ describe("GitStatusWidget", () => {
           untracked: [mkEntry("new.txt", { index: "?", worktree: "?" })],
         })}
         paneId="pty-1"
-        cwd="/repo-a"
       />,
     );
     expect(screen.getByTestId("widget-git-status-section-staged")).toHaveTextContent("src/a.ts");
@@ -70,7 +81,6 @@ describe("GitStatusWidget", () => {
           ],
         })}
         paneId="pty-1"
-        cwd="/repo-a"
       />,
     );
     expect(screen.getByTestId("widget-git-status-branch")).toHaveTextContent("feat/x");
@@ -88,7 +98,6 @@ describe("GitStatusWidget", () => {
             unstaged: [mkEntry("b.ts", { index: ".", worktree: "M" })],
           })}
           paneId="pty-1"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -136,7 +145,6 @@ describe("GitStatusWidget", () => {
             staged: [mkEntry("a.ts", { index: "M", worktree: "." })],
           })}
           paneId="pty-1"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -179,7 +187,6 @@ describe("GitStatusWidget", () => {
             unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
           })}
           paneId="pty-42"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -208,11 +215,11 @@ describe("GitStatusWidget", () => {
     const second = spy.mock.calls[1]?.[0] as CustomEvent<{ paneId: string; command: string }>;
     expect(first.detail).toEqual({
       paneId: "pty-42",
-      command: "git -C /repo-a add -- src/foo.ts",
+      command: "git add -- src/foo.ts",
     });
     expect(second.detail).toEqual({
       paneId: "pty-42",
-      command: "git -C /repo-a status",
+      command: "git status",
     });
     window.removeEventListener("shax:emit-command", spy);
   });
@@ -227,7 +234,6 @@ describe("GitStatusWidget", () => {
             staged: [mkEntry("src/foo.ts", { index: "M", worktree: "." })],
           })}
           paneId="pty-42"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -245,7 +251,7 @@ describe("GitStatusWidget", () => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
     });
     const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    expect(call.detail.command).toBe("git -C /repo-a reset HEAD -- src/foo.ts");
+    expect(call.detail.command).toBe("git reset HEAD -- src/foo.ts");
     window.removeEventListener("shax:emit-command", spy);
   });
 
@@ -259,7 +265,6 @@ describe("GitStatusWidget", () => {
             unmerged: [mkEntry("src/foo.ts", { unmerged: true })],
           })}
           paneId="pty-42"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -291,7 +296,6 @@ describe("GitStatusWidget", () => {
             unstaged: [mkEntry("path with spaces/file.txt", { index: ".", worktree: "M" })],
           })}
           paneId="pty-42"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -312,74 +316,44 @@ describe("GitStatusWidget", () => {
       );
     });
     const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    expect(call.detail.command).toBe("git -C /repo-a add -- 'path with spaces/file.txt'");
+    expect(call.detail.command).toBe("git add -- 'path with spaces/file.txt'");
     window.removeEventListener("shax:emit-command", spy);
   });
 
-  it("refuses to act when the widget has no origin cwd (unclaims Space)", () => {
+  it("historical (non-latest) widgets refuse to act on Space", () => {
     const spy = vi.fn();
     window.addEventListener("shax:emit-command", spy);
     render(
-      withBlock("bnull")(
+      withBlock("bold", { isLatest: false })(
         <GitStatusWidget
           status={mkStatus({
             unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
           })}
           paneId="pty-42"
-          cwd={null}
         />,
       ),
     );
+    // Nav still works — historical widgets stay navigable.
     for (let i = 0; i < 2; i++) {
       act(() => {
         window.dispatchEvent(
           new CustomEvent("shax:widget-nav", {
-            detail: { blockId: "bnull", direction: "down", claimed: false },
+            detail: { blockId: "bold", direction: "down", claimed: false },
           }),
         );
       });
     }
-    const primaryDetail = { blockId: "bnull", claimed: false };
+    // Space, however, does not claim and emits nothing.
+    const primaryDetail = { blockId: "bold", claimed: false };
     act(() => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
     });
     expect(primaryDetail.claimed).toBe(false);
     expect(spy).not.toHaveBeenCalled();
-    window.removeEventListener("shax:emit-command", spy);
-  });
-
-  it("quotes the origin cwd when it contains unusual characters", () => {
-    const spy = vi.fn();
-    window.addEventListener("shax:emit-command", spy);
-    render(
-      withBlock("bcwd")(
-        <GitStatusWidget
-          status={mkStatus({
-            unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
-          })}
-          paneId="pty-42"
-          cwd="/Users/ada/my repo"
-        />,
-      ),
-    );
-    for (let i = 0; i < 2; i++) {
-      act(() => {
-        window.dispatchEvent(
-          new CustomEvent("shax:widget-nav", {
-            detail: { blockId: "bcwd", direction: "down", claimed: false },
-          }),
-        );
-      });
-    }
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:widget-primary", {
-          detail: { blockId: "bcwd", claimed: false },
-        }),
-      );
-    });
-    const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    expect(call.detail.command).toBe("git -C '/Users/ada/my repo' add -- src/foo.ts");
+    // Widget renders a `historical` badge and marks itself as
+    // not-live via the data attribute.
+    expect(screen.getByTestId("widget-git-status-historical")).toBeInTheDocument();
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "false");
     window.removeEventListener("shax:emit-command", spy);
   });
 
@@ -392,7 +366,6 @@ describe("GitStatusWidget", () => {
             unstaged: [mkEntry("b.ts", { index: ".", worktree: "M" })],
           })}
           paneId="pty-1"
-          cwd="/repo-a"
         />,
       ),
     );
@@ -432,7 +405,6 @@ describe("GitStatusWidget", () => {
             unstaged: [mkEntry("a.ts", { index: ".", worktree: "M" })],
           })}
           paneId="pty-1"
-          cwd="/repo-a"
         />,
       ),
     );

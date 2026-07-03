@@ -130,7 +130,7 @@ function GitStatusView({ ctx }: GitStatusViewProps): React.ReactElement {
   // Widget renders for the promotable invocation set;
   // anything else uses the static grouped view below.
   if (isWidgetPromotable(args)) {
-    return <GitStatusWidget status={status} paneId={ctx.paneId} cwd={effectiveCwd} />;
+    return <GitStatusWidget status={status} paneId={ctx.paneId} />;
   }
 
   return (
