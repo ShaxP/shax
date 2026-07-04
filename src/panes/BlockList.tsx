@@ -155,7 +155,19 @@ export function BlockList({
         color: "var(--fg)",
       }}
     >
-      <div ref={contentRef}>
+      <div
+        ref={contentRef}
+        style={{
+          // Flex column so a live interactive widget can pin
+          // itself visually to the bottom via CSS `order`
+          // while chronological emissions (git add / reset
+          // / status) slot in above it. See
+          // `.block-row[data-widget-live="true"]` in
+          // BlockRow.css for the rule.
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         <header
           style={{
             padding: "8px 10px",
