@@ -31,14 +31,23 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { GitStatus, StatusEntry } from "../../formatters/parseGitStatus";
-import type { PtyId } from "../../lib/ipc";
+import { parseGitStatus, type GitStatus, type StatusEntry } from "../../formatters/parseGitStatus";
+import { gitStatusPorcelain, type PtyId } from "../../lib/ipc";
 
 type SectionKind = "unmerged" | "staged" | "unstaged" | "untracked";
 
 interface GitStatusWidgetProps {
+  /** Initial status snapshot from the formatter's first probe.
+   *  The widget re-probes silently after each of its own emits
+   *  and updates in place — the initial prop is only the
+   *  first-paint value. */
   status: GitStatus;
   paneId: PtyId;
+  /** Cwd the widget probes against on refresh. When null the
+   *  widget can't re-probe and disables its refresh path.
+   *  Optional so tests can omit it — the formatter always
+   *  passes it in production. */
+  cwd?: string | null;
 }
 
 const HOST: CSSProperties = {
@@ -130,7 +139,11 @@ type FlatItem =
   | { kind: "section"; section: SectionKind }
   | { kind: "entry"; section: SectionKind; entry: StatusEntry };
 
-export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React.ReactElement {
+export function GitStatusWidget({
+  status: initialStatus,
+  paneId,
+  cwd = null,
+}: GitStatusWidgetProps): React.ReactElement {
   const [collapsedSections, setCollapsedSections] = useState<Record<SectionKind, boolean>>({
     unmerged: false,
     staged: false,
@@ -142,25 +155,70 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
   focusedIndexRef.current = focusedIndex;
   const hostRef = useRef<HTMLDivElement>(null);
 
-  // Per spec §08 only the most recent block stays live; older
-  // blocks freeze. Read the enclosing block's `data-is-latest`
-  // attribute (set by BlockList on the last row) and keep it
-  // in sync via a MutationObserver so the widget correctly
-  // downgrades to render-only when a newer block arrives.
+  // Own the status snapshot locally so we can silently
+  // re-probe after our own emits. First render uses the
+  // formatter's probe; every subsequent stage/unstage triggers
+  // a background `gitStatusPorcelain` call and swaps the
+  // status in place — no follow-up `git status` block in
+  // scrollback (spec §08 "visible writes, silent reads").
+  const [status, setStatus] = useState<GitStatus>(initialStatus);
+  const cwdRef = useRef<string | null>(cwd);
+  cwdRef.current = cwd;
+
+  // Freeze / live: initial state is live. A `user`-sourced
+  // block completion (from `shax:block-complete`) freezes the
+  // widget; a `widget`-sourced completion triggers a silent
+  // re-probe and keeps the widget live. Historical widgets
+  // stay navigable but refuse to act.
   const [isLive, setIsLive] = useState(true);
+  const isLiveRef = useRef(true);
+  isLiveRef.current = isLive;
   useEffect(() => {
     const el = hostRef.current;
     if (el === null) return;
     const blockEl = el.closest<HTMLElement>("[data-block-id]");
     if (blockEl === null) return;
-    const sync = (): void => {
-      setIsLive(blockEl.getAttribute("data-is-latest") === "true");
+    // If the widget mounts on an already-non-latest block
+    // (rare: history restore, search inspection), it's frozen
+    // from the start.
+    if (blockEl.getAttribute("data-is-latest") !== "true") setIsLive(false);
+    // Set `data-widget-live` on the row so BlockRow.css can
+    // pin the row to the visual bottom of the list while the
+    // widget is interactive. A separate effect keeps this in
+    // sync when `isLive` flips.
+    blockEl.setAttribute("data-widget-live", "true");
+    const onBlockComplete = (e: Event): void => {
+      const detail = (
+        e as CustomEvent<{ paneId: string; blockId: string; source: "widget" | "user" }>
+      ).detail;
+      if (detail?.paneId !== paneId) return;
+      if (detail.source === "widget") {
+        // Widget-emitted action just finished. Re-probe
+        // silently — no scrollback churn — and refresh.
+        const currentCwd = cwdRef.current;
+        if (currentCwd === null) return;
+        void gitStatusPorcelain(currentCwd).then(
+          (output) => {
+            setStatus(parseGitStatus(output));
+          },
+          (err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`git-status widget refresh failed: ${msg}`);
+          },
+        );
+        return;
+      }
+      // User-typed command completed → freeze this widget.
+      // The scrollback still has the honest history of what
+      // ran; we just stop being interactive.
+      setIsLive(false);
     };
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(blockEl, { attributes: true, attributeFilter: ["data-is-latest"] });
-    return () => observer.disconnect();
-  }, []);
+    window.addEventListener("shax:block-complete", onBlockComplete);
+    return () => {
+      window.removeEventListener("shax:block-complete", onBlockComplete);
+      blockEl.removeAttribute("data-widget-live");
+    };
+  }, [paneId]);
 
   // Flatten sections + entries into an index-addressable list
   // so widget-nav j/k walk every focusable thing without
@@ -275,13 +333,11 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
     const onPrimary = (e: Event): void => {
       const detail = (e as CustomEvent<{ blockId: string; claimed: boolean }>).detail;
       if (detail?.blockId !== blockId) return;
-      // Historical (non-latest) widgets are frozen per spec
-      // §08. They render, they navigate, they do NOT act — a
-      // stage / unstage fired from scrollback would run in
-      // whatever cwd the shell has drifted to, mutating the
-      // wrong repo. Read `data-is-latest` at emit time (state
-      // can change while the widget is mounted).
-      if (blockEl.getAttribute("data-is-latest") !== "true") return;
+      // Frozen (historical) widgets refuse to act. `isLive`
+      // flips false when a user-typed block completes, so we
+      // read it via a ref to see the latest value without
+      // re-registering the listener.
+      if (!isLiveRef.current) return;
       const cur = focusedIndexRef.current;
       if (cur === null) return;
       const item = flatRef.current[cur];
@@ -293,22 +349,31 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
           detail: { paneId, command },
         }),
       );
-      // Follow the action with a fresh `git status` so the
-      // user sees the updated tree in a new block below.
-      // Bare form is safe because the live widget's cwd
-      // equals the shell's cwd (see the cwd JSDoc). The new
-      // status block becomes the live widget; this one is
-      // now frozen.
-      window.dispatchEvent(
-        new CustomEvent("shax:emit-command", {
-          detail: { paneId, command: "git status" },
-        }),
-      );
+      // No follow-up `git status` here — the widget re-probes
+      // silently when the emitted block completes (see the
+      // `shax:block-complete` listener above) and updates in
+      // place. Scrollback shows only the real action, not the
+      // read-only refresh probe.
       detail.claimed = true;
     };
     window.addEventListener("shax:widget-primary", onPrimary);
     return () => window.removeEventListener("shax:widget-primary", onPrimary);
   }, [paneId]);
+
+  // Keep `data-widget-live` on the enclosing block row in
+  // sync with `isLive`. On freeze, drop the attribute so the
+  // row falls back to chronological order in the block list.
+  useEffect(() => {
+    const el = hostRef.current;
+    if (el === null) return;
+    const blockEl = el.closest<HTMLElement>("[data-block-id]");
+    if (blockEl === null) return;
+    if (isLive) {
+      blockEl.setAttribute("data-widget-live", "true");
+    } else {
+      blockEl.removeAttribute("data-widget-live");
+    }
+  }, [isLive]);
 
   // Scroll the focused row (section header OR entry) into
   // view as focus moves. Uses `[data-focused="true"]` so it
@@ -408,8 +473,7 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
                 // the enclosing block's `data-is-latest` at
                 // click time (the state can change while the
                 // widget is mounted, as new blocks arrive).
-                const blockEl = hostRef.current?.closest<HTMLElement>("[data-block-id]");
-                if (blockEl?.getAttribute("data-is-latest") !== "true") return;
+                if (!isLive) return;
                 const command = commandForAction(kind, entry);
                 if (command === null) return;
                 window.dispatchEvent(
@@ -417,11 +481,8 @@ export function GitStatusWidget({ status, paneId }: GitStatusWidgetProps): React
                     detail: { paneId, command },
                   }),
                 );
-                window.dispatchEvent(
-                  new CustomEvent("shax:emit-command", {
-                    detail: { paneId, command: "git status" },
-                  }),
-                );
+                // No follow-up emit — the block-complete
+                // listener above will silently re-probe.
               }}
             />
           ))

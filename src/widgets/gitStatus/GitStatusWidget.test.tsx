@@ -1,8 +1,20 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, expect, it, vi } from "vitest";
 import { GitStatusWidget } from "./GitStatusWidget";
 import type { GitStatus, StatusEntry } from "../../formatters/parseGitStatus";
+
+// The widget calls `gitStatusPorcelain` directly for silent
+// refresh. Mock it so tests can drive the "block-complete →
+// re-probe" path without a real Tauri context.
+vi.mock("../../lib/ipc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/ipc")>();
+  return {
+    ...actual,
+    gitStatusPorcelain: vi.fn().mockResolvedValue(""),
+  };
+});
+import { gitStatusPorcelain } from "../../lib/ipc";
 
 const EMPTY_BRANCH = { head: "main", oid: null, upstream: null, ahead: 0, behind: 0 };
 
@@ -207,19 +219,15 @@ describe("GitStatusWidget", () => {
       window.dispatchEvent(new CustomEvent("shax:widget-primary", { detail: primaryDetail }));
     });
     expect(primaryDetail.claimed).toBe(true);
-    // Two emitted commands: the action itself, then a
-    // `git status` refresh so the user sees the updated tree
-    // in a fresh block right below.
-    expect(spy).toHaveBeenCalledTimes(2);
-    const first = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    const second = spy.mock.calls[1]?.[0] as CustomEvent<{ paneId: string; command: string }>;
-    expect(first.detail).toEqual({
+    // Only the action is emitted — the refresh happens
+    // silently via the block-complete listener + a direct
+    // `gitStatusPorcelain` re-probe, so no `git status`
+    // follow-up appears in the scrollback.
+    expect(spy).toHaveBeenCalledTimes(1);
+    const only = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
+    expect(only.detail).toEqual({
       paneId: "pty-42",
       command: "git add -- src/foo.ts",
-    });
-    expect(second.detail).toEqual({
-      paneId: "pty-42",
-      command: "git status",
     });
     window.removeEventListener("shax:emit-command", spy);
   });
@@ -318,6 +326,69 @@ describe("GitStatusWidget", () => {
     const call = spy.mock.calls[0]?.[0] as CustomEvent<{ paneId: string; command: string }>;
     expect(call.detail.command).toBe("git add -- 'path with spaces/file.txt'");
     window.removeEventListener("shax:emit-command", spy);
+  });
+
+  it("silent refresh: after a widget-emit block completes, the widget re-probes", async () => {
+    const porcelainMock = vi.mocked(gitStatusPorcelain);
+    porcelainMock.mockClear();
+    // Post-stage snapshot: the file that was previously
+    // unstaged is now in the staged bucket. Porcelain v2 with
+    // `-z` uses NUL record separators.
+    porcelainMock.mockResolvedValueOnce(
+      ["# branch.head main", "1 M. N... 100644 100644 100644 aa aa src/foo.ts", ""].join("\0"),
+    );
+    render(
+      withBlock("brefresh")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-42"
+          cwd="/repo-a"
+        />,
+      ),
+    );
+    // Simulate the widget's own emit having just completed.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-complete", {
+          detail: { paneId: "pty-42", blockId: "bwidget", source: "widget" },
+        }),
+      );
+    });
+    await waitFor(() => expect(porcelainMock).toHaveBeenCalledWith("/repo-a"));
+    // Widget picks up the new snapshot: file moved to staged.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-git-status-section-staged")).toHaveTextContent(
+        "src/foo.ts",
+      ),
+    );
+    // Widget stays live (not frozen).
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "true");
+  });
+
+  it("user-typed block completion freezes the widget", () => {
+    render(
+      withBlock("bfreeze")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-42"
+          cwd="/repo-a"
+        />,
+      ),
+    );
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "true");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-complete", {
+          detail: { paneId: "pty-42", blockId: "buser", source: "user" },
+        }),
+      );
+    });
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "false");
+    expect(screen.getByTestId("widget-git-status-historical")).toBeInTheDocument();
   });
 
   it("historical (non-latest) widgets refuse to act on Space", () => {

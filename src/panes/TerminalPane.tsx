@@ -810,6 +810,25 @@ function TerminalPaneInner({
             git_branch: event.git_branch,
             interactive: event.interactive,
           });
+          // Notify widgets: this block just finished. If we
+          // have an outstanding widget-emit, it's the one that
+          // just completed (blocks complete in emit order) —
+          // tag as `source: "widget"` so the widget re-probes
+          // silently. Otherwise it's a user-typed command,
+          // which should freeze any live widgets in this pane.
+          {
+            const source = pendingWidgetEmitsRef.current > 0 ? "widget" : "user";
+            if (source === "widget") pendingWidgetEmitsRef.current--;
+            window.dispatchEvent(
+              new CustomEvent("shax:block-complete", {
+                detail: {
+                  paneId: ptyIdRef.current,
+                  blockId: event.block_id,
+                  source,
+                },
+              }),
+            );
+          }
           break;
 
         case "block_chunk":
@@ -966,12 +985,22 @@ function TerminalPaneInner({
   // hijack pane B's shell. `paneId` is the caller's own view
   // of the target — for widgets rendered by the git-status /
   // git-diff formatters, it's `ctx.paneId`.
+  // Widget-emit → block-complete correlation. Widgets need to
+  // know when the command they just emitted has finished so
+  // they can re-probe their structured data silently and
+  // refresh in place (spec §08's "visible writes / silent
+  // reads" model). We assume blocks complete in emit order
+  // and pop a counter as each `block_completed` event arrives
+  // in the PTY handler below.
+  const pendingWidgetEmitsRef = useRef(0);
+
   useEffect(() => {
     const handler = (e: Event): void => {
       const detail = (e as CustomEvent<{ paneId: string; command: string }>).detail;
       if (detail?.paneId !== ptyIdRef.current) return;
       const id = ptyIdRef.current;
       if (id === null) return;
+      pendingWidgetEmitsRef.current++;
       void writePty(id, new TextEncoder().encode(`${detail.command}\n`));
     };
     window.addEventListener("shax:emit-command", handler);
