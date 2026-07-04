@@ -55,3 +55,21 @@
 .block-row:hover .block-row-actions {
   opacity: 1;
 }
+
+/*
+ * Sticky-live: while a widget inside a block is still
+ * interactive (see e.g. GitStatusWidget's `data-widget-live`
+ * sync), pin the block visually to the end of the list so
+ * emissions from the widget slot in above it in chronological
+ * order without pushing the widget out of the user's viewport.
+ *
+ * BlockList's content container is a flex column; default
+ * order is 0, so every other row keeps its insertion order.
+ * The live widget's row gets order:1 and always renders last.
+ * When the widget freezes it drops the attribute and falls
+ * back into chronological place — the honest log stays
+ * honest, the interactive view stays anchored.
+ */
+.block-row[data-widget-live="true"] {
+  order: 1;
+}

@@ -182,6 +182,11 @@ export function GitStatusWidget({
     // (rare: history restore, search inspection), it's frozen
     // from the start.
     if (blockEl.getAttribute("data-is-latest") !== "true") setIsLive(false);
+    // Set `data-widget-live` on the row so BlockRow.css can
+    // pin the row to the visual bottom of the list while the
+    // widget is interactive. A separate effect keeps this in
+    // sync when `isLive` flips.
+    blockEl.setAttribute("data-widget-live", "true");
     const onBlockComplete = (e: Event): void => {
       const detail = (
         e as CustomEvent<{ paneId: string; blockId: string; source: "widget" | "user" }>
@@ -209,7 +214,10 @@ export function GitStatusWidget({
       setIsLive(false);
     };
     window.addEventListener("shax:block-complete", onBlockComplete);
-    return () => window.removeEventListener("shax:block-complete", onBlockComplete);
+    return () => {
+      window.removeEventListener("shax:block-complete", onBlockComplete);
+      blockEl.removeAttribute("data-widget-live");
+    };
   }, [paneId]);
 
   // Flatten sections + entries into an index-addressable list
@@ -351,6 +359,21 @@ export function GitStatusWidget({
     window.addEventListener("shax:widget-primary", onPrimary);
     return () => window.removeEventListener("shax:widget-primary", onPrimary);
   }, [paneId]);
+
+  // Keep `data-widget-live` on the enclosing block row in
+  // sync with `isLive`. On freeze, drop the attribute so the
+  // row falls back to chronological order in the block list.
+  useEffect(() => {
+    const el = hostRef.current;
+    if (el === null) return;
+    const blockEl = el.closest<HTMLElement>("[data-block-id]");
+    if (blockEl === null) return;
+    if (isLive) {
+      blockEl.setAttribute("data-widget-live", "true");
+    } else {
+      blockEl.removeAttribute("data-widget-live");
+    }
+  }, [isLive]);
 
   // Scroll the focused row (section header OR entry) into
   // view as focus moves. Uses `[data-focused="true"]` so it
