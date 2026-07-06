@@ -110,15 +110,20 @@ Three slices, in this order. None gates the next milestone — but doing them no
 
 **Exit:** the three widgets work behind the gate; pipes, redirects, scripts, and SSH correctly degrade to static or raw; every action emits a visible command; older widgets freeze and refresh correctly.
 
-## M6 Assistant, auth, and the gate
+## M6 Assistant, auth, and the gate (pluggable providers)
 
-**Goal:** AI sprinkled in, safely. **Lead:** ai, with frontend for the dialog.
+**Goal:** AI sprinkled in, safely, with the provider a user choice. **Lead:** ai, with frontend for the dialog.
 
-- The local Agent SDK integration with constrained tools; the two auth lanes (`09`).
-- Natural-language-to-command, explain-on-error, and the optional agentic goal mode.
-- The permission and approval gate fronting every side effect (`10`), shared by widgets and the assistant.
+- The `AssistantProvider` interface (`09`) with capability-based feature gating and a `privacyPosture` label surfaced prominently in settings.
+- The permission and approval gate fronting every side effect (`10`), provider-agnostic and shared by widgets and the assistant.
+- **Claude** as the first provider — both auth lanes (subscription via the local install, and API key). Full capabilities.
+- **Ollama** as the second provider — local, no auth, capability set probed at connect time. Chosen because it stress-tests the graceful-degradation model (no tools, no subagents on many models).
+- Natural-language-to-command, explain-on-error, and the optional agentic goal mode — all capability-gated, with a clear "requires tool-calling" hint on providers that lack the capability.
+- Tools defined once in Anthropic's tool-use schema; non-Claude providers get a translation layer.
 
-**Exit:** both auth lanes work (subscription via local install, and API key) with no credential handling by Shax; the assistant is explicit-by-default; no side effect runs without passing the gate; destructive patterns get the stronger confirmation.
+**Exit:** the two first-party providers work end-to-end; feature availability degrades gracefully based on declared capabilities; the assistant is explicit-by-default; no side effect runs without passing the gate; destructive patterns get the stronger confirmation; the "local — nothing leaves your machine" label is visible on Ollama in settings.
+
+**Next-to-implement (M6.5 / M7):** OpenAI (API key), GitHub Copilot (device flow, no long-lived token in Shax), MLX (local, Apple Silicon). Community providers via the sandbox pattern deferred further.
 
 ## M7 Semantic search and polish
 
