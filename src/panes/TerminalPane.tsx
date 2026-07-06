@@ -999,17 +999,34 @@ function TerminalPaneInner({
   // in the PTY handler below.
   const pendingWidgetEmitsRef = useRef(0);
 
+  // Post-M6-slice-1: the raw `shax:emit-command` no longer
+  // reaches us directly. It's intercepted by the App-level
+  // `SafetyGate` (spec §10), classified as
+  // routine / destructive / ai, and — on approval —
+  // re-dispatched as `shax:emit-command-approved`. That's the
+  // event we act on. The chokepoint invariant: no PTY write
+  // driven by an assistant, widget, or palette action skips
+  // the gate. `source: "widget"` is the current mainline; AI
+  // and palette sources arrive in later slices.
   useEffect(() => {
     const handler = (e: Event): void => {
-      const detail = (e as CustomEvent<{ paneId: string; command: string }>).detail;
+      const detail = (
+        e as CustomEvent<{ paneId: string; command: string; source: "widget" | "ai" | "palette" }>
+      ).detail;
       if (detail?.paneId !== ptyIdRef.current) return;
       const id = ptyIdRef.current;
       if (id === null) return;
+      // Widget-sourced emits get the block-complete tagging
+      // treatment; AI / palette emits also count as
+      // "widget-initiated" from the block-complete correlation
+      // point of view — they weren't typed by the user, and
+      // they should trigger the same silent-refresh behaviour
+      // on the enclosing widget (if any).
       pendingWidgetEmitsRef.current++;
       void writePty(id, new TextEncoder().encode(`${detail.command}\n`));
     };
-    window.addEventListener("shax:emit-command", handler);
-    return () => window.removeEventListener("shax:emit-command", handler);
+    window.addEventListener("shax:emit-command-approved", handler);
+    return () => window.removeEventListener("shax:emit-command-approved", handler);
   }, []);
 
   // Forward typed bytes from the PromptStrip to the PTY. The strip never
