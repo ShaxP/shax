@@ -583,7 +583,8 @@ function TerminalPaneInner({
    *  TerminalPane shouldn't need a wider awareness. */
   const overlayIsOpen = (): boolean =>
     document.querySelector('[data-testid="search-overlay"]') !== null ||
-    document.querySelector('[data-testid="block-viewer-modal"]') !== null;
+    document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
+    document.querySelector('[data-testid="safety-gate"]') !== null;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
