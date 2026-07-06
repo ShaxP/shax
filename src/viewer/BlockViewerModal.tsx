@@ -228,6 +228,18 @@ export function BlockViewerModal({
   const modalSrcAvailableRef = useRef(false);
   const modalInfoAvailableRef = useRef(false);
   const hasFormatterRef = useRef(false);
+
+  // Steal keyboard focus from the prompt strip on mount so
+  // typed keys don't leak into the shell behind the modal.
+  // The panel is `tabIndex={-1}` — programmatically focusable
+  // but not part of the normal tab order — so this doesn't
+  // change tab navigation elsewhere. The `onClose` path fires
+  // `shax:refocus-pane` from the App layer, which restores
+  // focus to the prompt.
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
@@ -475,7 +487,7 @@ export function BlockViewerModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={panelRef} style={PANEL}>
+      <div ref={panelRef} style={PANEL} tabIndex={-1}>
         <div style={HEADER}>
           <span style={TITLE} data-testid="block-viewer-title">
             {block.command ?? "(no command)"}
