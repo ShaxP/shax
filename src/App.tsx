@@ -36,6 +36,7 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
+import { SafetyGate } from "./safetyGate/SafetyGate";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
@@ -767,6 +768,11 @@ export default function App(): React.ReactElement {
           }}
         />
       )}
+      {/* One safety-gate instance for the whole app. Every
+       *  `shax:emit-command` from a widget, the assistant, or
+       *  the pane palette passes through this before it
+       *  reaches TerminalPane's PTY writer (spec §10). */}
+      <SafetyGate />
     </div>
   );
 }
