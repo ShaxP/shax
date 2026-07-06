@@ -628,10 +628,15 @@ function TerminalPaneInner({
       );
       chordStateRef.current = nextChord;
       if (action.kind === "noop") {
-        // Eat the keystroke only if it's the pending-g chord
-        // arming step — otherwise let the system / shell handle
-        // it. We don't want block-focus to swallow `Cmd+T` etc.
-        if (nextChord.pendingG) {
+        // Block-focus is a modal state — keys the dispatcher
+        // doesn't map should NOT fall through to the prompt.
+        // Eat any bare-key noop so letters / numbers / punct
+        // typed while a block is focused don't echo into the
+        // shell. Keys carrying a system modifier (Cmd / Ctrl /
+        // Alt) pass through so `Cmd+T` new tab, `Cmd+/` split,
+        // etc. still work.
+        const hasSystemModifier = e.metaKey || e.ctrlKey || e.altKey;
+        if (!hasSystemModifier || nextChord.pendingG) {
           e.preventDefault();
           e.stopPropagation();
         }
