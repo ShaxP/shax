@@ -35,4 +35,12 @@ base64 = "0.22.1"
 vte = "0.15.0"
 tempfile = "3.27.0"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
+# M6 assistant. reqwest for HTTPS to Anthropic; futures-util
+# for streaming the response body chunk-by-chunk (SSE parsed
+# in `assistant::anthropic::sse`); keyring for OS-native
+# credential storage (macOS Keychain / Windows Credential
+# Manager / Linux Secret Service).
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
