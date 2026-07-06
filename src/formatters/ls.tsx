@@ -26,6 +26,8 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { readDirEntries, type DirEntry } from "../lib/ipc";
+import { LsWidget } from "../widgets/ls/LsWidget";
+import { isWidgetPromotable } from "../widgets/ls/promotionGate";
 import { PASS, type Formatter, type FormatterContext } from "./types";
 
 // ─── flag parsing ────────────────────────────────────────────────────────────
@@ -355,6 +357,14 @@ function LsView({ ctx }: LsViewProps): React.ReactElement {
         Probing {target}…
       </div>
     );
+  }
+
+  // Widget promotion (M5 slice 3). Bare `ls`, `-a`, path
+  // args, and known "safe" flags render as the interactive
+  // widget. Anything else falls through to the static grid /
+  // long list below.
+  if (target !== null && isWidgetPromotable(ctx.argv)) {
+    return <LsWidget initialEntries={entries} dirPath={target} paneId={ctx.paneId} flags={flags} />;
   }
 
   const view = applyLsView(entries, flags);
