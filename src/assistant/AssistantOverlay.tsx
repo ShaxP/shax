@@ -285,7 +285,10 @@ export function AssistantOverlay({
     return "";
   }, [config, provider]);
 
-  // Focus the panel on mount; close via Escape.
+  // Focus the panel on mount as a fallback; close via
+  // Escape. When a provider is available the textarea takes
+  // focus instead (see the effect below) so the user can
+  // start typing without an extra click.
   useEffect(() => {
     panelRef.current?.focus();
     const onKey = (e: KeyboardEvent): void => {
@@ -298,6 +301,15 @@ export function AssistantOverlay({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
+
+  // When the provider resolves, hand focus to the textarea so
+  // the user can type immediately. If the provider stays
+  // null (nothing configured), leave focus on the panel so
+  // the "Open Settings" button is reachable via Tab / Enter.
+  useEffect(() => {
+    if (provider === null) return;
+    textareaRef.current?.focus();
+  }, [provider]);
 
   // Auto-scroll to bottom as messages / streaming deltas
   // arrive.
