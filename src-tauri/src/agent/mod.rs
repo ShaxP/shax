@@ -13,6 +13,7 @@ pub mod anthropic;
 pub mod claude_cli;
 pub mod config;
 pub mod keychain;
+pub mod ollama;
 pub mod sse;
 
 use tauri::ipc::Channel;
@@ -20,6 +21,7 @@ use tauri::ipc::Channel;
 use anthropic::{stream_messages, StreamEvent, StreamInput};
 use claude_cli::{probe as probe_claude_cli, stream_via_cli};
 use config::AssistantConfig;
+use ollama::{probe as probe_ollama, stream_chat as stream_ollama, ProbeResult as OllamaProbe};
 
 // --- Tauri commands ---------------------------------------
 
@@ -70,6 +72,33 @@ pub async fn claude_cli_stream(
         let _ = on_event.send(event);
     };
     stream_via_cli(input, emit).await.map_err(|e| e.to_string())
+}
+
+// --- Ollama lane (slice 3) --------------------------------
+
+/// Probe the local Ollama daemon. Returns whether it's
+/// reachable and, if so, the list of installed models. The
+/// settings UI populates its model dropdown from this.
+/// Never errors — an unreachable daemon is a valid state,
+/// reported as `reachable: false`.
+#[tauri::command]
+pub async fn ollama_probe() -> OllamaProbe {
+    probe_ollama().await
+}
+
+/// Stream a chat completion via the local Ollama daemon.
+/// Same `StreamEvent` shape as `claude_stream` — the
+/// renderer's `OllamaProvider` translates events for the
+/// chat surface.
+#[tauri::command]
+pub async fn ollama_stream(
+    input: StreamInput,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
+    let emit = move |event: StreamEvent| {
+        let _ = on_event.send(event);
+    };
+    stream_ollama(input, emit).await.map_err(|e| e.to_string())
 }
 
 // --- Config persistence -----------------------------------

@@ -12,15 +12,22 @@
 export type ClaudeLane = "api-key" | "subscription" | "none";
 
 export interface AssistantConfig {
+  /** Active provider id. `"claude"` | `"ollama"` for M6. */
   provider: string;
+  /** Which Claude lane is active when `provider === "claude"`. */
   claude_lane: ClaudeLane;
-  model: string | null;
+  /** Model override for the Claude provider. */
+  claude_model: string | null;
+  /** Model selection for the Ollama provider — required to
+   *  make a request. */
+  ollama_model: string | null;
 }
 
 const DEFAULT_CONFIG: AssistantConfig = {
   provider: "claude",
   claude_lane: "none",
-  model: null,
+  claude_model: null,
+  ollama_model: null,
 };
 
 function isTauriContext(): boolean {

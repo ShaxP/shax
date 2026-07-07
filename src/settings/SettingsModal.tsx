@@ -1,13 +1,17 @@
 /**
- * Assistant settings modal (M6 slice 2b).
+ * Assistant settings modal (M6 slice 3).
  *
- * Grows on slice 2a: still one provider (Claude), but now
- * with a **lane picker** between the API key lane and the
- * subscription (Claude Code) lane. Persists the choice via
- * the `get_assistant_config` / `set_assistant_config` Rust
- * commands so the pick survives restarts.
+ * Grows again: adds an Ollama section alongside Claude,
+ * complete with a ⌂ local posture badge and a model dropdown
+ * populated from the local daemon probe.
  *
- * Opens on Cmd/Ctrl + `,`. Closes on Escape / backdrop /
+ * The "active provider" pattern from spec §09 is realised
+ * here as a **radio between provider blocks**. Selecting a
+ * lane inside Claude sets `provider: "claude"`; selecting an
+ * Ollama model sets `provider: "ollama"`. Only one provider
+ * is active at a time.
+ *
+ * Opens on Cmd/Ctrl + `,`. Closes on Escape / backdrop / the
  * close button.
  */
 
@@ -18,7 +22,13 @@ import {
   setClaudeApiKey,
 } from "../assistant/providers/claude/apiKey";
 import { probeClaudeCli } from "../assistant/providers/claude/subscription";
-import { getAssistantConfig, setAssistantConfig, type ClaudeLane } from "./config";
+import { probeOllama, type OllamaProbeResult } from "../assistant/providers/ollama/ollama";
+import {
+  getAssistantConfig,
+  setAssistantConfig,
+  type AssistantConfig,
+  type ClaudeLane,
+} from "./config";
 
 const BACKDROP: CSSProperties = {
   position: "fixed",
@@ -31,8 +41,10 @@ const BACKDROP: CSSProperties = {
 };
 
 const PANEL: CSSProperties = {
-  minWidth: 560,
-  maxWidth: 680,
+  minWidth: 600,
+  maxWidth: 720,
+  maxHeight: "80vh",
+  overflowY: "auto",
   background: "var(--pane)",
   border: "1px solid var(--border-strong)",
   borderRadius: 8,
@@ -68,6 +80,9 @@ const SECTION_TITLE: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.5,
   marginBottom: 8,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
 };
 
 const LANE_LIST: CSSProperties = {
@@ -106,7 +121,7 @@ const LANE_META: CSSProperties = {
   marginTop: 2,
 };
 
-const POSTURE_BADGE: CSSProperties = {
+const CLOUD_BADGE: CSSProperties = {
   fontSize: 10,
   fontFamily: "var(--font-mono)",
   padding: "1px 6px",
@@ -114,6 +129,12 @@ const POSTURE_BADGE: CSSProperties = {
   border: "1px solid var(--border-strong)",
   letterSpacing: 0.4,
   color: "var(--fg-faint)",
+};
+
+const LOCAL_BADGE: CSSProperties = {
+  ...CLOUD_BADGE,
+  borderColor: "var(--green)",
+  color: "var(--green)",
 };
 
 const LANE_BODY: CSSProperties = {
@@ -141,6 +162,11 @@ const INPUT: CSSProperties = {
   fontSize: 12,
 };
 
+const SELECT: CSSProperties = {
+  ...INPUT,
+  fontFamily: "var(--font-ui)",
+};
+
 const BUTTON: CSSProperties = {
   padding: "6px 12px",
   borderRadius: 4,
@@ -165,27 +191,39 @@ const STATUS_ROW: CSSProperties = {
   color: "var(--fg-faint)",
 };
 
+const DEFAULT_CONFIG: AssistantConfig = {
+  provider: "",
+  claude_lane: "none",
+  claude_model: null,
+  ollama_model: null,
+};
+
 export function SettingsModal({ onClose }: { onClose: () => void }): React.ReactElement {
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const [lane, setLane] = useState<ClaudeLane>("none");
+  const [config, setConfig] = useState<AssistantConfig>(DEFAULT_CONFIG);
   const [apiKey, setApiKey] = useState("");
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null);
   const [cliVersion, setCliVersion] = useState<string | null | undefined>(undefined);
+  const [ollama, setOllama] = useState<OllamaProbeResult | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     panelRef.current?.focus();
     void (async () => {
-      const [cfg, cli, hasKey] = await Promise.all([
-        getAssistantConfig().catch(() => ({ claude_lane: "none" as ClaudeLane })),
+      const [cfg, cli, hasKey, ol] = await Promise.all([
+        getAssistantConfig().catch(() => DEFAULT_CONFIG),
         probeClaudeCli().catch(() => null),
         hasClaudeApiKey().catch(() => false),
+        probeOllama().catch(
+          (): OllamaProbeResult => ({ reachable: false, models: [], error: null }),
+        ),
       ]);
-      setLane(cfg.claude_lane ?? "none");
+      setConfig(cfg);
       setCliVersion(cli);
       setApiKeyConfigured(hasKey);
+      setOllama(ol);
     })();
   }, []);
 
@@ -201,16 +239,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
-  const persistLane = async (next: ClaudeLane): Promise<void> => {
-    setLane(next);
+  const persist = async (next: AssistantConfig): Promise<void> => {
+    setConfig(next);
     setStatus(null);
     try {
-      await setAssistantConfig({ provider: "claude", claude_lane: next, model: null });
+      await setAssistantConfig(next);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setStatus(`Failed to save lane: ${message}`);
+      setStatus(`Failed to save settings: ${message}`);
     }
   };
+
+  const persistClaudeLane = (lane: ClaudeLane): Promise<void> =>
+    persist({ ...config, provider: lane === "none" ? "" : "claude", claude_lane: lane });
+
+  const persistOllamaModel = (model: string): Promise<void> =>
+    persist({ ...config, provider: "ollama", ollama_model: model || null });
 
   const saveKey = async (): Promise<void> => {
     if (apiKey.length === 0) return;
@@ -245,6 +289,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
   };
 
   const cliInstalled = typeof cliVersion === "string" && cliVersion.length > 0;
+  const claudeActive = config.provider === "claude";
+  const ollamaActive = config.provider === "ollama";
+  const ollamaReachable = ollama?.reachable === true;
 
   return (
     <div
@@ -261,24 +308,28 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
             Close
           </button>
         </div>
+
         <div style={SECTION}>
-          <div style={SECTION_TITLE}>Assistant · Claude</div>
+          <div style={SECTION_TITLE}>
+            <span>Assistant · Claude</span>
+            <span style={CLOUD_BADGE} title="Requests go to Anthropic's cloud API">
+              ☁ cloud
+            </span>
+          </div>
           <div style={LANE_LIST}>
             <LaneRow
               testId="settings-lane-none"
               title="Off"
               meta="Terminal works as usual. No assistant surface."
-              posture={null}
-              active={lane === "none"}
-              onSelect={() => void persistLane("none")}
+              active={!claudeActive && !ollamaActive}
+              onSelect={() => void persistClaudeLane("none")}
             />
             <LaneRow
               testId="settings-lane-api-key"
               title="Use my Anthropic API key"
               meta="Pay-per-token via api.anthropic.com. Key is stored in the OS keychain."
-              posture="☁ cloud"
-              active={lane === "api-key"}
-              onSelect={() => void persistLane("api-key")}
+              active={claudeActive && config.claude_lane === "api-key"}
+              onSelect={() => void persistClaudeLane("api-key")}
             />
             <LaneRow
               testId="settings-lane-subscription"
@@ -290,14 +341,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
                     ? `Detected: ${cliVersion}. Runs through your local install — Shax never sees the credential.`
                     : "Claude Code not installed. Install from claude.com/download to use this lane."
               }
-              posture="☁ cloud"
-              active={lane === "subscription"}
+              active={claudeActive && config.claude_lane === "subscription"}
               disabled={!cliInstalled}
-              onSelect={() => cliInstalled && void persistLane("subscription")}
+              onSelect={() => cliInstalled && void persistClaudeLane("subscription")}
             />
           </div>
 
-          {lane === "api-key" && (
+          {claudeActive && config.claude_lane === "api-key" && (
             <div style={LANE_BODY}>
               <div style={STATUS_ROW}>
                 Key status:{" "}
@@ -357,7 +407,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
             </div>
           )}
 
-          {lane === "subscription" && cliInstalled && (
+          {claudeActive && config.claude_lane === "subscription" && cliInstalled && (
             <div style={LANE_BODY}>
               <div style={STATUS_ROW}>
                 Shax spawns <code>claude</code> per request. Your subscription auth is handled by
@@ -365,16 +415,75 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
               </div>
             </div>
           )}
+        </div>
 
-          {status !== null && (
-            <div
-              data-testid="settings-claude-message"
-              style={{ ...STATUS_ROW, marginTop: 8, color: "var(--fg)" }}
-            >
-              {status}
+        <div style={SECTION}>
+          <div style={SECTION_TITLE}>
+            <span>Assistant · Ollama</span>
+            <span style={LOCAL_BADGE} title="Nothing leaves your machine — nothing.">
+              ⌂ local
+            </span>
+          </div>
+          <div style={LANE_LIST}>
+            <LaneRow
+              testId="settings-ollama"
+              title="Use my local Ollama daemon"
+              meta={
+                ollama === undefined
+                  ? "Checking for Ollama…"
+                  : ollamaReachable
+                    ? ollama.models.length > 0
+                      ? `Detected at localhost:11434 · ${ollama.models.length} model${ollama.models.length === 1 ? "" : "s"} installed`
+                      : "Detected at localhost:11434 · no models installed yet. Run `ollama pull llama3.1` to get started."
+                    : "Ollama daemon not reachable at localhost:11434. Install from ollama.com/download and start it."
+              }
+              active={ollamaActive}
+              disabled={!ollamaReachable || ollama.models.length === 0}
+              onSelect={() => {
+                if (!ollamaReachable || ollama.models.length === 0) return;
+                const first = ollama.models[0];
+                void persist({
+                  ...config,
+                  provider: "ollama",
+                  ollama_model: config.ollama_model ?? first ?? null,
+                });
+              }}
+            />
+          </div>
+
+          {ollamaActive && ollamaReachable && ollama.models.length > 0 && (
+            <div style={LANE_BODY}>
+              <div style={STATUS_ROW}>Model:</div>
+              <div style={INPUT_ROW}>
+                <select
+                  data-testid="settings-ollama-model"
+                  value={config.ollama_model ?? ""}
+                  onChange={(e) => void persistOllamaModel(e.target.value)}
+                  style={SELECT}
+                >
+                  {ollama.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ ...STATUS_ROW, marginTop: 6 }}>
+                Tool-calling and image input aren't wired for the Ollama provider yet — the chat
+                surface will dim those features when this provider is active.
+              </div>
             </div>
           )}
         </div>
+
+        {status !== null && (
+          <div
+            data-testid="settings-message"
+            style={{ ...STATUS_ROW, marginTop: 8, color: "var(--fg)" }}
+          >
+            {status}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -384,7 +493,6 @@ function LaneRow({
   testId,
   title,
   meta,
-  posture,
   active,
   disabled = false,
   onSelect,
@@ -392,7 +500,6 @@ function LaneRow({
   testId: string;
   title: string;
   meta: string;
-  posture: string | null;
   active: boolean;
   disabled?: boolean;
   onSelect: () => void;
@@ -420,11 +527,6 @@ function LaneRow({
         <div style={LANE_TITLE}>{title}</div>
         <div style={LANE_META}>{meta}</div>
       </div>
-      {posture !== null && (
-        <span style={POSTURE_BADGE} title="This lane sends data to a cloud API">
-          {posture}
-        </span>
-      )}
     </div>
   );
 }
