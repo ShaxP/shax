@@ -10,6 +10,9 @@ mod vt;
 
 use std::sync::Arc;
 
+use agent::{
+    claude_stream, delete_assistant_api_key, has_assistant_api_key, set_assistant_api_key,
+};
 use ipc::{
     app_state_load, app_state_save, block_get_output, git_diff, git_root_for, git_status_porcelain,
     list_branches, list_community_formatters, list_cwds, pty_get_block_output, pty_kill,
@@ -72,6 +75,10 @@ pub fn run() {
             git_diff,
             list_community_formatters,
             stat_file,
+            set_assistant_api_key,
+            has_assistant_api_key,
+            delete_assistant_api_key,
+            claude_stream,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

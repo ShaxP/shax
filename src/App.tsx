@@ -37,6 +37,7 @@ import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
 import { SafetyGate } from "./safetyGate/SafetyGate";
+import { SettingsModal } from "./settings/SettingsModal";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
@@ -434,6 +435,11 @@ export default function App(): React.ReactElement {
     block: BlockSummary;
   } | null>(null);
 
+  // Settings modal open state (Cmd/Ctrl + `,` toggles). One
+  // instance mounted at the App root when open; closes via
+  // Escape, backdrop click, or the close button.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
   // the user can't type into their shell again until they click the
@@ -544,6 +550,14 @@ export default function App(): React.ReactElement {
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
         dispatch({ type: "add_tab" });
+        return;
+      }
+      if (e.key === ",") {
+        // Cmd/Ctrl+, opens the settings modal — standard
+        // shortcut on both macOS and Linux/Windows. Toggles
+        // if already open.
+        e.preventDefault();
+        setSettingsOpen((prev) => !prev);
         return;
       }
       if (e.key === "f" || e.key === "F") {
@@ -773,6 +787,14 @@ export default function App(): React.ReactElement {
        *  the pane palette passes through this before it
        *  reaches TerminalPane's PTY writer (spec §10). */}
       <SafetyGate />
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => {
+            setSettingsOpen(false);
+            refocusActivePane();
+          }}
+        />
+      )}
     </div>
   );
 }
