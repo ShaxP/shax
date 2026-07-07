@@ -10,12 +10,16 @@
 //! tool-call events before executing them.
 
 pub mod anthropic;
+pub mod claude_cli;
+pub mod config;
 pub mod keychain;
 pub mod sse;
 
 use tauri::ipc::Channel;
 
 use anthropic::{stream_messages, StreamEvent, StreamInput};
+use claude_cli::{probe as probe_claude_cli, stream_via_cli};
+use config::AssistantConfig;
 
 // --- Tauri commands ---------------------------------------
 
@@ -39,6 +43,49 @@ pub fn has_assistant_api_key(provider_id: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn delete_assistant_api_key(provider_id: String) -> Result<(), String> {
     keychain::delete_api_key(&provider_id).map_err(|e| e.to_string())
+}
+
+// --- Claude subscription lane (slice 2b) ------------------
+
+/// Probe for the `claude` CLI on PATH. Returns the reported
+/// version string on success, `None` when not installed.
+/// Used by the settings UI to show a "Claude Code detected"
+/// / "install Claude Code to use this lane" affordance.
+#[tauri::command]
+pub async fn claude_cli_probe() -> Result<Option<String>, String> {
+    probe_claude_cli().await.map_err(|e| e.to_string())
+}
+
+/// Stream a chat completion via the locally installed
+/// `claude` CLI (subscription lane, spec §09 hard licensing
+/// rule). Same output shape as `claude_stream` — the
+/// renderer routes both through the same
+/// `ClaudeProvider` shim.
+#[tauri::command]
+pub async fn claude_cli_stream(
+    input: StreamInput,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
+    let emit = move |event: StreamEvent| {
+        let _ = on_event.send(event);
+    };
+    stream_via_cli(input, emit).await.map_err(|e| e.to_string())
+}
+
+// --- Config persistence -----------------------------------
+
+/// Load the persisted assistant config (provider choice,
+/// Claude lane, model override). Returns defaults when the
+/// config file doesn't exist yet.
+#[tauri::command]
+pub fn get_assistant_config() -> Result<AssistantConfig, String> {
+    config::load().map_err(|e| e.to_string())
+}
+
+/// Overwrite the persisted assistant config.
+#[tauri::command]
+pub fn set_assistant_config(config: AssistantConfig) -> Result<(), String> {
+    config::save(&config).map_err(|e| e.to_string())
 }
 
 /// Stream a Messages request against Anthropic's API. Reads
