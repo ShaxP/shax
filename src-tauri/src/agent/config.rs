@@ -28,18 +28,24 @@ pub enum ClaudeLane {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AssistantConfig {
-    /// Which provider is the active one. `"claude"` for M6;
-    /// future values include `"ollama"`, `"openai"`,
-    /// `"copilot"`, `"mlx"`.
+    /// Which provider is the active one. `"claude"`,
+    /// `"ollama"` for M6 slices 2 + 3; future values include
+    /// `"openai"`, `"copilot"`, `"mlx"`.
     #[serde(default = "default_provider")]
     pub provider: String,
     /// Which lane Claude uses when it's the active provider.
     #[serde(default)]
     pub claude_lane: ClaudeLane,
-    /// Optional model override — when None, the provider
-    /// picks its own default.
+    /// Optional Claude model override — when None, the
+    /// provider picks its own default. Renamed from `model`
+    /// in slice 3; the `alias` keeps old configs readable.
+    #[serde(default, alias = "model")]
+    pub claude_model: Option<String>,
+    /// Selected Ollama model — required to make a request
+    /// (no default). None when Ollama isn't the active
+    /// provider or the user hasn't picked yet.
     #[serde(default)]
-    pub model: Option<String>,
+    pub ollama_model: Option<String>,
 }
 
 fn default_provider() -> String {
@@ -142,7 +148,8 @@ mod tests {
         let cfg = AssistantConfig::default();
         assert_eq!(cfg.provider, "");
         assert_eq!(cfg.claude_lane, ClaudeLane::None);
-        assert_eq!(cfg.model, None);
+        assert_eq!(cfg.claude_model, None);
+        assert_eq!(cfg.ollama_model, None);
     }
 
     #[test]
@@ -150,10 +157,12 @@ mod tests {
         let cfg = AssistantConfig {
             provider: "claude".into(),
             claude_lane: ClaudeLane::ApiKey,
-            model: Some("claude-sonnet-4-6".into()),
+            claude_model: Some("claude-sonnet-4-6".into()),
+            ollama_model: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains(r#""claude_lane":"api-key""#));
+        assert!(json.contains(r#""claude_model":"claude-sonnet-4-6""#));
     }
 
     #[test]
@@ -162,6 +171,30 @@ mod tests {
         let cfg: AssistantConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.provider, "claude");
         assert_eq!(cfg.claude_lane, ClaudeLane::Subscription);
-        assert_eq!(cfg.model, None);
+        assert_eq!(cfg.claude_model, None);
+        assert_eq!(cfg.ollama_model, None);
+    }
+
+    #[test]
+    fn config_migrates_old_model_field_to_claude_model() {
+        // Pre-slice-3 configs stored the Claude model as
+        // just `model` — serde alias picks it up.
+        let json = r#"{"provider":"claude","claude_lane":"api-key","model":"claude-opus-4-8"}"#;
+        let cfg: AssistantConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.claude_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn config_roundtrips_ollama_model() {
+        let cfg = AssistantConfig {
+            provider: "ollama".into(),
+            claude_lane: ClaudeLane::None,
+            claude_model: None,
+            ollama_model: Some("llama3.1".into()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: AssistantConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider, "ollama");
+        assert_eq!(back.ollama_model.as_deref(), Some("llama3.1"));
     }
 }
