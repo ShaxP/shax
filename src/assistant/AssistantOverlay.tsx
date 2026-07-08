@@ -31,6 +31,7 @@ import { DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL } from "./providers/claude/apiKey
 import { DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL } from "./providers/ollama/ollama";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FEATURES, featureAvailable } from "./features";
+import { clearChatHistory, loadChatHistory, saveChatHistory } from "./history";
 import { providerFromConfig } from "./providerFactory";
 import type { AssistantProvider, Message, StreamEvent } from "./provider";
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
@@ -257,6 +258,22 @@ export function AssistantOverlay({
     void getAssistantConfig().then(setConfig);
   }, []);
 
+  // Load persisted chat history on mount so the user picks
+  // up where they left off. The overlay stays functional
+  // even if the load fails (empty history is a valid state).
+  useEffect(() => {
+    void loadChatHistory().then((history) => {
+      if (history.turns.length === 0) return;
+      setTurns(
+        history.turns.map((t): ChatTurn => {
+          const role: ChatTurn["role"] =
+            t.role === "user" || t.role === "error" ? t.role : "assistant";
+          return { id: nextId(), role, content: t.content };
+        }),
+      );
+    });
+  }, []);
+
   useEffect(() => {
     const refresh = (): void => {
       void getAssistantConfig().then(setConfig);
@@ -354,12 +371,31 @@ export function AssistantOverlay({
       // Ensure the streaming flag is cleared even if the
       // provider surfaced only text + closed without a done
       // event.
-      setTurns((prev) =>
-        prev.map((t) => (t.id === assistantTurn.id ? { ...t, streaming: false } : t)),
-      );
+      setTurns((prev) => {
+        const settled = prev.map((t) =>
+          t.id === assistantTurn.id ? { ...t, streaming: false } : t,
+        );
+        // Persist after each completed turn. Fire-and-forget:
+        // a save failure shouldn't break the chat.
+        void saveChatHistory({
+          turns: settled.map((t) => ({
+            role: t.role,
+            content: t.content,
+            created_ms: 0,
+          })),
+        });
+        return settled;
+      });
       setStreaming(false);
       streamingRef.current = false;
     }
+  };
+
+  const startNewConversation = (): void => {
+    if (streamingRef.current) return;
+    setTurns([]);
+    void clearChatHistory();
+    textareaRef.current?.focus();
   };
 
   // Auto-send seeded prompt (from explain-on-error) once the
@@ -423,6 +459,18 @@ export function AssistantOverlay({
           >
             {provider.privacyPosture === "local" ? "⌂ local" : "☁ cloud"}
           </span>
+        )}
+        {turns.length > 0 && (
+          <button
+            data-testid="assistant-overlay-new"
+            style={CLOSE_BUTTON}
+            onClick={startNewConversation}
+            disabled={streaming}
+            type="button"
+            title="Start a new conversation (clears history)"
+          >
+            New
+          </button>
         )}
         <button
           data-testid="assistant-overlay-close"

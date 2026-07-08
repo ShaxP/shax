@@ -24,7 +24,17 @@ vi.mock("./providerFactory", () => {
   };
 });
 
+// Mock chat history persistence. Default: empty history +
+// no-op save/clear so existing tests that don't care about
+// history keep passing.
+vi.mock("./history", () => ({
+  loadChatHistory: vi.fn().mockResolvedValue({ turns: [] }),
+  saveChatHistory: vi.fn().mockResolvedValue(undefined),
+  clearChatHistory: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
+import { clearChatHistory, loadChatHistory, saveChatHistory } from "./history";
 import { providerFromConfig } from "./providerFactory";
 
 const NOOP = (): void => {};
@@ -250,5 +260,98 @@ describe("AssistantOverlay", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("restores persisted turns on mount", async () => {
+    vi.mocked(loadChatHistory).mockResolvedValueOnce({
+      turns: [
+        { role: "user", content: "prior question", created_ms: 1 },
+        { role: "assistant", content: "prior answer", created_ms: 2 },
+      ],
+    });
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+      />,
+    );
+    await waitFor(() => {
+      const userBubbles = screen.getAllByTestId("assistant-overlay-turn-user");
+      expect(userBubbles[0]).toHaveTextContent("prior question");
+      const assistantBubbles = screen.getAllByTestId("assistant-overlay-turn-assistant");
+      expect(assistantBubbles[0]).toHaveTextContent("prior answer");
+    });
+  });
+
+  it("saves history after each completed turn", async () => {
+    const saveSpy = vi.mocked(saveChatHistory);
+    saveSpy.mockClear();
+    mockClaudeProvider([
+      { kind: "text", delta: "Hi back" },
+      { kind: "done", stopReason: "end_turn" },
+    ]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "hi" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(saveSpy).toHaveBeenCalled();
+    });
+    // Last save should contain both turns.
+    const lastCall = saveSpy.mock.calls[saveSpy.mock.calls.length - 1];
+    const saved = lastCall?.[0]?.turns ?? [];
+    expect(saved).toHaveLength(2);
+    expect(saved[0]?.role).toBe("user");
+    expect(saved[0]?.content).toBe("hi");
+    expect(saved[1]?.role).toBe("assistant");
+    expect(saved[1]?.content).toBe("Hi back");
+  });
+
+  it("New button clears turns and calls clearChatHistory", async () => {
+    vi.mocked(loadChatHistory).mockResolvedValueOnce({
+      turns: [{ role: "user", content: "old", created_ms: 1 }],
+    });
+    const clearSpy = vi.mocked(clearChatHistory);
+    clearSpy.mockClear();
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+      />,
+    );
+    // Wait for restore.
+    await waitFor(() => expect(screen.getByTestId("assistant-overlay-new")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("assistant-overlay-new"));
+    await waitFor(() => {
+      expect(screen.queryAllByTestId("assistant-overlay-turn-user")).toHaveLength(0);
+    });
+    expect(clearSpy).toHaveBeenCalled();
+  });
+
+  it("hides the New button when there are no turns", async () => {
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+      />,
+    );
+    await screen.findByTestId("assistant-overlay-input");
+    expect(screen.queryByTestId("assistant-overlay-new")).not.toBeInTheDocument();
   });
 });

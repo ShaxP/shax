@@ -12,6 +12,7 @@
 pub mod anthropic;
 pub mod claude_cli;
 pub mod config;
+pub mod history;
 pub mod keychain;
 pub mod ollama;
 pub mod sse;
@@ -21,6 +22,7 @@ use tauri::ipc::Channel;
 use anthropic::{stream_messages, StreamEvent, StreamInput};
 use claude_cli::{probe as probe_claude_cli, stream_via_cli};
 use config::AssistantConfig;
+use history::ChatHistory;
 use ollama::{probe as probe_ollama, stream_chat as stream_ollama, ProbeResult as OllamaProbe};
 
 // --- Tauri commands ---------------------------------------
@@ -115,6 +117,31 @@ pub fn get_assistant_config() -> Result<AssistantConfig, String> {
 #[tauri::command]
 pub fn set_assistant_config(config: AssistantConfig) -> Result<(), String> {
     config::save(&config).map_err(|e| e.to_string())
+}
+
+// --- Chat history persistence -----------------------------
+
+/// Load the persisted conversation. Missing / malformed
+/// file → empty history. See `history::load` for the
+/// tolerance rules.
+#[tauri::command]
+pub fn get_chat_history() -> Result<ChatHistory, String> {
+    history::load().map_err(|e| e.to_string())
+}
+
+/// Overwrite the persisted conversation. Called by the chat
+/// overlay after each turn completes.
+#[tauri::command]
+pub fn set_chat_history(history: ChatHistory) -> Result<(), String> {
+    history::save(history).map_err(|e| e.to_string())
+}
+
+/// Delete the on-disk conversation. Called by the "New"
+/// button in the overlay header. Idempotent — a missing file
+/// is not an error.
+#[tauri::command]
+pub fn clear_chat_history() -> Result<(), String> {
+    history::clear().map_err(|e| e.to_string())
 }
 
 /// Stream a Messages request against Anthropic's API. Reads
