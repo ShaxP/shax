@@ -29,6 +29,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL } from "./providers/claude/apiKey";
 import { DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL } from "./providers/ollama/ollama";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { FEATURES, featureAvailable } from "./features";
 import { providerFromConfig } from "./providerFactory";
 import type { AssistantProvider, Message, StreamEvent } from "./provider";
@@ -485,9 +486,16 @@ export function AssistantOverlay({
 function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
   const style =
     turn.role === "user" ? BUBBLE_USER : turn.role === "error" ? BUBBLE_ERROR : BUBBLE_ASSISTANT;
+  const showEllipsis = turn.content.length === 0 && turn.streaming === true;
+  // Assistant + error turns get markdown rendered — code
+  // blocks, lists, links, tables all come out formatted.
+  // User turns stay plain text: the user typed them, they
+  // don't need a Markdown parser and treating them as
+  // Markdown would surprise-format their own input.
+  const rendersMarkdown = turn.role !== "user";
   return (
     <div data-testid={`assistant-overlay-turn-${turn.role}`} style={style}>
-      {turn.content.length === 0 && turn.streaming === true ? "…" : turn.content}
+      {showEllipsis ? "…" : rendersMarkdown ? <ChatMarkdown text={turn.content} /> : turn.content}
     </div>
   );
 }
