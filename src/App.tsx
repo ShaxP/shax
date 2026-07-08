@@ -37,6 +37,7 @@ import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
 import { SafetyGate } from "./safetyGate/SafetyGate";
+import { AssistantOverlay } from "./assistant/AssistantOverlay";
 import { SettingsModal } from "./settings/SettingsModal";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
@@ -440,6 +441,23 @@ export default function App(): React.ReactElement {
   // Escape, backdrop click, or the close button.
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Assistant chat overlay (M6 slice 4). Cmd/Ctrl + K toggles;
+  // Escape or the close button dismisses. A seeded prompt
+  // arrives via `shax:assistant-ask` from the explain-on-error
+  // button on failed blocks.
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantSeed, setAssistantSeed] = useState<string | null>(null);
+  useEffect(() => {
+    const onAsk = (e: Event): void => {
+      const detail = (e as CustomEvent<{ prompt: string }>).detail;
+      if (detail === null || detail === undefined) return;
+      setAssistantSeed(detail.prompt);
+      setAssistantOpen(true);
+    };
+    window.addEventListener("shax:assistant-ask", onAsk);
+    return () => window.removeEventListener("shax:assistant-ask", onAsk);
+  }, []);
+
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
   // the user can't type into their shell again until they click the
@@ -558,6 +576,14 @@ export default function App(): React.ReactElement {
         // if already open.
         e.preventDefault();
         setSettingsOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "k" || e.key === "K") {
+        // Cmd/Ctrl+K toggles the assistant overlay. Spec
+        // §09 explicitly reserves this shortcut for the
+        // assistant.
+        e.preventDefault();
+        setAssistantOpen((prev) => !prev);
         return;
       }
       if (e.key === "f" || e.key === "F") {
@@ -793,6 +819,18 @@ export default function App(): React.ReactElement {
             setSettingsOpen(false);
             refocusActivePane();
           }}
+        />
+      )}
+      {assistantOpen && (
+        <AssistantOverlay
+          seededPrompt={assistantSeed}
+          onSeedConsumed={() => setAssistantSeed(null)}
+          onClose={() => {
+            setAssistantOpen(false);
+            setAssistantSeed(null);
+            refocusActivePane();
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
     </div>

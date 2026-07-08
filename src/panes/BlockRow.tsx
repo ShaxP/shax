@@ -217,6 +217,19 @@ function statusBadge(block: UiBlock, status: Status): React.ReactNode {
   }
 }
 
+/** Build the pre-seeded prompt for the "Ask Shax why"
+ *  explain-on-error button on failed blocks. The assistant
+ *  overlay auto-sends this on open. Trims output to a
+ *  reasonable size so we don't blast huge logs into the
+ *  first message. */
+function buildExplainPrompt(block: UiBlock, output: string | null): string {
+  const command = block.command ?? "(no command)";
+  const exit = block.exit_code ?? "?";
+  const text = output ?? "";
+  const trimmed = text.length > 4000 ? `${text.slice(0, 4000)}\n… (truncated)` : text;
+  return `This command failed with exit code ${exit}. Explain why and suggest a fix:\n\n$ ${command}\n\n${trimmed}`;
+}
+
 /**
  * Hook returning a millisecond timestamp that updates roughly every second
  * while `running` is true. Used to drive the live duration counter on a
@@ -843,6 +856,22 @@ function BlockRowInner({
           )}
 
           <div className="block-row-actions" data-testid="block-actions">
+            {block.exit_code !== null && block.exit_code !== 0 && (
+              <span
+                title="Ask Shax why this failed"
+                data-testid="block-ask-shax"
+                style={{ ...ACTION_ICON, color: "var(--amber)" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const prompt = buildExplainPrompt(block, outputText);
+                  window.dispatchEvent(
+                    new CustomEvent("shax:assistant-ask", { detail: { prompt } }),
+                  );
+                }}
+              >
+                {"?"}
+              </span>
+            )}
             <span
               title="copy"
               style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}

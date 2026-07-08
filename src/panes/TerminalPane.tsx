@@ -585,7 +585,8 @@ function TerminalPaneInner({
     document.querySelector('[data-testid="search-overlay"]') !== null ||
     document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
     document.querySelector('[data-testid="safety-gate"]') !== null ||
-    document.querySelector('[data-testid="settings-modal"]') !== null;
+    document.querySelector('[data-testid="settings-modal"]') !== null ||
+    document.querySelector('[data-testid="assistant-overlay"]') !== null;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
