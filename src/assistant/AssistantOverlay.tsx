@@ -33,8 +33,10 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { FEATURES, featureAvailable } from "./features";
 import { clearChatHistory, loadChatHistory, saveChatHistory } from "./history";
 import { providerFromConfig } from "./providerFactory";
-import type { AssistantProvider, Message, StreamEvent } from "./provider";
+import type { AssistantProvider, Message, ToolCall } from "./provider";
+import { DEFAULT_TOOLS, truncateOutput, type CommandToolResult } from "./tools";
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
+import { getBlockOutput } from "../lib/ipc";
 
 const PANEL: CSSProperties = {
   position: "fixed",
@@ -215,10 +217,28 @@ const OPEN_SETTINGS_BUTTON: CSSProperties = {
 
 interface ChatTurn {
   id: string;
-  role: "user" | "assistant" | "error";
+  role: "user" | "assistant" | "error" | "tool_proposal" | "tool_result";
   content: string;
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
+  /** For tool-proposal turns: the model's `run_command` call
+   *  the user is being asked to approve (or the executed
+   *  result if approval already happened). */
+  toolCall?: {
+    id: string;
+    name: string;
+    command: string;
+    reason: string;
+  };
+  /** For tool-result turns: the structured result fed back
+   *  to the model. Rendered as a small preview under the
+   *  tool proposal. */
+  toolResult?: {
+    exit_code: number | null;
+    duration_ms: number | null;
+    output: string;
+    truncated: boolean;
+  };
 }
 
 export interface AssistantOverlayProps {
@@ -230,6 +250,12 @@ export interface AssistantOverlayProps {
   /** Fired when the user clicks "Open Settings" from the
    *  empty state — App opens the settings modal. */
   onOpenSettings: () => void;
+  /** The pane the assistant should target for
+   *  `run_command` tool calls. `null` when no pane is
+   *  focused or no PTY has spawned yet — tool calls are
+   *  disabled in that state. App resolves this from
+   *  `activeTab.panes[focusedPaneId].ptyId`. */
+  targetPtyId: string | null;
 }
 
 export function AssistantOverlay({
@@ -237,6 +263,7 @@ export function AssistantOverlay({
   seededPrompt,
   onSeedConsumed,
   onOpenSettings,
+  targetPtyId,
 }: AssistantOverlayProps): React.ReactElement {
   const panelRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -336,59 +363,264 @@ export function AssistantOverlay({
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
+  const persistTurns = (settled: ChatTurn[]): void => {
+    void saveChatHistory({
+      turns: settled
+        // Tool proposal / result turns don't round-trip cleanly
+        // through persistence (their metadata lives in
+        // `toolCall` / `toolResult`, not `content`). Skip them
+        // for now — history restore treats them as ephemeral.
+        .filter((t) => t.role === "user" || t.role === "assistant" || t.role === "error")
+        .map((t) => ({ role: t.role, content: t.content, created_ms: 0 })),
+    });
+  };
+
   const sendPrompt = async (text: string): Promise<void> => {
     if (streamingRef.current) return;
     if (provider === null) return;
     if (text.trim().length === 0) return;
     const userTurn: ChatTurn = { id: nextId(), role: "user", content: text };
-    const assistantTurn: ChatTurn = {
-      id: nextId(),
-      role: "assistant",
-      content: "",
-      streaming: true,
-    };
-    setTurns((prev) => [...prev, userTurn, assistantTurn]);
+    setTurns((prev) => [...prev, userTurn]);
     setInput("");
     setStreaming(true);
     streamingRef.current = true;
 
-    const messages: Message[] = turnsToMessages([...turnsRef.current, userTurn]);
     try {
-      for await (const event of provider.stream({ messages })) {
-        applyEvent(assistantTurn.id, event, setTurns);
-        if (event.kind === "done" || event.kind === "error") break;
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setTurns((prev) =>
-        prev.map((t) =>
-          t.id === assistantTurn.id
-            ? { ...t, role: "error", content: `Error: ${message}`, streaming: false }
-            : t,
-        ),
-      );
+      await runToolLoop(provider, [...turnsRef.current, userTurn]);
     } finally {
-      // Ensure the streaming flag is cleared even if the
-      // provider surfaced only text + closed without a done
-      // event.
       setTurns((prev) => {
-        const settled = prev.map((t) =>
-          t.id === assistantTurn.id ? { ...t, streaming: false } : t,
-        );
-        // Persist after each completed turn. Fire-and-forget:
-        // a save failure shouldn't break the chat.
-        void saveChatHistory({
-          turns: settled.map((t) => ({
-            role: t.role,
-            content: t.content,
-            created_ms: 0,
-          })),
-        });
+        // Clear any dangling streaming flag on the last
+        // assistant turn — provider may have surfaced only
+        // text without a `done` event.
+        const settled = prev.map((t) => (t.streaming === true ? { ...t, streaming: false } : t));
+        persistTurns(settled);
         return settled;
       });
       setStreaming(false);
       streamingRef.current = false;
     }
+  };
+
+  /** The multi-turn tool loop. Streams one turn from the
+   *  provider; if it proposes a `run_command` tool call, we
+   *  route through the safety gate, wait for the block to
+   *  complete, capture its output, feed the structured
+   *  result back, and re-stream. Loops until the provider
+   *  emits a `done` event without a pending tool call. */
+  const runToolLoop = async (
+    provider: AssistantProvider,
+    startingTurns: ChatTurn[],
+  ): Promise<void> => {
+    let workingTurns: ChatTurn[] = startingTurns;
+    // Safety valve — the model shouldn't loop forever.
+    const MAX_ITERATIONS = 8;
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const assistantTurn: ChatTurn = {
+        id: nextId(),
+        role: "assistant",
+        content: "",
+        streaming: true,
+      };
+      workingTurns = [...workingTurns, assistantTurn];
+      setTurns(workingTurns);
+
+      const messages: Message[] = turnsToMessages(workingTurns);
+      const tools = provider.capabilities.tools ? DEFAULT_TOOLS : undefined;
+
+      const collectedToolCalls: ToolCall[] = [];
+      let assistantContent = "";
+      let sawError = false;
+      try {
+        for await (const event of provider.stream({ messages, tools })) {
+          if (event.kind === "text") {
+            assistantContent += event.delta;
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantTurn.id ? { ...t, content: assistantContent } : t,
+              ),
+            );
+          } else if (event.kind === "tool_call") {
+            collectedToolCalls.push(event.call);
+          } else if (event.kind === "error") {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantTurn.id
+                  ? { ...t, role: "error", content: `Error: ${event.message}`, streaming: false }
+                  : t,
+              ),
+            );
+            sawError = true;
+            break;
+          } else if (event.kind === "done") {
+            break;
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantTurn.id
+              ? { ...t, role: "error", content: `Error: ${message}`, streaming: false }
+              : t,
+          ),
+        );
+        return;
+      }
+
+      setTurns((prev) =>
+        prev.map((t) => (t.id === assistantTurn.id ? { ...t, streaming: false } : t)),
+      );
+      workingTurns = workingTurns.map((t) =>
+        t.id === assistantTurn.id ? { ...t, content: assistantContent, streaming: false } : t,
+      );
+
+      if (sawError) return;
+      if (collectedToolCalls.length === 0) return;
+
+      // Execute each proposed tool call. Runs sequentially so
+      // the user sees one command approved and completed
+      // before the next appears.
+      for (const call of collectedToolCalls) {
+        const result = await executeToolCall(call);
+        workingTurns = [
+          ...workingTurns,
+          {
+            id: nextId(),
+            role: "tool_proposal",
+            content: "",
+            toolCall: {
+              id: call.id,
+              name: call.name,
+              command: extractCommand(call),
+              reason: extractReason(call),
+            },
+          },
+          {
+            id: nextId(),
+            role: "tool_result",
+            content: "",
+            toolCall: {
+              id: call.id,
+              name: call.name,
+              command: extractCommand(call),
+              reason: extractReason(call),
+            },
+            toolResult: result,
+          },
+        ];
+      }
+      setTurns(workingTurns);
+    }
+  };
+
+  /** Route a tool call through the safety gate + PTY + block
+   *  capture. Returns the structured result to feed back to
+   *  the model. When the user declines the gate, we return a
+   *  synthetic "declined" result so the model knows and can
+   *  respond gracefully. */
+  const executeToolCall = async (call: ToolCall): Promise<CommandToolResult> => {
+    const command = extractCommand(call);
+    const reason = extractReason(call);
+    if (targetPtyId === null) {
+      return {
+        exit_code: null,
+        duration_ms: null,
+        output:
+          "No active terminal pane. Ask the user to focus a pane first, then re-ask your question.",
+        truncated: false,
+      };
+    }
+    if (call.name !== "run_command" || command.length === 0) {
+      return {
+        exit_code: null,
+        duration_ms: null,
+        output: `Unsupported tool: ${call.name}`,
+        truncated: false,
+      };
+    }
+
+    // Await the block-complete event correlated with this
+    // emit. TerminalPane tags AI emits with source: "ai" via
+    // the FIFO source queue.
+    const paneId = targetPtyId;
+    const start = performance.now();
+    const blockComplete = new Promise<{
+      blockId: string;
+      exit_code: number | null;
+      duration_ms: number | null;
+    } | null>((resolve) => {
+      let settled = false;
+      const listener = (e: Event): void => {
+        const detail = (
+          e as CustomEvent<{
+            paneId: string;
+            blockId: string;
+            source: "widget" | "ai" | "palette" | "user";
+          }>
+        ).detail;
+        if (detail.paneId !== paneId) return;
+        if (detail.source !== "ai") return;
+        settled = true;
+        window.removeEventListener("shax:block-complete", listener);
+        resolve({
+          blockId: detail.blockId,
+          exit_code: null,
+          duration_ms: Math.round(performance.now() - start),
+        });
+      };
+      window.addEventListener("shax:block-complete", listener);
+      // Bail if nothing arrives within a generous window —
+      // gate declined, or the shell hung. 5 minutes.
+      setTimeout(
+        () => {
+          if (settled) return;
+          window.removeEventListener("shax:block-complete", listener);
+          resolve(null);
+        },
+        5 * 60 * 1000,
+      );
+    });
+
+    // Dispatch the AI-sourced emit. Safety gate intercepts,
+    // shows the modal, and re-dispatches `-approved` on
+    // approval.
+    window.dispatchEvent(
+      new CustomEvent("shax:emit-command", {
+        detail: {
+          paneId,
+          command,
+          source: "ai",
+          reason,
+        },
+      }),
+    );
+
+    const settled = await blockComplete;
+    if (settled === null) {
+      return {
+        exit_code: null,
+        duration_ms: null,
+        output: "The command was not approved by the user (or timed out).",
+        truncated: false,
+      };
+    }
+
+    // Fetch the block's captured output.
+    let outputText: string;
+    try {
+      const bytes = await getBlockOutput(paneId, settled.blockId);
+      outputText = new TextDecoder().decode(bytes);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      outputText = `(failed to fetch block output: ${message})`;
+    }
+    const { output, truncated } = truncateOutput(outputText);
+    return {
+      exit_code: settled.exit_code,
+      duration_ms: settled.duration_ms,
+      output,
+      truncated,
+    };
   };
 
   const startNewConversation = (): void => {
@@ -532,6 +764,8 @@ export function AssistantOverlay({
 }
 
 function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+  if (turn.role === "tool_proposal") return <ToolProposalBubble turn={turn} />;
+  if (turn.role === "tool_result") return <ToolResultBubble turn={turn} />;
   const style =
     turn.role === "user" ? BUBBLE_USER : turn.role === "error" ? BUBBLE_ERROR : BUBBLE_ASSISTANT;
   const showEllipsis = turn.content.length === 0 && turn.streaming === true;
@@ -544,6 +778,75 @@ function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
   return (
     <div data-testid={`assistant-overlay-turn-${turn.role}`} style={style}>
       {showEllipsis ? "…" : rendersMarkdown ? <ChatMarkdown text={turn.content} /> : turn.content}
+    </div>
+  );
+}
+
+const TOOL_PROPOSAL_BUBBLE: CSSProperties = {
+  ...BUBBLE_ASSISTANT,
+  borderColor: "var(--amber, #d09030)",
+  borderStyle: "dashed",
+  fontSize: 12,
+};
+
+const TOOL_COMMAND: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
+  padding: "4px 6px",
+  background: "rgba(0, 0, 0, 0.35)",
+  borderRadius: 4,
+  marginTop: 4,
+  overflowX: "auto",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+};
+
+const TOOL_META: CSSProperties = {
+  color: "var(--fg-faint)",
+  fontSize: 11,
+  marginTop: 4,
+};
+
+const TOOL_OUTPUT: CSSProperties = {
+  ...TOOL_COMMAND,
+  maxHeight: 200,
+  overflow: "auto",
+};
+
+function ToolProposalBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+  return (
+    <div data-testid="assistant-overlay-turn-tool_proposal" style={TOOL_PROPOSAL_BUBBLE}>
+      <div style={{ fontSize: 11, color: "var(--amber, #d09030)", letterSpacing: 0.4 }}>
+        PROPOSED · run_command
+      </div>
+      {turn.toolCall?.reason !== undefined && turn.toolCall.reason.length > 0 && (
+        <div style={TOOL_META}>Why: {turn.toolCall.reason}</div>
+      )}
+      <div style={TOOL_COMMAND}>{turn.toolCall?.command ?? ""}</div>
+    </div>
+  );
+}
+
+function ToolResultBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+  const result = turn.toolResult;
+  if (result === undefined) return <div />;
+  const okColor =
+    result.exit_code === 0
+      ? "var(--green)"
+      : result.exit_code === null
+        ? "var(--fg-faint)"
+        : "var(--red)";
+  return (
+    <div
+      data-testid="assistant-overlay-turn-tool_result"
+      style={{ ...BUBBLE_ASSISTANT, fontSize: 12 }}
+    >
+      <div style={{ fontSize: 11, color: okColor, letterSpacing: 0.4 }}>
+        RESULT · exit {result.exit_code === null ? "—" : String(result.exit_code)}
+        {result.duration_ms !== null && ` · ${result.duration_ms} ms`}
+        {result.truncated && " · truncated"}
+      </div>
+      <div style={TOOL_OUTPUT}>{result.output.length === 0 ? "(no output)" : result.output}</div>
     </div>
   );
 }
@@ -576,33 +879,60 @@ function CapabilityStrip({ provider }: { provider: AssistantProvider }): React.R
 function turnsToMessages(turns: readonly ChatTurn[]): Message[] {
   const out: Message[] = [];
   for (const t of turns) {
-    if (t.role === "user") out.push({ role: "user", content: t.content });
-    else if (t.role === "assistant") out.push({ role: "assistant", content: t.content });
-    // Error turns don't flow back to the provider.
+    if (t.role === "user") {
+      out.push({ role: "user", content: t.content });
+    } else if (t.role === "assistant") {
+      // An assistant turn immediately followed by tool_proposal
+      // turns needs the tool_use content blocks folded in so
+      // Anthropic can match tool_result IDs back to the calls.
+      // We capture that by looking ahead in the turns array —
+      // but this simple flattener runs after the fact, so we
+      // just look for consecutive tool_proposal siblings.
+      const idx = turns.indexOf(t);
+      const toolCalls: ToolCall[] = [];
+      for (let i = idx + 1; i < turns.length; i++) {
+        const next = turns[i];
+        if (next?.role !== "tool_proposal") break;
+        if (next.toolCall === undefined) break;
+        toolCalls.push({
+          id: next.toolCall.id,
+          name: next.toolCall.name,
+          input: { command: next.toolCall.command, reason: next.toolCall.reason },
+        });
+      }
+      if (toolCalls.length > 0) {
+        out.push({ role: "assistant", content: t.content, toolCalls });
+      } else {
+        out.push({ role: "assistant", content: t.content });
+      }
+    } else if (t.role === "tool_result" && t.toolCall !== undefined && t.toolResult !== undefined) {
+      out.push({
+        role: "tool",
+        toolCallId: t.toolCall.id,
+        content: JSON.stringify(t.toolResult),
+      });
+    }
+    // Error + tool_proposal turns don't push anything new
+    // themselves — tool_proposal was already folded into the
+    // preceding assistant turn.
   }
   return out;
 }
 
-function applyEvent(
-  turnId: string,
-  event: StreamEvent,
-  setTurns: React.Dispatch<React.SetStateAction<ChatTurn[]>>,
-): void {
-  if (event.kind === "text") {
-    setTurns((prev) =>
-      prev.map((t) => (t.id === turnId ? { ...t, content: t.content + event.delta } : t)),
-    );
-  } else if (event.kind === "error") {
-    setTurns((prev) =>
-      prev.map((t) =>
-        t.id === turnId
-          ? { ...t, role: "error", content: `Error: ${event.message}`, streaming: false }
-          : t,
-      ),
-    );
-  } else if (event.kind === "done") {
-    setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, streaming: false } : t)));
-  }
+/** Extract the `command` argument from a `run_command` tool
+ *  call. Defensive against malformed input from the model. */
+function extractCommand(call: ToolCall): string {
+  if (typeof call.input !== "object" || call.input === null) return "";
+  const command = (call.input as { command?: unknown }).command;
+  return typeof command === "string" ? command : "";
+}
+
+/** Extract the `reason` argument. Optional in practice; the
+ *  approval modal shows a fallback when missing. */
+function extractReason(call: ToolCall): string {
+  if (typeof call.input !== "object" || call.input === null) return "";
+  const reason = (call.input as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason : "";
 }
 
 let idCounter = 0;
