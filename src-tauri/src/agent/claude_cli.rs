@@ -87,6 +87,15 @@ where
             "--output-format",
             "stream-json",
             "--verbose",
+            // Emits per-token stream_event frames wrapping the
+            // raw Anthropic SSE. Without this flag Claude Code
+            // only emits one `assistant` event at the END of
+            // the message, so the chat bubble stays empty
+            // during generation. Supported on recent Claude
+            // Code — older versions fail with an unknown-flag
+            // error which we translate below into an upgrade
+            // hint.
+            "--include-partial-messages",
             "--model",
             &input.model,
         ])
@@ -132,11 +141,12 @@ where
 
     let status = child.wait().await?;
     if !status.success() {
-        let message = if stderr_buf.trim().is_empty() {
+        let raw = if stderr_buf.trim().is_empty() {
             format!("claude CLI exited with status {}", status)
         } else {
             stderr_buf.trim().to_string()
         };
+        let message = translate_cli_error(&raw);
         emit(StreamEvent::Error {
             message: message.clone(),
         });
@@ -225,16 +235,24 @@ fn content_as_text(c: &MessageContent) -> String {
 // --- CLI JSON assembler ------------------------------------
 
 /// Claude Code's `stream-json` output is newline-delimited
-/// JSON events. We only care about a subset:
+/// JSON events. We handle:
 ///
-///   - `system` events with subtype `init` — announce the
-///     session. Ignored.
-///   - `assistant` events wrap Anthropic-shaped messages
-///     with content blocks (`text`, `tool_use`). We forward
-///     text as `Text` events, tool_use as `ToolCall`. Note
-///     that Claude Code batches whole content blocks per
-///     event rather than emitting per-token deltas — the
-///     text arrives in larger chunks than the API SSE flow.
+///   - `system` events with subtype `init` — session info,
+///     ignored.
+///   - `stream_event` events wrap the raw Anthropic SSE
+///     (`content_block_start`, `content_block_delta`,
+///     `content_block_stop`, `message_delta`, `message_stop`).
+///     This is the per-token stream — only present when the
+///     CLI was launched with `--include-partial-messages`.
+///     Text arrives via `text_delta`; tool-use arguments
+///     accumulate across `input_json_delta` fragments and
+///     emit as a single `ToolCall` on
+///     `content_block_stop`.
+///   - `assistant` events carry a fully-assembled message.
+///     We use it as a fallback: if `stream_event` frames
+///     already delivered the content we skip re-emission,
+///     otherwise (old CLI, no partial-messages support) we
+///     emit the whole message as one big chunk.
 ///   - `result` events carry the final `stop_reason`.
 ///
 /// Unknown types are ignored so the assembler is tolerant
@@ -243,6 +261,22 @@ fn content_as_text(c: &MessageContent) -> String {
 struct CliAssembler {
     stop_reason: Option<String>,
     emitted_done: bool,
+    /// True as soon as any `stream_event` frame has delivered
+    /// content. When set, we skip content extraction from the
+    /// final `assistant` event to avoid duplicating text.
+    saw_stream_event: bool,
+    /// Tool-use blocks under construction, keyed by index.
+    /// Populated by `content_block_start`, appended via
+    /// `content_block_delta.input_json_delta`, and flushed as
+    /// a `ToolCall` on `content_block_stop`.
+    tool_use_by_index: std::collections::HashMap<u32, ToolUseAccumulator>,
+}
+
+#[derive(Default, Clone)]
+struct ToolUseAccumulator {
+    id: String,
+    name: String,
+    input_json: String,
 }
 
 impl CliAssembler {
@@ -264,7 +298,26 @@ impl CliAssembler {
         };
         let event_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match event_type {
+            "stream_event" => {
+                if let Some(inner) = payload.get("event") {
+                    self.consume_inner_stream_event(inner, emit);
+                }
+            }
             "assistant" => {
+                if self.saw_stream_event {
+                    // stream_event frames already delivered
+                    // everything — the final message is a
+                    // recap we don't need to re-emit. Just
+                    // capture the stop_reason if present.
+                    if let Some(stop) = payload
+                        .get("message")
+                        .and_then(|m| m.get("stop_reason"))
+                        .and_then(|s| s.as_str())
+                    {
+                        self.stop_reason = Some(stop.to_string());
+                    }
+                    return;
+                }
                 let Some(message) = payload.get("message") else {
                     return;
                 };
@@ -339,6 +392,127 @@ impl CliAssembler {
             }
         }
     }
+
+    /// Handle the raw Anthropic-shaped event nested inside a
+    /// `stream_event` frame. Mirrors what the API-key lane
+    /// does in `anthropic::EventAssembler` — text deltas
+    /// flow, tool_use accumulates across
+    /// `input_json_delta` and emits on `content_block_stop`,
+    /// stop_reason lands on `message_delta`.
+    fn consume_inner_stream_event<F>(&mut self, inner: &serde_json::Value, emit: &mut F)
+    where
+        F: FnMut(StreamEvent),
+    {
+        let inner_type = inner.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match inner_type {
+            "content_block_start" => {
+                let index = inner.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                if let Some(block) = inner.get("content_block") {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        let id = block
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let name = block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        self.tool_use_by_index.insert(
+                            index,
+                            ToolUseAccumulator {
+                                id,
+                                name,
+                                input_json: String::new(),
+                            },
+                        );
+                    }
+                }
+            }
+            "content_block_delta" => {
+                let index = inner.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let Some(delta) = inner.get("delta") else {
+                    return;
+                };
+                let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match delta_type {
+                    "text_delta" => {
+                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                            if !text.is_empty() {
+                                self.saw_stream_event = true;
+                                emit(StreamEvent::Text {
+                                    delta: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    "input_json_delta" => {
+                        if let Some(partial) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                            let entry = self.tool_use_by_index.entry(index).or_default();
+                            entry.input_json.push_str(partial);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = inner.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                if let Some(acc) = self.tool_use_by_index.remove(&index) {
+                    let input: serde_json::Value = if acc.input_json.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        match serde_json::from_str(&acc.input_json) {
+                            Ok(v) => v,
+                            Err(_) => serde_json::json!({}),
+                        }
+                    };
+                    self.saw_stream_event = true;
+                    emit(StreamEvent::ToolCall {
+                        id: acc.id,
+                        name: acc.name,
+                        input,
+                    });
+                }
+            }
+            "message_delta" => {
+                if let Some(stop) = inner
+                    .get("delta")
+                    .and_then(|d| d.get("stop_reason"))
+                    .and_then(|s| s.as_str())
+                {
+                    self.stop_reason = Some(stop.to_string());
+                }
+            }
+            _ => {
+                // message_start / message_stop / ping — ignore.
+            }
+        }
+    }
+}
+
+/// Translate raw CLI stderr text into a message that guides
+/// the user. Right now we recognise one important case: an
+/// unknown-flag error for `--include-partial-messages` means
+/// the user is on an older Claude Code version that doesn't
+/// support per-token streaming. Every other stderr passes
+/// through unchanged.
+fn translate_cli_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("include-partial-messages")
+        && (lower.contains("unknown")
+            || lower.contains("unrecognized")
+            || lower.contains("unrecognised")
+            || lower.contains("invalid"))
+    {
+        return format!(
+            "Your Claude Code version doesn't support --include-partial-messages, which Shax uses \
+             for per-token streaming. Please update Claude Code to the latest version (run \
+             `claude update`, or reinstall from https://claude.com/download) and try again.\n\n\
+             Original error:\n{raw}"
+        );
+    }
+    raw.to_string()
 }
 
 // --- Version reporting from the CLI probe ------------------
@@ -419,6 +593,95 @@ mod tests {
             r#"{"type":"future_unknown_event","foo":"bar"}"#,
         ]);
         assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn stream_event_text_deltas_emit_text_events() {
+        let out = events(&[
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+            r#"{"type":"stream_event","event":{"type":"message_stop"}}"#,
+        ]);
+        assert_eq!(out.len(), 2);
+        let StreamEvent::Text { delta: d1 } = &out[0] else {
+            panic!("expected text");
+        };
+        let StreamEvent::Text { delta: d2 } = &out[1] else {
+            panic!("expected text");
+        };
+        assert_eq!(d1, "Hello ");
+        assert_eq!(d2, "world");
+    }
+
+    #[test]
+    fn stream_event_dedupes_final_assistant_recap() {
+        // When stream_event frames have already delivered
+        // text deltas, the final `assistant` recap event
+        // must NOT re-emit the same text.
+        let out = events(&[
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn"}}"#,
+            r#"{"type":"result","subtype":"success"}"#,
+        ]);
+        let text_events: Vec<&StreamEvent> = out
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Text { .. }))
+            .collect();
+        assert_eq!(text_events.len(), 1);
+        if let StreamEvent::Text { delta } = text_events[0] {
+            assert_eq!(delta, "Hi");
+        }
+    }
+
+    #[test]
+    fn stream_event_tool_use_accumulates_across_deltas_and_emits_on_stop() {
+        let out = events(&[
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_2","name":"run_bash"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"ls\"}"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+        ]);
+        assert_eq!(out.len(), 1);
+        let StreamEvent::ToolCall { id, name, input } = &out[0] else {
+            panic!("expected tool_call");
+        };
+        assert_eq!(id, "tu_2");
+        assert_eq!(name, "run_bash");
+        assert_eq!(input, &serde_json::json!({"cmd": "ls"}));
+    }
+
+    #[test]
+    fn old_cli_without_stream_event_falls_back_to_assistant_message() {
+        // Older Claude Code (no --include-partial-messages
+        // support) sends only assistant + result. We MUST still
+        // emit text so the user sees something — better than
+        // silence.
+        let out = events(&[
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Batched"}],"stop_reason":"end_turn"}}"#,
+            r#"{"type":"result","subtype":"success"}"#,
+        ]);
+        let StreamEvent::Text { delta } = &out[0] else {
+            panic!("expected text");
+        };
+        assert_eq!(delta, "Batched");
+    }
+
+    #[test]
+    fn translate_cli_error_hints_upgrade_when_unknown_partial_messages_flag() {
+        let raw = "error: unknown option '--include-partial-messages'";
+        let out = translate_cli_error(raw);
+        assert!(out.contains("update Claude Code"));
+        assert!(out.contains(raw));
+    }
+
+    #[test]
+    fn translate_cli_error_passes_through_unrelated_stderr() {
+        let raw = "error: model not found: sonnet-4-6";
+        let out = translate_cli_error(raw);
+        assert_eq!(out, raw);
     }
 
     #[test]
