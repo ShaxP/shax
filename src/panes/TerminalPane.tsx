@@ -585,8 +585,26 @@ function TerminalPaneInner({
     document.querySelector('[data-testid="search-overlay"]') !== null ||
     document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
     document.querySelector('[data-testid="safety-gate"]') !== null ||
-    document.querySelector('[data-testid="settings-modal"]') !== null ||
-    document.querySelector('[data-testid="assistant-overlay"]') !== null;
+    document.querySelector('[data-testid="settings-modal"]') !== null;
+  // Note: the assistant overlay is deliberately NOT in this
+  // list. It's a right-side *panel*, not a blocking modal —
+  // the terminal stays visible and interactive on its left.
+  // We only bail on keys whose event target is inside the
+  // overlay itself (see `eventTargetIsInsideAssistant` below),
+  // so typing into the chat doesn't drive block-focus but
+  // `Ctrl+J` / vim motion in the pane still works while the
+  // panel is open.
+
+  /** True when the keydown originated inside the assistant
+   *  overlay's DOM subtree — i.e. the user is typing into the
+   *  chat panel, not the terminal. In that case we don't want
+   *  block-focus to intercept: `j` in the message textarea
+   *  should stay `j`, not "advance block down". */
+  const eventTargetIsInsideAssistant = (e: KeyboardEvent): boolean => {
+    const target = e.target;
+    if (!(target instanceof Element)) return false;
+    return target.closest('[data-testid="assistant-overlay"]') !== null;
+  };
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -596,6 +614,11 @@ function TerminalPaneInner({
       // doesn't want it to also re-engage block-focus on the
       // pane behind the backdrop.
       if (overlayIsOpen()) return;
+      // The assistant overlay is a side panel — don't bail
+      // globally, but do bail when the key event started
+      // inside its textarea / bubbles so typing there doesn't
+      // trigger block-focus.
+      if (eventTargetIsInsideAssistant(e)) return;
       // Ctrl+J enters block-focus mode from the prompt; also
       // exits when already in it (symmetric toggle). We swallow
       // the keystroke so xterm doesn't see a literal `\n`.
