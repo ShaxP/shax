@@ -34,7 +34,12 @@ import { FEATURES, featureAvailable } from "./features";
 import { clearChatHistory, loadChatHistory, saveChatHistory } from "./history";
 import { providerFromConfig } from "./providerFactory";
 import type { AssistantProvider, Message, ToolCall } from "./provider";
-import { DEFAULT_TOOLS, truncateOutput, type CommandToolResult } from "./tools";
+import {
+  DEFAULT_TOOLS,
+  SYSTEM_PROMPT_WITH_TOOLS,
+  truncateOutput,
+  type CommandToolResult,
+} from "./tools";
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
 import { getBlockOutput } from "../lib/ipc";
 
@@ -424,8 +429,16 @@ export function AssistantOverlay({
       workingTurns = [...workingTurns, assistantTurn];
       setTurns(workingTurns);
 
-      const messages: Message[] = turnsToMessages(workingTurns);
       const tools = provider.capabilities.tools ? DEFAULT_TOOLS : undefined;
+      // Prepend the tools-aware system prompt when tools are
+      // enabled. Without it, models see the tool schema but
+      // often default to "here's how you could do it
+      // yourself" instead of actually calling the tool.
+      const conversationMessages = turnsToMessages(workingTurns);
+      const messages: Message[] =
+        tools !== undefined
+          ? [{ role: "system", content: SYSTEM_PROMPT_WITH_TOOLS }, ...conversationMessages]
+          : conversationMessages;
 
       const collectedToolCalls: ToolCall[] = [];
       let assistantContent = "";

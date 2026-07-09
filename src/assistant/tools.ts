@@ -63,6 +63,25 @@ export const RUN_COMMAND: Tool = {
 /** Full toolset for the M6 architectural loop-close. */
 export const DEFAULT_TOOLS: Tool[] = [RUN_COMMAND];
 
+/**
+ * System prompt prepended to the conversation whenever tools
+ * are enabled. Without this, models see the `run_command`
+ * schema but often default to hedging responses like
+ * "here's how you can do it yourself: run pwd" — the schema
+ * doesn't tell the model *when* to use it.
+ *
+ * The prompt positions the assistant as the terminal
+ * assistant and makes the tool the default answer path for
+ * factual queries about the user's system.
+ */
+export const SYSTEM_PROMPT_WITH_TOOLS = `You are the AI assistant embedded in Shax, a terminal emulator. The user is at a shell prompt.
+
+You have the \`run_command\` tool which executes shell commands in the user's active terminal pane. Every command you propose is shown to the user in an approval modal before it runs — nothing runs without their explicit approval.
+
+Prefer \`run_command\` over asking the user to run commands themselves. When the user asks something about their system — the current directory, files, git state, environment, running processes, etc. — use the tool to find out, then answer with the result. In the \`reason\` argument, briefly explain what you're checking and why.
+
+Do not propose destructive commands (\`rm -rf\` on important paths, force push, history rewrites) unless the user explicitly asked for them.`;
+
 /** Structured tool result the overlay feeds back to the
  *  model. Serialised as JSON for the `tool` message content
  *  because Anthropic's tool_result content is a plain string. */
