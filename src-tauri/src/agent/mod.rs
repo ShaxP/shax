@@ -23,7 +23,10 @@ use anthropic::{stream_messages, StreamEvent, StreamInput};
 use claude_cli::{probe as probe_claude_cli, stream_via_cli};
 use config::AssistantConfig;
 use history::ChatHistory;
-use ollama::{probe as probe_ollama, stream_chat as stream_ollama, ProbeResult as OllamaProbe};
+use ollama::{
+    probe as probe_ollama, probe_model as probe_ollama_model_impl, stream_chat as stream_ollama,
+    ModelCapabilities as OllamaModelCapabilities, ProbeResult as OllamaProbe,
+};
 
 // --- Tauri commands ---------------------------------------
 
@@ -86,6 +89,17 @@ pub async fn claude_cli_stream(
 #[tauri::command]
 pub async fn ollama_probe() -> OllamaProbe {
     probe_ollama().await
+}
+
+/// Probe a specific Ollama model for its capabilities via
+/// `/api/show`. The renderer calls this when the user picks
+/// a model in settings so the OllamaProvider can honestly
+/// declare `tools` / `vision` availability for that model.
+/// Never errors — unreachable / unknown model returns
+/// `unknown: true`.
+#[tauri::command]
+pub async fn ollama_probe_model(model: String) -> OllamaModelCapabilities {
+    probe_ollama_model_impl(&model).await
 }
 
 /// Stream a chat completion via the local Ollama daemon.

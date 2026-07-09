@@ -46,6 +46,24 @@ pub struct AssistantConfig {
     /// provider or the user hasn't picked yet.
     #[serde(default)]
     pub ollama_model: Option<String>,
+    /// Capabilities of the selected Ollama model, cached from
+    /// `/api/show` on model pick. Lets the sync provider
+    /// factory declare `tools` / `vision` support without
+    /// having to await a probe. None when we haven't probed
+    /// yet (or the daemon was unreachable).
+    #[serde(default)]
+    pub ollama_capabilities: Option<OllamaCapabilities>,
+}
+
+/// Cached per-model capabilities for the Ollama provider.
+/// Matches the shape returned by `ollama_probe_model` on the
+/// renderer side.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OllamaCapabilities {
+    #[serde(default)]
+    pub tools: bool,
+    #[serde(default)]
+    pub vision: bool,
 }
 
 fn default_provider() -> String {
@@ -159,6 +177,7 @@ mod tests {
             claude_lane: ClaudeLane::ApiKey,
             claude_model: Some("claude-sonnet-4-6".into()),
             ollama_model: None,
+            ollama_capabilities: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains(r#""claude_lane":"api-key""#));
@@ -191,10 +210,43 @@ mod tests {
             claude_lane: ClaudeLane::None,
             claude_model: None,
             ollama_model: Some("llama3.1".into()),
+            ollama_capabilities: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: AssistantConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provider, "ollama");
         assert_eq!(back.ollama_model.as_deref(), Some("llama3.1"));
+    }
+
+    #[test]
+    fn config_roundtrips_ollama_capabilities() {
+        let cfg = AssistantConfig {
+            provider: "ollama".into(),
+            claude_lane: ClaudeLane::None,
+            claude_model: None,
+            ollama_model: Some("llama3.1".into()),
+            ollama_capabilities: Some(OllamaCapabilities {
+                tools: true,
+                vision: false,
+            }),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains(r#""ollama_capabilities":{"tools":true,"vision":false}"#));
+        let back: AssistantConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.ollama_capabilities.as_ref().map(|c| c.tools),
+            Some(true)
+        );
+        assert_eq!(
+            back.ollama_capabilities.as_ref().map(|c| c.vision),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn config_missing_ollama_capabilities_deserialises_as_none() {
+        let json = r#"{"provider":"ollama","ollama_model":"llama3.1"}"#;
+        let cfg: AssistantConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.ollama_capabilities.is_none());
     }
 }

@@ -90,6 +90,7 @@ const BASE_CONFIG: AssistantConfig = {
   claude_lane: "api-key",
   claude_model: "claude-sonnet-4-6",
   ollama_model: null,
+  ollama_capabilities: null,
 };
 
 function mockNotConfigured(): void {

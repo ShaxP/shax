@@ -11,6 +11,11 @@
 
 export type ClaudeLane = "api-key" | "subscription" | "none";
 
+export interface OllamaCapabilities {
+  tools: boolean;
+  vision: boolean;
+}
+
 export interface AssistantConfig {
   /** Active provider id. `"claude"` | `"ollama"` for M6. */
   provider: string;
@@ -21,6 +26,11 @@ export interface AssistantConfig {
   /** Model selection for the Ollama provider — required to
    *  make a request. */
   ollama_model: string | null;
+  /** Cached per-model capabilities for the Ollama provider,
+   *  probed via `/api/show` on model pick. Lets the sync
+   *  provider factory declare tools / vision honestly for
+   *  the selected model. `null` before we've probed. */
+  ollama_capabilities: OllamaCapabilities | null;
 }
 
 const DEFAULT_CONFIG: AssistantConfig = {
@@ -28,6 +38,7 @@ const DEFAULT_CONFIG: AssistantConfig = {
   claude_lane: "none",
   claude_model: null,
   ollama_model: null,
+  ollama_capabilities: null,
 };
 
 function isTauriContext(): boolean {
