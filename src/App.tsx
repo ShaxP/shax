@@ -831,6 +831,7 @@ export default function App(): React.ReactElement {
             refocusActivePane();
           }}
           onOpenSettings={() => setSettingsOpen(true)}
+          targetPtyId={activeFocused?.ptyId ?? null}
         />
       )}
     </div>

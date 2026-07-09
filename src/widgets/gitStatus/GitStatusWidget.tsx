@@ -189,7 +189,11 @@ export function GitStatusWidget({
     blockEl.setAttribute("data-widget-live", "true");
     const onBlockComplete = (e: Event): void => {
       const detail = (
-        e as CustomEvent<{ paneId: string; blockId: string; source: "widget" | "user" }>
+        e as CustomEvent<{
+          paneId: string;
+          blockId: string;
+          source: "widget" | "ai" | "palette" | "user";
+        }>
       ).detail;
       if (detail?.paneId !== paneId) return;
       if (detail.source === "widget") {

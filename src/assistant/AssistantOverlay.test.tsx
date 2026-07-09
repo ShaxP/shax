@@ -39,8 +39,17 @@ import { providerFromConfig } from "./providerFactory";
 
 const NOOP = (): void => {};
 
-function stubProvider(events: StreamEvent[]) {
+function stubProvider(eventsOrSequences: StreamEvent[] | StreamEvent[][]) {
+  // Accept either a single flat event list (single-turn
+  // tests) or a nested array where each inner array is one
+  // stream() iteration (multi-turn tool loop tests).
+  const sequences: StreamEvent[][] = Array.isArray(eventsOrSequences[0])
+    ? (eventsOrSequences as StreamEvent[][])
+    : [eventsOrSequences as StreamEvent[]];
+  let callIndex = 0;
   const stream = vi.fn().mockImplementation(function* (): Generator<StreamEvent> {
+    const events = sequences[callIndex] ?? sequences[sequences.length - 1] ?? [];
+    callIndex++;
     for (const e of events) yield e;
   });
   return {
@@ -91,7 +100,7 @@ function mockNotConfigured(): void {
   });
 }
 
-function mockClaudeProvider(events: StreamEvent[]) {
+function mockClaudeProvider(events: StreamEvent[] | StreamEvent[][]) {
   vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
   const provider = stubProvider(events);
   vi.mocked(providerFromConfig).mockReturnValue({ provider, reason: null });
@@ -107,6 +116,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await waitFor(() => {
@@ -128,6 +138,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     // Provider available → input renders.
@@ -153,6 +164,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     const input = await screen.findByTestId("assistant-overlay-input");
@@ -174,6 +186,7 @@ describe("AssistantOverlay", () => {
         seededPrompt="Explain: git status --unknownflag"
         onSeedConsumed={seedConsumed}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await waitFor(() => {
@@ -201,6 +214,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await waitFor(() =>
@@ -238,6 +252,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     const badge = await screen.findByTestId("assistant-overlay-posture");
@@ -253,6 +268,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await screen.findByTestId("assistant-overlay-input");
@@ -276,6 +292,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await waitFor(() => {
@@ -299,6 +316,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     const input = await screen.findByTestId("assistant-overlay-input");
@@ -330,6 +348,7 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     // Wait for restore.
@@ -349,9 +368,66 @@ describe("AssistantOverlay", () => {
         seededPrompt={null}
         onSeedConsumed={NOOP}
         onOpenSettings={NOOP}
+        targetPtyId={null}
       />,
     );
     await screen.findByTestId("assistant-overlay-input");
     expect(screen.queryByTestId("assistant-overlay-new")).not.toBeInTheDocument();
+  });
+
+  it("renders a tool_proposal bubble when the provider emits a tool_call", async () => {
+    // Provider streams a tool_call then done — with no
+    // targetPtyId, `executeToolCall` short-circuits to a
+    // structured "no pane" result so the loop terminates
+    // deterministically without waiting for a real block.
+    mockClaudeProvider([
+      // First stream() iteration — model proposes a tool.
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_1",
+            name: "run_command",
+            input: { command: "git status", reason: "check the working tree" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+      // Second iteration — after the tool result, model
+      // gives its final answer.
+      [
+        { kind: "text", delta: "All clean." },
+        { kind: "done", stopReason: "end_turn" },
+      ],
+    ]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "check the repo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      const proposals = screen.getAllByTestId("assistant-overlay-turn-tool_proposal");
+      expect(proposals[0]).toHaveTextContent("git status");
+      expect(proposals[0]).toHaveTextContent("check the working tree");
+    });
+    // Tool result bubble also renders — with no pane, the
+    // structured "no active terminal pane" message flows
+    // back and is shown.
+    await waitFor(() => {
+      const results = screen.getAllByTestId("assistant-overlay-turn-tool_result");
+      expect(results[0]).toHaveTextContent("No active terminal pane");
+    });
+    // Final assistant text arrives after the tool round-trip.
+    await waitFor(() => {
+      const bubbles = screen.getAllByTestId("assistant-overlay-turn-assistant");
+      expect(bubbles[bubbles.length - 1]).toHaveTextContent("All clean.");
+    });
   });
 });

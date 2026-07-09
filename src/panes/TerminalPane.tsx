@@ -818,15 +818,16 @@ function TerminalPaneInner({
             git_branch: event.git_branch,
             interactive: event.interactive,
           });
-          // Notify widgets: this block just finished. If we
-          // have an outstanding widget-emit, it's the one that
-          // just completed (blocks complete in emit order) —
-          // tag as `source: "widget"` so the widget re-probes
-          // silently. Otherwise it's a user-typed command,
-          // which should freeze any live widgets in this pane.
+          // Notify listeners: this block just finished. Pop
+          // the FIFO queue of pending emit sources — if
+          // non-empty, this block was emitted by whatever
+          // pushed the front entry (widget, AI, palette). If
+          // empty, it was a user-typed command, which should
+          // freeze any live widgets and never be treated as a
+          // tool result.
           {
-            const source = pendingWidgetEmitsRef.current > 0 ? "widget" : "user";
-            if (source === "widget") pendingWidgetEmitsRef.current--;
+            const source: "widget" | "ai" | "palette" | "user" =
+              pendingEmitSourcesRef.current.shift() ?? "user";
             window.dispatchEvent(
               new CustomEvent("shax:block-complete", {
                 detail: {
@@ -998,9 +999,13 @@ function TerminalPaneInner({
   // they can re-probe their structured data silently and
   // refresh in place (spec §08's "visible writes / silent
   // reads" model). We assume blocks complete in emit order
-  // and pop a counter as each `block_completed` event arrives
-  // in the PTY handler below.
-  const pendingWidgetEmitsRef = useRef(0);
+  // and pop the front of the queue as each `block_completed`
+  // event arrives in the PTY handler below. Each entry
+  // records which SOURCE emitted it (widget vs ai vs
+  // palette) — the block-complete event forwards that tag so
+  // downstream listeners (widget silent-refresh, assistant
+  // tool-loop) can react appropriately.
+  const pendingEmitSourcesRef = useRef<Array<"widget" | "ai" | "palette">>([]);
 
   // Post-M6-slice-1: the raw `shax:emit-command` no longer
   // reaches us directly. It's intercepted by the App-level
@@ -1019,13 +1024,12 @@ function TerminalPaneInner({
       if (detail?.paneId !== ptyIdRef.current) return;
       const id = ptyIdRef.current;
       if (id === null) return;
-      // Widget-sourced emits get the block-complete tagging
-      // treatment; AI / palette emits also count as
-      // "widget-initiated" from the block-complete correlation
-      // point of view — they weren't typed by the user, and
-      // they should trigger the same silent-refresh behaviour
-      // on the enclosing widget (if any).
-      pendingWidgetEmitsRef.current++;
+      // Track the source in a FIFO queue so `block_completed`
+      // can tag the resulting event with the *actual* source
+      // (widget silent-refresh vs assistant tool-result vs
+      // palette). Missing source defaults to widget for
+      // backward-compat with existing widget emits.
+      pendingEmitSourcesRef.current.push(detail.source ?? "widget");
       void writePty(id, new TextEncoder().encode(`${detail.command}\n`));
     };
     window.addEventListener("shax:emit-command-approved", handler);
