@@ -76,8 +76,19 @@ export function providerFromConfig(config: AssistantConfig): ProviderResolution 
         },
       };
     }
+    // Cached per-model capabilities from `probeOllamaModel` in
+    // the settings modal. Absent = we haven't probed → stay
+    // conservative (tools/vision off) so the chat surface's
+    // capability gating doesn't lie.
+    const ollamaCaps = config.ollama_capabilities;
     return {
-      provider: createOllamaProvider({ model: config.ollama_model }),
+      provider: createOllamaProvider({
+        model: config.ollama_model,
+        capabilities:
+          ollamaCaps === null
+            ? undefined
+            : { tools: ollamaCaps.tools, imageInput: ollamaCaps.vision },
+      }),
       reason: null,
     };
   }

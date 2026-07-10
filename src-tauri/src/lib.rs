@@ -13,7 +13,8 @@ use std::sync::Arc;
 use agent::{
     claude_cli_probe, claude_cli_stream, claude_stream, clear_chat_history,
     delete_assistant_api_key, get_assistant_config, get_chat_history, has_assistant_api_key,
-    ollama_probe, ollama_stream, set_assistant_api_key, set_assistant_config, set_chat_history,
+    ollama_probe, ollama_probe_model, ollama_stream, set_assistant_api_key, set_assistant_config,
+    set_chat_history,
 };
 use ipc::{
     app_state_load, app_state_save, block_get_output, git_diff, git_root_for, git_status_porcelain,
@@ -84,6 +85,7 @@ pub fn run() {
             claude_cli_probe,
             claude_cli_stream,
             ollama_probe,
+            ollama_probe_model,
             ollama_stream,
             get_assistant_config,
             set_assistant_config,

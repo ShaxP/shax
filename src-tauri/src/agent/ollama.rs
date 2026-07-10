@@ -129,6 +129,74 @@ struct TagsModel {
     name: String,
 }
 
+// --- Per-model capability probe ---------------------------
+
+/// Capabilities the settings UI + provider react to. Ollama
+/// exposes a superset via `/api/show`; we surface the two
+/// that matter to the assistant loop for now: `tools` and
+/// `vision`.
+#[derive(Debug, Default, Serialize)]
+pub struct ModelCapabilities {
+    /// Whether the model supports structured tool calls.
+    pub tools: bool,
+    /// Whether the model accepts image input.
+    pub vision: bool,
+    /// True if we couldn't reach the daemon or the model
+    /// wasn't found. Not an error — just means we don't
+    /// know.
+    pub unknown: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShowResponse {
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+/// Query Ollama's `/api/show` for a specific model to learn
+/// what it supports. Uses a short timeout — the settings UI
+/// calls this every time the user picks a model in the
+/// dropdown, so we can't afford to hang.
+pub async fn probe_model(model: &str) -> ModelCapabilities {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build();
+    let client = match client {
+        Ok(c) => c,
+        Err(_) => {
+            return ModelCapabilities {
+                unknown: true,
+                ..Default::default()
+            }
+        }
+    };
+    let url = format!("{}/api/show", DEFAULT_URL);
+    let body = serde_json::json!({ "model": model });
+    let response = match client.post(&url).json(&body).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return ModelCapabilities {
+                unknown: true,
+                ..Default::default()
+            }
+        }
+    };
+    let show: ShowResponse = match response.json().await {
+        Ok(v) => v,
+        Err(_) => {
+            return ModelCapabilities {
+                unknown: true,
+                ..Default::default()
+            }
+        }
+    };
+    ModelCapabilities {
+        tools: show.capabilities.iter().any(|c| c == "tools"),
+        vision: show.capabilities.iter().any(|c| c == "vision"),
+        unknown: false,
+    }
+}
+
 // --- Streaming --------------------------------------------
 
 /// Send a chat completion request to the local Ollama daemon
@@ -238,6 +306,45 @@ where
             });
         }
     }
+    // Ollama's tool-calling response format:
+    //   { "message": { "tool_calls": [ { "function": {
+    //     "name": "...", "arguments": {...} } } ] }, ... }
+    // Different from Anthropic's — no per-call ID (we
+    // generate one) and arguments arrive as a fully-parsed
+    // object rather than JSON-string deltas. Emitted whole
+    // per call in a single message; no accumulation needed.
+    if let Some(calls) = value
+        .get("message")
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|c| c.as_array())
+    {
+        for (idx, call) in calls.iter().enumerate() {
+            let Some(func) = call.get("function") else {
+                continue;
+            };
+            let name = func
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let arguments = func
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            // Synthesise a stable-ish id since Ollama doesn't
+            // provide one. The idx keeps multiple calls in
+            // the same response distinct.
+            let id = format!("ollama_call_{}", idx);
+            emit(StreamEvent::ToolCall {
+                id,
+                name,
+                input: arguments,
+            });
+        }
+    }
     let done = value.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
     if done {
         let stop_reason = value
@@ -275,8 +382,44 @@ fn build_request_body(input: &StreamInput) -> Result<serde_json::Value, OllamaEr
     if !system_text.is_empty() {
         body["system"] = serde_json::Value::String(system_text);
     }
-    // Ollama takes num_predict for max_tokens.
-    body["options"] = serde_json::json!({ "num_predict": input.max_tokens });
+    // Ollama takes num_predict for max_tokens. We also pin
+    // the sampling parameters lower than Ollama's defaults
+    // (temperature 0.7-0.8, top_p 0.9). At default sampling
+    // some multilingual models — notably Qwen 2.5 — spray
+    // low-probability tokens from unrelated languages (Thai,
+    // Chinese, etc.) at the start of a response, before the
+    // context anchors the model. A stricter temperature +
+    // min_p combo eliminates that failure mode without hurting
+    // legitimate creativity for the terminal-assistant use
+    // case, which favours factual over expansive.
+    body["options"] = serde_json::json!({
+        "num_predict": input.max_tokens,
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "min_p": 0.05,
+    });
+    // Tools follow Anthropic's shape closely — Ollama accepts
+    // `{ type: "function", function: { name, description,
+    // parameters } }` per tool, which is what we build below.
+    // Only sent when non-empty; models that don't support
+    // tools ignore the field or emit an error we surface.
+    if !input.tools.is_empty() {
+        let tools: Vec<serde_json::Value> = input
+            .tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })
+            })
+            .collect();
+        body["tools"] = serde_json::Value::Array(tools);
+    }
     Ok(body)
 }
 
@@ -444,6 +587,11 @@ mod tests {
         assert_eq!(body["system"], "be terse");
         assert_eq!(body["stream"], true);
         assert_eq!(body["options"]["num_predict"], 512);
+        // Sampling parameters are pinned to stable defaults —
+        // see the multilingual-drift note in `build_request_body`.
+        assert_eq!(body["options"]["temperature"], 0.3);
+        assert_eq!(body["options"]["top_p"], 0.9);
+        assert_eq!(body["options"]["min_p"], 0.05);
         let messages = body["messages"].as_array().unwrap();
         // System-role message is filtered out — it's on the
         // top-level `system` field instead.
@@ -468,5 +616,100 @@ mod tests {
         };
         let body = build_request_body(&input).unwrap();
         assert_eq!(body["system"], "first\n\nsecond");
+    }
+
+    #[test]
+    fn build_request_body_wraps_tools_in_function_envelope() {
+        use crate::agent::anthropic::{StreamInput, Tool};
+        let input = StreamInput {
+            model: "llama3.1".into(),
+            messages: vec![],
+            tools: vec![Tool {
+                name: "run_command".into(),
+                description: "Run a shell command".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    }
+                }),
+            }],
+            system: None,
+            max_tokens: 512,
+        };
+        let body = build_request_body(&input).unwrap();
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "run_command");
+        assert_eq!(tools[0]["function"]["description"], "Run a shell command");
+        // Anthropic's `input_schema` renames to Ollama's
+        // `parameters` on the way out.
+        assert_eq!(
+            tools[0]["function"]["parameters"]["properties"]["command"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn build_request_body_omits_tools_field_when_empty() {
+        use crate::agent::anthropic::StreamInput;
+        let input = StreamInput {
+            model: "llama3".into(),
+            messages: vec![],
+            tools: vec![],
+            system: None,
+            max_tokens: 512,
+        };
+        let body = build_request_body(&input).unwrap();
+        // No spurious `tools: []` key when tools aren't in use.
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn tool_calls_in_message_emit_tool_call_events() {
+        let out = events(&[
+            r#"{"model":"llama3.1","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"run_command","arguments":{"command":"pwd","reason":"check cwd"}}}]},"done":false}"#,
+        ]);
+        assert_eq!(out.len(), 1);
+        let StreamEvent::ToolCall { id, name, input } = &out[0] else {
+            panic!("expected tool_call");
+        };
+        assert_eq!(name, "run_command");
+        assert!(id.starts_with("ollama_call_"));
+        assert_eq!(
+            input,
+            &serde_json::json!({"command":"pwd","reason":"check cwd"})
+        );
+    }
+
+    #[test]
+    fn multiple_tool_calls_in_one_message_get_distinct_ids() {
+        let out = events(&[r#"{"model":"llama3.1","message":{"tool_calls":[
+                {"function":{"name":"run_command","arguments":{"command":"pwd"}}},
+                {"function":{"name":"run_command","arguments":{"command":"ls"}}}
+            ]},"done":false}"#]);
+        let ids: Vec<String> = out
+            .iter()
+            .filter_map(|e| {
+                if let StreamEvent::ToolCall { id, .. } = e {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    #[test]
+    fn tool_calls_without_a_function_name_are_skipped() {
+        // Defensive — bad model output shouldn't crash the
+        // stream.
+        let out = events(&[
+            r#"{"message":{"tool_calls":[{"function":{"arguments":{"x":1}}}]},"done":false}"#,
+        ]);
+        assert_eq!(out.len(), 0);
     }
 }

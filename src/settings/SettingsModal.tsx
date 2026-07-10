@@ -22,7 +22,11 @@ import {
   setClaudeApiKey,
 } from "../assistant/providers/claude/apiKey";
 import { probeClaudeCli } from "../assistant/providers/claude/subscription";
-import { probeOllama, type OllamaProbeResult } from "../assistant/providers/ollama/ollama";
+import {
+  probeOllama,
+  probeOllamaModel,
+  type OllamaProbeResult,
+} from "../assistant/providers/ollama/ollama";
 import {
   getAssistantConfig,
   setAssistantConfig,
@@ -196,6 +200,7 @@ const DEFAULT_CONFIG: AssistantConfig = {
   claude_lane: "none",
   claude_model: null,
   ollama_model: null,
+  ollama_capabilities: null,
 };
 
 export function SettingsModal({ onClose }: { onClose: () => void }): React.ReactElement {
@@ -224,6 +229,25 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
       setCliVersion(cli);
       setApiKeyConfigured(hasKey);
       setOllama(ol);
+      // Back-fill missing Ollama capabilities on modal open —
+      // e.g. a config saved before per-model probing landed,
+      // or after Ollama was reinstalled with new models.
+      if (
+        cfg.provider === "ollama" &&
+        cfg.ollama_model !== null &&
+        cfg.ollama_capabilities === null &&
+        ol.reachable
+      ) {
+        const caps = await probeOllamaModel(cfg.ollama_model).catch(() => null);
+        if (caps !== null && !caps.unknown) {
+          const enriched: AssistantConfig = {
+            ...cfg,
+            ollama_capabilities: { tools: caps.tools, vision: caps.vision },
+          };
+          setConfig(enriched);
+          void setAssistantConfig(enriched);
+        }
+      }
     })();
   }, []);
 
@@ -253,8 +277,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
   const persistClaudeLane = (lane: ClaudeLane): Promise<void> =>
     persist({ ...config, provider: lane === "none" ? "" : "claude", claude_lane: lane });
 
-  const persistOllamaModel = (model: string): Promise<void> =>
-    persist({ ...config, provider: "ollama", ollama_model: model || null });
+  const persistOllamaModel = async (model: string): Promise<void> => {
+    // Probe the model's capabilities so the provider can
+    // honestly declare tool / vision support. Falls back to
+    // conservative defaults if the daemon is unreachable —
+    // never blocks the model pick itself.
+    const caps = model.length === 0 ? null : await probeOllamaModel(model).catch(() => null);
+    await persist({
+      ...config,
+      provider: "ollama",
+      ollama_model: model || null,
+      ollama_capabilities:
+        caps === null || caps.unknown ? null : { tools: caps.tools, vision: caps.vision },
+    });
+  };
 
   const saveKey = async (): Promise<void> => {
     if (apiKey.length === 0) return;
@@ -468,10 +504,51 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
                   ))}
                 </select>
               </div>
-              <div style={{ ...STATUS_ROW, marginTop: 6 }}>
-                Tool-calling and image input aren't wired for the Ollama provider yet — the chat
-                surface will dim those features when this provider is active.
-              </div>
+              {config.ollama_capabilities !== null ? (
+                <>
+                  <div
+                    data-testid="settings-ollama-capabilities"
+                    style={{
+                      ...STATUS_ROW,
+                      marginTop: 6,
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>Capabilities:</span>
+                    <ModelCapabilityChip
+                      label="tools"
+                      supported={config.ollama_capabilities.tools}
+                      testId="settings-ollama-cap-tools"
+                    />
+                    <ModelCapabilityChip
+                      label="vision"
+                      supported={config.ollama_capabilities.vision}
+                      testId="settings-ollama-cap-vision"
+                    />
+                  </div>
+                  <div
+                    data-testid="settings-ollama-capabilities-note"
+                    style={{
+                      ...STATUS_ROW,
+                      marginTop: 6,
+                      fontStyle: "italic",
+                      color: "var(--fg-faint)",
+                    }}
+                  >
+                    Capabilities reflect what the model{" "}
+                    <em style={{ fontStyle: "normal", fontWeight: 600 }}>declares</em>, not tested
+                    behaviour. Real-world tool use varies — smaller models (e.g. Llama 3.2 1B/3B)
+                    often claim <code>tools</code> support but fabricate answers instead of calling
+                    the tool. Try Qwen 2.5, Llama 3.1, or Mistral Nemo for reliable results.
+                  </div>
+                </>
+              ) : (
+                <div style={{ ...STATUS_ROW, marginTop: 6 }}>
+                  Capabilities not probed yet — pick a model to detect tool + vision support.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -486,6 +563,41 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
         )}
       </div>
     </div>
+  );
+}
+
+function ModelCapabilityChip({
+  label,
+  supported,
+  testId,
+}: {
+  label: string;
+  supported: boolean;
+  testId: string;
+}): React.ReactElement {
+  return (
+    <span
+      data-testid={testId}
+      data-supported={supported}
+      style={{
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        padding: "1px 6px",
+        borderRadius: 3,
+        border: "1px solid",
+        color: supported ? "var(--green)" : "var(--fg-faint)",
+        borderColor: supported ? "var(--green)" : "var(--border)",
+        opacity: supported ? 1 : 0.55,
+      }}
+      title={
+        supported
+          ? `This model reports support for ${label}.`
+          : `This model does not support ${label}.`
+      }
+    >
+      {label}
+      {supported ? " ✓" : " ✗"}
+    </span>
   );
 }
 

@@ -66,7 +66,7 @@ type WireStreamEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; stop_reason: string };
 
-const CAPABILITIES: ProviderCapabilities = {
+const BASE_CAPABILITIES: ProviderCapabilities = {
   tools: false,
   subagents: false,
   streaming: true,
@@ -87,14 +87,25 @@ export function createOllamaProvider(opts?: {
   invoker?: (command: string, args: Record<string, unknown>) => Promise<unknown>;
   model?: string;
   onToolProposed?: (call: ToolCall) => Promise<ToolVerdict>;
+  /** Per-model capability overrides discovered via
+   *  `probeOllamaModel`. When absent, provider stays at the
+   *  conservative base (`tools: false`, `imageInput: false`).
+   *  When present, the provider honestly declares what the
+   *  selected model supports so the feature-gating in the
+   *  chat surface reflects reality. */
+  capabilities?: Partial<ProviderCapabilities>;
 }): AssistantProvider {
   const model = opts?.model ?? DEFAULT_MODEL;
+  const capabilities: ProviderCapabilities = {
+    ...BASE_CAPABILITIES,
+    ...(opts?.capabilities ?? {}),
+  };
   return {
     id: "ollama",
     displayName: "Ollama (local)",
     authKind: "local",
     privacyPosture: "local",
-    capabilities: CAPABILITIES,
+    capabilities,
     stream(input: StreamInput): AsyncIterable<StreamEvent> {
       return streamViaOllama(input, model, opts?.invoker);
     },
@@ -272,4 +283,27 @@ export async function probeOllama(): Promise<OllamaProbeResult> {
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<OllamaProbeResult>("ollama_probe");
+}
+
+/** Per-model capabilities discovered via Ollama's `/api/show`
+ *  endpoint. `unknown: true` means we couldn't reach the
+ *  daemon or the model wasn't found — settings UI should
+ *  treat that as "capabilities not confirmed" and not
+ *  activate advanced features. */
+export interface OllamaModelCapabilities {
+  tools: boolean;
+  vision: boolean;
+  unknown: boolean;
+}
+
+/** Ask Rust to probe a specific Ollama model. Used by the
+ *  settings modal when the user picks a model in the
+ *  dropdown so the provider can honestly declare `tools` /
+ *  `vision` availability for that model. Never rejects. */
+export async function probeOllamaModel(model: string): Promise<OllamaModelCapabilities> {
+  if (!isTauriContext()) {
+    return { tools: false, vision: false, unknown: true };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<OllamaModelCapabilities>("ollama_probe_model", { model });
 }

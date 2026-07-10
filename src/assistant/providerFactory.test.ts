@@ -7,6 +7,7 @@ const BASE: AssistantConfig = {
   claude_lane: "none",
   claude_model: null,
   ollama_model: null,
+  ollama_capabilities: null,
 };
 
 describe("providerFromConfig", () => {
@@ -68,5 +69,38 @@ describe("providerFromConfig", () => {
     expect(res.provider?.id).toBe("ollama");
     expect(res.provider?.authKind).toBe("local");
     expect(res.provider?.privacyPosture).toBe("local");
+  });
+
+  it("stays conservative on Ollama capabilities when none probed", () => {
+    const res = providerFromConfig({
+      ...BASE,
+      provider: "ollama",
+      ollama_model: "llama3.1",
+      ollama_capabilities: null,
+    });
+    expect(res.provider?.capabilities.tools).toBe(false);
+    expect(res.provider?.capabilities.imageInput).toBe(false);
+  });
+
+  it("honours probed Ollama capabilities when saved", () => {
+    const res = providerFromConfig({
+      ...BASE,
+      provider: "ollama",
+      ollama_model: "llama3.1",
+      ollama_capabilities: { tools: true, vision: false },
+    });
+    expect(res.provider?.capabilities.tools).toBe(true);
+    expect(res.provider?.capabilities.imageInput).toBe(false);
+  });
+
+  it("maps Ollama vision capability into the imageInput flag", () => {
+    const res = providerFromConfig({
+      ...BASE,
+      provider: "ollama",
+      ollama_model: "llava",
+      ollama_capabilities: { tools: false, vision: true },
+    });
+    expect(res.provider?.capabilities.tools).toBe(false);
+    expect(res.provider?.capabilities.imageInput).toBe(true);
   });
 });
