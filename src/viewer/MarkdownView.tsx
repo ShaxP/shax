@@ -23,7 +23,7 @@ import { renderToString } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import "highlight.js/styles/atom-one-dark.css";
+import "../theme/syntax.css";
 import "./MarkdownView.css";
 import DOMPurify, { type Config as PurifyConfig } from "dompurify";
 

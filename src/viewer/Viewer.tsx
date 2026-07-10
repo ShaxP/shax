@@ -16,9 +16,16 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from "@codemirror/language";
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  foldGutter,
+  foldKeymap,
+  indentOnInput,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
   EditorView,
   drawSelection,
@@ -117,9 +124,25 @@ const MODE_PILL_STYLE: CSSProperties = {
   fontWeight: 600,
 };
 
+/** Extension bundle used for the light theme — no editor
+ *  chrome extension (CodeMirror's default renders correctly
+ *  on light) plus `defaultHighlightStyle`, which is designed
+ *  for light backgrounds and covers the tag categories the
+ *  language extensions emit. */
+const lightThemeExtensions: Extension = [syntaxHighlighting(defaultHighlightStyle)];
+
+/** Resolve the current theme from `document.documentElement`
+ *  (which `applyTheme` sets). Falls back to dark. */
+function currentThemeExtension(): Extension {
+  const attr =
+    typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null;
+  return attr === "light" ? lightThemeExtensions : oneDark;
+}
+
 export function Viewer({ text, language = "plaintext", style }: ViewerProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const themeCompartmentRef = useRef<Compartment | null>(null);
   const [mode, setMode] = useState<string>("normal");
 
   // Mount / re-mount the editor whenever the content or language
@@ -130,6 +153,11 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
     const host = hostRef.current;
     if (host === null) return;
     const cleanText = stripAnsi(text);
+    // Compartment lets us swap the theme extension on the
+    // fly without rebuilding the editor — preserves scroll
+    // position, vim state, search buffer, etc.
+    const themeCompartment = new Compartment();
+    themeCompartmentRef.current = themeCompartment;
     const extensions: Extension[] = [
       // CodeMirror 6 defaults to `height: auto` — content grows
       // past any bounded parent and gets clipped by the host's
@@ -159,7 +187,7 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
       rectangularSelection(),
       search({ top: true }),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap]),
-      oneDark,
+      themeCompartment.of(currentThemeExtension()),
       // We want the *document* to be immutable but the *editor* to
       // behave as editable so the vim plugin doesn't refuse to enter
       // insert mode (it bails on `EditorState.readOnly`). A
@@ -178,8 +206,26 @@ export function Viewer({ text, language = "plaintext", style }: ViewerProps): Re
     return () => {
       view.destroy();
       viewRef.current = null;
+      themeCompartmentRef.current = null;
     };
   }, [text, language]);
+
+  // Live-swap the CodeMirror theme when the user flips the
+  // Appearance toggle. The compartment reconfigure preserves
+  // scroll position, vim state, and selection — no editor
+  // remount, no visible flash.
+  useEffect(() => {
+    const reconfigure = (): void => {
+      const view = viewRef.current;
+      const compartment = themeCompartmentRef.current;
+      if (view === null || compartment === null) return;
+      view.dispatch({
+        effects: compartment.reconfigure(currentThemeExtension()),
+      });
+    };
+    window.addEventListener("shax:preference-changed", reconfigure);
+    return () => window.removeEventListener("shax:preference-changed", reconfigure);
+  }, []);
 
   // Listen for vim mode changes. `@replit/codemirror-vim` emits a
   // `"vim-mode-change"` event on the CM5-shim `cm` object it
