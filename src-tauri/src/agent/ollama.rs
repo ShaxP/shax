@@ -382,8 +382,22 @@ fn build_request_body(input: &StreamInput) -> Result<serde_json::Value, OllamaEr
     if !system_text.is_empty() {
         body["system"] = serde_json::Value::String(system_text);
     }
-    // Ollama takes num_predict for max_tokens.
-    body["options"] = serde_json::json!({ "num_predict": input.max_tokens });
+    // Ollama takes num_predict for max_tokens. We also pin
+    // the sampling parameters lower than Ollama's defaults
+    // (temperature 0.7-0.8, top_p 0.9). At default sampling
+    // some multilingual models — notably Qwen 2.5 — spray
+    // low-probability tokens from unrelated languages (Thai,
+    // Chinese, etc.) at the start of a response, before the
+    // context anchors the model. A stricter temperature +
+    // min_p combo eliminates that failure mode without hurting
+    // legitimate creativity for the terminal-assistant use
+    // case, which favours factual over expansive.
+    body["options"] = serde_json::json!({
+        "num_predict": input.max_tokens,
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "min_p": 0.05,
+    });
     // Tools follow Anthropic's shape closely — Ollama accepts
     // `{ type: "function", function: { name, description,
     // parameters } }` per tool, which is what we build below.
@@ -573,6 +587,11 @@ mod tests {
         assert_eq!(body["system"], "be terse");
         assert_eq!(body["stream"], true);
         assert_eq!(body["options"]["num_predict"], 512);
+        // Sampling parameters are pinned to stable defaults —
+        // see the multilingual-drift note in `build_request_body`.
+        assert_eq!(body["options"]["temperature"], 0.3);
+        assert_eq!(body["options"]["top_p"], 0.9);
+        assert_eq!(body["options"]["min_p"], 0.05);
         let messages = body["messages"].as_array().unwrap();
         // System-role message is filtered out — it's on the
         // top-level `system` field instead.
