@@ -23,7 +23,7 @@ import { renderToString } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
-import "highlight.js/styles/atom-one-dark.css";
+import "../theme/syntax.css";
 import "./ChatMarkdown.css";
 
 export interface ChatMarkdownProps {
