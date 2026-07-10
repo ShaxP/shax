@@ -13,6 +13,12 @@
   font-size: 13px;
   line-height: 1.35;
   color: inherit;
+  /* Override the bubble's `white-space: pre-wrap` which was
+   * set for the plain-text user turns. Markdown content
+   * already has proper block structure; leaving pre-wrap in
+   * turn preserves stray newlines from the raw source and
+   * inflates paragraph gaps. */
+  white-space: normal;
 }
 
 .chat-markdown > *:first-child {
@@ -23,32 +29,23 @@
   margin-bottom: 0;
 }
 
-/* Tightened block spacing — chat replies feel dense-with-info
- * rather than airy-with-margins. Sits between the browser
- * defaults (16px) and no-margins-at-all. */
+/* Bottom-only margins for the tightest possible feel while
+ * still keeping paragraphs visually distinct. 0.4em at 13px
+ * ≈ 5px — subtle break, no collapsing surprises with
+ * sibling elements. */
 .chat-markdown p,
 .chat-markdown ul,
 .chat-markdown ol,
 .chat-markdown pre,
 .chat-markdown blockquote {
-  margin: 3px 0;
-}
-
-/* Adjacent-sibling collapses on the same block type so we
- * don't compound spacing (e.g. a paragraph directly after a
- * paragraph shouldn't get another 3px on top of the previous
- * one's bottom). */
-.chat-markdown p + p,
-.chat-markdown ul + ul,
-.chat-markdown ol + ol {
-  margin-top: 0;
+  margin: 0 0 0.4em 0;
 }
 
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,
 .chat-markdown h4 {
-  margin: 6px 0 2px 0;
+  margin: 0.4em 0 0.15em 0;
   font-weight: 600;
   line-height: 1.25;
 }
