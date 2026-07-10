@@ -505,28 +505,45 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
                 </select>
               </div>
               {config.ollama_capabilities !== null ? (
-                <div
-                  data-testid="settings-ollama-capabilities"
-                  style={{
-                    ...STATUS_ROW,
-                    marginTop: 6,
-                    display: "flex",
-                    gap: 6,
-                    alignItems: "center",
-                  }}
-                >
-                  <span>Capabilities:</span>
-                  <ModelCapabilityChip
-                    label="tools"
-                    supported={config.ollama_capabilities.tools}
-                    testId="settings-ollama-cap-tools"
-                  />
-                  <ModelCapabilityChip
-                    label="vision"
-                    supported={config.ollama_capabilities.vision}
-                    testId="settings-ollama-cap-vision"
-                  />
-                </div>
+                <>
+                  <div
+                    data-testid="settings-ollama-capabilities"
+                    style={{
+                      ...STATUS_ROW,
+                      marginTop: 6,
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>Capabilities:</span>
+                    <ModelCapabilityChip
+                      label="tools"
+                      supported={config.ollama_capabilities.tools}
+                      testId="settings-ollama-cap-tools"
+                    />
+                    <ModelCapabilityChip
+                      label="vision"
+                      supported={config.ollama_capabilities.vision}
+                      testId="settings-ollama-cap-vision"
+                    />
+                  </div>
+                  <div
+                    data-testid="settings-ollama-capabilities-note"
+                    style={{
+                      ...STATUS_ROW,
+                      marginTop: 6,
+                      fontStyle: "italic",
+                      color: "var(--fg-faint)",
+                    }}
+                  >
+                    Capabilities reflect what the model{" "}
+                    <em style={{ fontStyle: "normal", fontWeight: 600 }}>declares</em>, not tested
+                    behaviour. Real-world tool use varies — smaller models (e.g. Llama 3.2 1B/3B)
+                    often claim <code>tools</code> support but fabricate answers instead of calling
+                    the tool. Try Qwen 2.5, Llama 3.1, or Mistral Nemo for reliable results.
+                  </div>
+                </>
               ) : (
                 <div style={{ ...STATUS_ROW, marginTop: 6 }}>
                   Capabilities not probed yet — pick a model to detect tool + vision support.
