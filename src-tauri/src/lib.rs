@@ -2,6 +2,7 @@ mod agent;
 mod blocks;
 mod ipc;
 mod mux;
+mod preferences;
 mod pty;
 mod safety;
 mod search;
@@ -22,8 +23,22 @@ use ipc::{
     pty_list_blocks, pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes,
     search_blocks, stat_file,
 };
+use preferences::Preferences;
 use pty::PtyManager;
 use store::{default_db_path, Store};
+
+/// Load the persisted app-level preferences (theme, etc.).
+/// Missing / malformed file → defaults.
+#[tauri::command]
+fn get_preferences() -> Result<Preferences, String> {
+    preferences::load().map_err(|e| e.to_string())
+}
+
+/// Overwrite the persisted app-level preferences.
+#[tauri::command]
+fn set_preferences(preferences: Preferences) -> Result<(), String> {
+    preferences::save(&preferences).map_err(|e| e.to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -92,6 +107,8 @@ pub fn run() {
             get_chat_history,
             set_chat_history,
             clear_chat_history,
+            get_preferences,
+            set_preferences,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
