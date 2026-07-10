@@ -1,9 +1,25 @@
 /*
- * Shax design tokens (dark, precise).
+ * Shax design tokens — dark + light palettes (M7 slice 1).
  *
- * Implementation home of the palette defined in `/design`. Components
- * consume these via `var(--…)` instead of duplicating hex literals.
- * See `specs/13-design.md`. Light variants are reserved for M7 polish.
+ * Implementation home of the palettes defined in `/design`.
+ * Components consume these via `var(--…)` and never hard-code
+ * hexes. See `specs/13-design.md`.
+ *
+ * How theme switching works:
+ *   - The dark palette lives under `[data-theme="dark"]` (and
+ *     `:root` as the fallback so first paint before JS boots
+ *     doesn't flash unstyled).
+ *   - The light palette lives under `[data-theme="light"]`.
+ *   - `src/theme/theme.ts` sets `document.documentElement`'s
+ *     `data-theme` attribute on load and whenever the
+ *     preference changes. When the preference is `"system"`
+ *     the applier resolves it via the `prefers-color-scheme`
+ *     media query and re-resolves when the OS setting flips.
+ *
+ * The light palette is a first-pass derivation of the dark
+ * one — same token *roles*, just inverted lightness plus a
+ * few chroma tweaks so contrast holds. Expect iteration from
+ * design review after this slice ships.
  */
 
 /*
@@ -23,7 +39,10 @@
   font-display: swap;
 }
 
-:root {
+/* --- Dark palette (default / fallback) ------------------- */
+
+:root,
+[data-theme="dark"] {
   /* Surfaces */
   --bg: #0c0d10;
   --pane: #0e0f13;
@@ -78,7 +97,65 @@
   --ansi-bright-magenta: #d5a5f5;
   --ansi-bright-cyan: #8ecfd8;
   --ansi-bright-white: #f0f2f8;
+}
 
+/* --- Light palette --------------------------------------- */
+
+[data-theme="light"] {
+  /* Surfaces — flipped lightness, warm off-white so the eye
+   * doesn't fatigue on pure white. */
+  --bg: #fafaf7;
+  --pane: #ffffff;
+  --pane2: #f4f4f0;
+  --surface: #eeefe9;
+  --surface-hover: #e5e6e0;
+  --titlebar: #efefe9;
+
+  /* Borders */
+  --border: #dcddd6;
+  --border-strong: #b8bab2;
+
+  /* Foreground */
+  --fg: #1a1c22;
+  --fg-dim: #4c525b;
+  --fg-faint: #7a808a;
+
+  /* Accent — same hue, adjusted for AAA-ish contrast on light. */
+  --accent: oklch(0.55 0.15 250);
+  --accent-soft: oklch(0.55 0.15 250 / 0.16);
+
+  /* Semantic — darker to hit contrast on light backgrounds. */
+  --green: oklch(0.55 0.13 155);
+  --red: oklch(0.55 0.17 25);
+  --amber: oklch(0.62 0.15 80);
+  --cyan: oklch(0.55 0.11 205);
+
+  /*
+   * ANSI palette — tuned for light. Same 16 roles, colours
+   * picked to stay legible against a warm off-white
+   * background.
+   */
+  --ansi-black: #2a2c33;
+  --ansi-red: #b43f4b;
+  --ansi-green: #4c8f43;
+  --ansi-yellow: #a5892b;
+  --ansi-blue: #3d6ba8;
+  --ansi-magenta: #8a4cb8;
+  --ansi-cyan: #3b8a91;
+  --ansi-white: #b8bab2;
+  --ansi-bright-black: #4c525b;
+  --ansi-bright-red: #d0454f;
+  --ansi-bright-green: #63a856;
+  --ansi-bright-yellow: #b89a34;
+  --ansi-bright-blue: #4a7cbf;
+  --ansi-bright-magenta: #a05dcc;
+  --ansi-bright-cyan: #4c9ca5;
+  --ansi-bright-white: #dcddd6;
+}
+
+/* --- Theme-agnostic tokens ------------------------------- */
+
+:root {
   /* Geometry */
   --radius: 6px;
   --radius-sm: 4px;

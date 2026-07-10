@@ -22,6 +22,8 @@ import {
   setClaudeApiKey,
 } from "../assistant/providers/claude/apiKey";
 import { probeClaudeCli } from "../assistant/providers/claude/subscription";
+import { loadPreferences, savePreferences } from "../theme/preferences";
+import type { ThemePreference } from "../theme/theme";
 import {
   probeOllama,
   probeOllamaModel,
@@ -211,24 +213,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null);
   const [cliVersion, setCliVersion] = useState<string | null | undefined>(undefined);
   const [ollama, setOllama] = useState<OllamaProbeResult | undefined>(undefined);
+  const [theme, setTheme] = useState<ThemePreference>("system");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     panelRef.current?.focus();
     void (async () => {
-      const [cfg, cli, hasKey, ol] = await Promise.all([
+      const [cfg, cli, hasKey, ol, prefs] = await Promise.all([
         getAssistantConfig().catch(() => DEFAULT_CONFIG),
         probeClaudeCli().catch(() => null),
         hasClaudeApiKey().catch(() => false),
         probeOllama().catch(
           (): OllamaProbeResult => ({ reachable: false, models: [], error: null }),
         ),
+        loadPreferences().catch(() => ({ theme: "system" as ThemePreference })),
       ]);
       setConfig(cfg);
       setCliVersion(cli);
       setApiKeyConfigured(hasKey);
       setOllama(ol);
+      setTheme(prefs.theme);
       // Back-fill missing Ollama capabilities on modal open —
       // e.g. a config saved before per-model probing landed,
       // or after Ollama was reinstalled with new models.
@@ -276,6 +281,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
 
   const persistClaudeLane = (lane: ClaudeLane): Promise<void> =>
     persist({ ...config, provider: lane === "none" ? "" : "claude", claude_lane: lane });
+
+  const persistTheme = async (next: ThemePreference): Promise<void> => {
+    setTheme(next);
+    // Broadcast so App re-applies immediately — no restart,
+    // no reopen. Save happens in the background; a failure
+    // here doesn't roll back the in-memory / visual state
+    // (user's on-screen preference wins over a stale file).
+    window.dispatchEvent(new CustomEvent("shax:preference-changed", { detail: { theme: next } }));
+    try {
+      await savePreferences({ theme: next });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setStatus(`Failed to save theme: ${message}`);
+    }
+  };
 
   const persistOllamaModel = async (model: string): Promise<void> => {
     // Probe the model's capabilities so the provider can
@@ -343,6 +363,39 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
           <button data-testid="settings-close" style={BUTTON} onClick={onClose} type="button">
             Close
           </button>
+        </div>
+
+        <div style={SECTION}>
+          <div style={SECTION_TITLE}>Appearance</div>
+          <div
+            data-testid="settings-theme"
+            role="radiogroup"
+            aria-label="Theme"
+            style={{
+              display: "inline-flex",
+              padding: 2,
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--pane2)",
+              gap: 2,
+            }}
+          >
+            {(["dark", "light", "system"] as ThemePreference[]).map((option) => (
+              <ThemeOption
+                key={option}
+                option={option}
+                active={theme === option}
+                onSelect={() => void persistTheme(option)}
+              />
+            ))}
+          </div>
+          <div style={{ ...STATUS_ROW, marginTop: 6 }}>
+            {theme === "system"
+              ? "Follows the OS setting. Updates instantly when you flip macOS Appearance."
+              : theme === "dark"
+                ? "Dark palette, always."
+                : "Light palette, always."}
+          </div>
         </div>
 
         <div style={SECTION}>
@@ -563,6 +616,41 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
         )}
       </div>
     </div>
+  );
+}
+
+function ThemeOption({
+  option,
+  active,
+  onSelect,
+}: {
+  option: ThemePreference;
+  active: boolean;
+  onSelect: () => void;
+}): React.ReactElement {
+  const label = option === "dark" ? "Dark" : option === "light" ? "Light" : "System";
+  return (
+    <button
+      data-testid={`settings-theme-${option}`}
+      data-active={active}
+      role="radio"
+      aria-checked={active}
+      type="button"
+      onClick={onSelect}
+      style={{
+        padding: "4px 12px",
+        borderRadius: 4,
+        border: "1px solid transparent",
+        background: active ? "var(--accent)" : "transparent",
+        color: active ? "#fff" : "var(--fg)",
+        fontFamily: "var(--font-ui)",
+        fontSize: 12,
+        fontWeight: active ? 600 : 400,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

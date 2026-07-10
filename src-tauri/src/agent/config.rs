@@ -99,8 +99,9 @@ pub fn config_path() -> Result<PathBuf, ConfigError> {
 
 /// Cross-platform config directory. Mirrors what most Tauri
 /// apps use without pulling in the `dirs` crate — small
-/// enough to inline. Shared by `config.rs` and `history.rs`.
-pub(super) fn platform_config_dir() -> Option<PathBuf> {
+/// enough to inline. Shared by `config.rs`, `history.rs`, and
+/// the crate-level `preferences` module.
+pub(crate) fn platform_config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         return std::env::var_os("HOME").map(|home| {

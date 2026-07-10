@@ -39,6 +39,8 @@ import { SearchOverlay } from "./panes/SearchOverlay";
 import { SafetyGate } from "./safetyGate/SafetyGate";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
 import { SettingsModal } from "./settings/SettingsModal";
+import { applyTheme } from "./theme/theme";
+import { loadPreferences } from "./theme/preferences";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
@@ -456,6 +458,22 @@ export default function App(): React.ReactElement {
     };
     window.addEventListener("shax:assistant-ask", onAsk);
     return () => window.removeEventListener("shax:assistant-ask", onAsk);
+  }, []);
+
+  // Apply the persisted theme preference on mount. The
+  // `data-theme` attribute goes on `<html>` (via
+  // `applyTheme`), which our `tokens.css` reads to pick
+  // dark vs light palettes. A `shax:preference-changed`
+  // event lets the settings modal notify the App when the
+  // user flips the toggle without re-persisting.
+  useEffect(() => {
+    void loadPreferences().then((prefs) => applyTheme(prefs.theme));
+    const onChanged = (e: Event): void => {
+      const detail = (e as CustomEvent<{ theme?: "dark" | "light" | "system" }>).detail;
+      if (detail?.theme !== undefined) applyTheme(detail.theme);
+    };
+    window.addEventListener("shax:preference-changed", onChanged);
+    return () => window.removeEventListener("shax:preference-changed", onChanged);
   }, []);
 
   // When an overlay (search, viewer) closes, the focus that briefly
