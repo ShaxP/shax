@@ -448,7 +448,43 @@ impl Store {
             backfill_fts_trigram(conn)?;
         }
 
-        conn.pragma_update(None, "user_version", 4)?;
+        // v5: semantic-search embedding table (M7 slice 2).
+        //
+        // One row per block that's been embedded. The vector
+        // is stored as a raw f32 BLOB in little-endian order —
+        // the same layout `sqlite-vec` would use if we later
+        // want to promote this to a `vec0` virtual table for
+        // sub-linear kNN. For the terminal-history scale we
+        // care about (order of 100k blocks per user), a
+        // brute-force cosine scan in Rust is fine and keeps
+        // us free of native-extension linking.
+        //
+        // `dim` is stored per-row so a model swap (e.g. moving
+        // from MiniLM-L6 384-dim to bge-large 1024-dim) doesn't
+        // corrupt the query path — the reader can filter to
+        // whichever dim is current.
+        //
+        // `model_id` is a short opaque tag ("minilm-l6-v2",
+        // "mock-hash", …) so a backfill that starts under one
+        // model and finishes under another is diagnosable.
+        if version < 5 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS block_embeddings (
+                    block_id   TEXT PRIMARY KEY,
+                    model_id   TEXT NOT NULL,
+                    dim        INTEGER NOT NULL,
+                    vector     BLOB NOT NULL,
+                    created_ms INTEGER NOT NULL,
+                    FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_block_embeddings_model
+                    ON block_embeddings(model_id, dim);
+                "#,
+            )?;
+        }
+
+        conn.pragma_update(None, "user_version", 5)?;
 
         // One-shot dedup: an earlier build of the FTS-insert path didn't
         // delete prior rows before inserting, so re-running `insert_block`
@@ -1279,6 +1315,214 @@ impl Store {
             .flatten();
         Ok(bytes)
     }
+
+    /// Fetch the command text for a block. Used by the
+    /// embedder to build the "command + output-head" input
+    /// string. Returns `None` when the block id isn't in the
+    /// store; `Some("")` when the block exists but the
+    /// command field is null (widget-emitted blocks pre-M5,
+    /// etc.).
+    pub fn command_for(&self, id: BlockId) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let cmd = conn
+            .query_row(
+                "SELECT command FROM blocks WHERE id = ?1",
+                params![id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        Ok(cmd.map(|opt| opt.unwrap_or_default()))
+    }
+
+    // --- M7 slice 2: embedding storage --------------------
+
+    /// Upsert a single block's embedding. Idempotent — a
+    /// second call for the same block overwrites the prior
+    /// vector. Called by the background embedder both during
+    /// backfill and on each new completed block.
+    pub fn upsert_embedding(
+        &self,
+        block_id: BlockId,
+        model_id: &str,
+        vector: &[f32],
+        now_ms: u64,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let blob = crate::search::embedding::vector_to_blob(vector);
+        let dim = vector.len() as i64;
+        conn.execute(
+            r#"
+            INSERT INTO block_embeddings (block_id, model_id, dim, vector, created_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(block_id) DO UPDATE SET
+                model_id   = excluded.model_id,
+                dim        = excluded.dim,
+                vector     = excluded.vector,
+                created_ms = excluded.created_ms
+            "#,
+            params![block_id.to_string(), model_id, dim, blob, now_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    /// True when the given block already has an embedding
+    /// stored under the current model. Callers include the
+    /// slice 3 search UI (to render a "waiting for
+    /// indexing" hint on new blocks) and slice 2b's ONNX
+    /// migration path (to skip already-embedded blocks even
+    /// when the model_id matches).
+    #[allow(dead_code)] // consumed by slice 2b / 3
+    pub fn has_embedding(&self, block_id: BlockId, model_id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let row: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM block_embeddings WHERE block_id = ?1 AND model_id = ?2",
+                params![block_id.to_string(), model_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(row.is_some())
+    }
+
+    /// Return the ids of blocks that haven't been embedded
+    /// yet under `model_id`, oldest-first, up to `limit`.
+    /// Backfill iterates this in batches.
+    pub fn embedding_backlog(
+        &self,
+        model_id: &str,
+        limit: usize,
+    ) -> Result<Vec<BlockId>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT b.id
+            FROM blocks b
+            LEFT JOIN block_embeddings e
+                ON e.block_id = b.id AND e.model_id = ?1
+            WHERE e.block_id IS NULL
+            ORDER BY b.started_at_ms ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![model_id, limit as i64], |row| {
+            let s: String = row.get(0)?;
+            Ok(s)
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let s = row?;
+            if let Ok(id) = BlockId::parse(&s) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Report indexing progress: (indexed count, total count)
+    /// for the current model. Drives the tiny "N of M
+    /// blocks indexed" indicator surfaced by the search UI
+    /// in slice 3.
+    pub fn embedding_progress(&self, model_id: &str) -> Result<(u64, u64), StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let indexed: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM block_embeddings WHERE model_id = ?1",
+            params![model_id],
+            |row| row.get(0),
+        )?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM blocks", [], |row| row.get(0))?;
+        Ok((indexed as u64, total as u64))
+    }
+
+    /// Brute-force k-nearest-neighbours over the stored
+    /// embeddings under `model_id`. Scans every row and
+    /// scores by cosine similarity — fast enough for the
+    /// 100k-block scale we care about. `sqlite-vec`
+    /// integration is a follow-up when we outgrow this.
+    ///
+    /// Returns `(block_id, similarity)` pairs sorted by
+    /// similarity descending. Similarity is in `[-1.0, 1.0]`.
+    pub fn nearest_neighbours(
+        &self,
+        model_id: &str,
+        query: &[f32],
+        k: usize,
+    ) -> Result<Vec<(BlockId, f32)>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let dim = query.len();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT block_id, vector
+            FROM block_embeddings
+            WHERE model_id = ?1 AND dim = ?2
+            "#,
+        )?;
+        let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<ScoredHit>> =
+            std::collections::BinaryHeap::with_capacity(k + 1);
+        let rows = stmt.query_map(params![model_id, dim as i64], |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob))
+        })?;
+        for row in rows {
+            let (id_str, blob) = row?;
+            let Some(vec) = crate::search::embedding::vector_from_blob(&blob, dim) else {
+                continue;
+            };
+            let similarity = crate::search::embedding::cosine_similarity(query, &vec);
+            let Ok(id) = BlockId::parse(&id_str) else {
+                continue;
+            };
+            heap.push(std::cmp::Reverse(ScoredHit { similarity, id }));
+            if heap.len() > k {
+                heap.pop();
+            }
+        }
+        // `BinaryHeap<Reverse<T>>::into_sorted_vec` returns
+        // `Reverse<T>` values in ascending Ord, which
+        // corresponds to descending T. So iterating and
+        // unwrapping gives us similarity descending — no
+        // extra reverse needed.
+        let out: Vec<(BlockId, f32)> = heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|std::cmp::Reverse(h)| (h.id, h.similarity))
+            .collect();
+        Ok(out)
+    }
+}
+
+/// Scored-hit wrapper so we can push into a min-heap and
+/// keep only the top-k. Ordering is by similarity ascending
+/// (min-heap semantics for top-k).
+#[derive(Debug, Clone, Copy)]
+struct ScoredHit {
+    similarity: f32,
+    id: BlockId,
+}
+
+impl PartialEq for ScoredHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.similarity == other.similarity && self.id == other.id
+    }
+}
+
+impl Eq for ScoredHit {}
+
+impl PartialOrd for ScoredHit {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScoredHit {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // NaN treated as less-than-everything so it gets
+        // evicted first. Ties broken by id for a stable order.
+        self.similarity
+            .partial_cmp(&other.similarity)
+            .unwrap_or(std::cmp::Ordering::Less)
+            .then_with(|| self.id.0.cmp(&other.id.0))
+    }
 }
 
 /// Resolve the on-disk path for the Shax database under the user's app data
@@ -1483,6 +1727,149 @@ mod tests {
             loaded[0].interactive,
             "interactive flag should survive a load"
         );
+    }
+
+    // --- Semantic embedding round-trip (M7 slice 2) --------------------
+
+    #[test]
+    fn embedding_upsert_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let block = make_block(PtyId::new(), 1000, "git status", b"");
+        store.insert_block(&block).unwrap();
+
+        let v: Vec<f32> = (0..384).map(|i| (i as f32) * 0.001).collect();
+        store
+            .upsert_embedding(block.id, "mock-hash-v1", &v, 2000)
+            .unwrap();
+
+        assert!(store.has_embedding(block.id, "mock-hash-v1").unwrap());
+        assert!(!store.has_embedding(block.id, "different-model").unwrap());
+
+        // Second upsert replaces the vector rather than
+        // duplicating rows.
+        let v2: Vec<f32> = vec![0.5; 384];
+        store
+            .upsert_embedding(block.id, "mock-hash-v1", &v2, 3000)
+            .unwrap();
+
+        // Query it back — cosine similarity between v2 and
+        // itself is 1.0.
+        let hits = store.nearest_neighbours("mock-hash-v1", &v2, 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, block.id);
+        assert!((hits[0].1 - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn embedding_backlog_returns_unindexed_blocks_oldest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let b1 = make_block(pane, 1000, "first", b"");
+        let b2 = make_block(pane, 2000, "second", b"");
+        let b3 = make_block(pane, 3000, "third", b"");
+        store.insert_block(&b1).unwrap();
+        store.insert_block(&b2).unwrap();
+        store.insert_block(&b3).unwrap();
+
+        let v: Vec<f32> = vec![1.0; 384];
+        // Index only the middle one.
+        store
+            .upsert_embedding(b2.id, "mock-hash-v1", &v, 1500)
+            .unwrap();
+
+        let backlog = store.embedding_backlog("mock-hash-v1", 10).unwrap();
+        assert_eq!(backlog, vec![b1.id, b3.id]);
+    }
+
+    #[test]
+    fn embedding_progress_reports_indexed_and_total() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        for i in 0..5 {
+            let block = make_block(pane, 1000 + i, "cmd", b"");
+            store.insert_block(&block).unwrap();
+        }
+        assert_eq!(store.embedding_progress("mock-hash-v1").unwrap(), (0, 5));
+
+        // Index two of them.
+        let ids = store.embedding_backlog("mock-hash-v1", 2).unwrap();
+        let v: Vec<f32> = vec![1.0; 384];
+        for id in &ids {
+            store
+                .upsert_embedding(*id, "mock-hash-v1", &v, 2000)
+                .unwrap();
+        }
+        assert_eq!(store.embedding_progress("mock-hash-v1").unwrap(), (2, 5));
+    }
+
+    #[test]
+    fn nearest_neighbours_ranks_by_similarity_descending() {
+        use crate::search::embedding::{l2_normalise, Embedder as _, HashEmbedder};
+
+        let store = Store::open_in_memory().unwrap();
+        let embedder = HashEmbedder::default();
+        let pane = PtyId::new();
+        // Insert three blocks with distinct text. The
+        // hash-embedder isn't semantically meaningful but
+        // the vectors are deterministic and distinct, which
+        // is all we need to prove the ranking path.
+        let b1 = make_block(pane, 1000, "alpha bravo", b"");
+        let b2 = make_block(pane, 2000, "gamma delta", b"");
+        let b3 = make_block(pane, 3000, "epsilon zeta", b"");
+        for b in [&b1, &b2, &b3] {
+            store.insert_block(b).unwrap();
+            let mut v = embedder.embed(b.command.as_deref().unwrap());
+            l2_normalise(&mut v);
+            store
+                .upsert_embedding(b.id, embedder.model_id(), &v, 5000)
+                .unwrap();
+        }
+
+        // Query with the exact text of b2 — it should
+        // dominate the ranking.
+        let query = embedder.embed("gamma delta");
+        let hits = store
+            .nearest_neighbours(embedder.model_id(), &query, 3)
+            .unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].0, b2.id);
+        // Sorted descending.
+        assert!(hits[0].1 >= hits[1].1);
+        assert!(hits[1].1 >= hits[2].1);
+    }
+
+    #[test]
+    fn nearest_neighbours_filters_by_model_id() {
+        let store = Store::open_in_memory().unwrap();
+        let block = make_block(PtyId::new(), 1000, "test", b"");
+        store.insert_block(&block).unwrap();
+        let v: Vec<f32> = vec![1.0; 384];
+        store
+            .upsert_embedding(block.id, "model-a", &v, 1000)
+            .unwrap();
+        // Querying under a different model finds nothing.
+        assert!(store
+            .nearest_neighbours("model-b", &v, 10)
+            .unwrap()
+            .is_empty());
+        // Under the right model, one hit.
+        assert_eq!(
+            store.nearest_neighbours("model-a", &v, 10).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn command_for_returns_stored_command() {
+        let store = Store::open_in_memory().unwrap();
+        let block = make_block(PtyId::new(), 1000, "git status", b"");
+        store.insert_block(&block).unwrap();
+        assert_eq!(
+            store.command_for(block.id).unwrap().as_deref(),
+            Some("git status")
+        );
+        // Unknown id → None.
+        assert_eq!(store.command_for(BlockId(Uuid::new_v4())).unwrap(), None);
     }
 
     #[test]

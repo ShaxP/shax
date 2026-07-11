@@ -40,8 +40,78 @@ fn set_preferences(preferences: Preferences) -> Result<(), String> {
     preferences::save(&preferences).map_err(|e| e.to_string())
 }
 
+/// Embedding indexer progress: `(indexed, total)` block
+/// counts under the currently-active model. The search
+/// overlay's semantic tier (slice 3) surfaces this as a
+/// tiny "N of M indexed" indicator so users know whether a
+/// query is running against the full history yet.
+#[tauri::command]
+fn embedding_progress(manager: tauri::State<'_, Arc<PtyManager>>) -> Result<(u64, u64), String> {
+    use search::embedding::Embedder as _;
+    let Some(store) = manager.store() else {
+        return Ok((0, 0));
+    };
+    let embedder = search::embedding::HashEmbedder::default();
+    store
+        .embedding_progress(embedder.model_id())
+        .map_err(|e| e.to_string())
+}
+
+/// Semantic nearest-neighbours query over the block
+/// embeddings. Returns `(block_id, similarity)` pairs
+/// sorted by similarity descending. Wired now so slice 3
+/// can start on the UI without waiting for the real model;
+/// the mock embedder makes the results non-meaningful but
+/// the plumbing works.
+#[tauri::command]
+fn semantic_search(
+    query: String,
+    limit: usize,
+    manager: tauri::State<'_, Arc<PtyManager>>,
+) -> Result<Vec<(String, f32)>, String> {
+    use search::embedding::Embedder as _;
+    let Some(store) = manager.store() else {
+        return Ok(vec![]);
+    };
+    let embedder = search::embedding::HashEmbedder::default();
+    let vector = embedder.embed(&query);
+    let hits = store
+        .nearest_neighbours(embedder.model_id(), &vector, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(hits
+        .into_iter()
+        .map(|(id, s)| (id.to_string(), s))
+        .collect())
+}
+
+/// Install a `tracing` subscriber so `tracing::info!` /
+/// `warn!` calls throughout the backend actually reach a
+/// destination. Without this, every `tracing::*` call in the
+/// codebase is a no-op — including the embedder sweep's
+/// "indexed N block(s)" line.
+///
+/// Reads the `RUST_LOG` env var (e.g. `RUST_LOG=shax=info` to
+/// see only our crate) and defaults to `info` for the `shax`
+/// crate + `warn` globally so a fresh launch is quiet unless
+/// something goes wrong.
+///
+/// Logs go to stderr, which `cargo tauri dev` surfaces in the
+/// terminal you launched from, and the packaged app writes to
+/// the OS-standard stderr sink.
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,shax=info"));
+    // `try_init` — safe to call from tests that also set up a
+    // subscriber, and avoids panicking if run() somehow fires
+    // twice (e.g. a mobile-entry-point double-init).
+    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
+
     // Open the persistent store under the user's app data dir. If the open
     // fails (no writable disk, corrupted DB, etc.) we fall back to a
     // memory-only manager so the terminal still functions — losing history
@@ -53,6 +123,10 @@ pub fn run() {
             None
         }
     };
+    // Keep a second reference to the store for the semantic
+    // search embedder task, which runs in the Tauri setup
+    // callback (below) once the async runtime is ready.
+    let store_for_embedder = store.clone();
     let manager = Arc::new(match store {
         Some(s) => PtyManager::with_store(s),
         None => PtyManager::new(),
@@ -73,6 +147,23 @@ pub fn run() {
         // installs window-event handlers automatically; no other glue needed.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(manager)
+        .setup(move |_app| {
+            // Kick off the background embedder sweep once the
+            // tokio runtime is up. Uses the mock hash embedder
+            // for now — slice 2b swaps in the real
+            // `all-MiniLM-L6-v2` ONNX model. When there's no
+            // store (fell back to memory-only), skip the
+            // sweep entirely.
+            if let Some(store) = store_for_embedder.clone() {
+                let embedder: Arc<dyn search::embedding::Embedder> =
+                    Arc::new(search::embedding::HashEmbedder::default());
+                // Fire-and-forget; the JoinHandle lives with
+                // the runtime and doesn't need explicit
+                // awaiting. `drop` on shutdown detaches it.
+                std::mem::drop(search::backfill::spawn(store, embedder));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
@@ -109,6 +200,8 @@ pub fn run() {
             clear_chat_history,
             get_preferences,
             set_preferences,
+            embedding_progress,
+            semantic_search,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
