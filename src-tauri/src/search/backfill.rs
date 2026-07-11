@@ -1,18 +1,26 @@
 //! Background embedding task (M7 slice 2).
 //!
-//! Owns a long-running tokio task that periodically drains
-//! the embedding backlog — every block that doesn't yet
-//! have an embedding under the current model. Between
-//! sweeps the task sleeps for `SWEEP_INTERVAL`, so new
-//! blocks get embedded within that window of arrival.
+//! Owns a long-running task that periodically drains the
+//! embedding backlog — every block that doesn't yet have an
+//! embedding under the current model. Between sweeps the
+//! task sleeps for `SWEEP_INTERVAL`, so new blocks get
+//! embedded within that window of arrival.
+//!
+//! Runs on `tauri::async_runtime` (Tauri's tokio wrapper).
+//! We can't use `tokio::spawn` directly from the `.setup`
+//! callback because that runs before the runtime is bound
+//! to the current thread; Tauri's wrapper hides that
+//! detail — a spawn from any thread lands on the shared
+//! runtime.
 //!
 //! Eager-notification via an `mpsc` channel is a natural
-//! follow-up (adds a `command_for` + `enqueue` call at the
-//! PTY block-persisted callsite) but not needed for slice
-//! 2's data-flow validation.
+//! follow-up but not needed for slice 2's data-flow
+//! validation.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tauri::async_runtime::{self, JoinHandle};
 
 use crate::blocks::BlockId;
 use crate::search::embedding::Embedder;
@@ -28,16 +36,20 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 /// enough to make progress on a large history.
 pub const BATCH_SIZE: usize = 32;
 
-/// Spawn the background embedder task. Runs on the ambient
-/// tokio runtime. The task takes ownership of an
-/// `Arc<Store>` + `Arc<dyn Embedder>` and lives for the
-/// lifetime of the app.
+/// Spawn the background embedder task on Tauri's async
+/// runtime. The task takes ownership of an `Arc<Store>` +
+/// `Arc<dyn Embedder>` and lives for the lifetime of the app.
+///
+/// We use `tauri::async_runtime::spawn` rather than
+/// `tokio::spawn` because `.setup` fires before Tauri binds
+/// the tokio runtime to the calling thread, so a bare
+/// `tokio::spawn` there panics with "no reactor running".
 ///
 /// Errors from individual block embeds are logged but never
 /// propagated — the sweep must keep making progress even
 /// if one block's output turns out to be malformed.
-pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> JoinHandle<()> {
+    async_runtime::spawn(async move {
         loop {
             match sweep_once(&store, embedder.as_ref()).await {
                 Ok(indexed) => {
