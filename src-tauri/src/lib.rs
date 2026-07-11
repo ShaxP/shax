@@ -84,8 +84,34 @@ fn semantic_search(
         .collect())
 }
 
+/// Install a `tracing` subscriber so `tracing::info!` /
+/// `warn!` calls throughout the backend actually reach a
+/// destination. Without this, every `tracing::*` call in the
+/// codebase is a no-op — including the embedder sweep's
+/// "indexed N block(s)" line.
+///
+/// Reads the `RUST_LOG` env var (e.g. `RUST_LOG=shax=info` to
+/// see only our crate) and defaults to `info` for the `shax`
+/// crate + `warn` globally so a fresh launch is quiet unless
+/// something goes wrong.
+///
+/// Logs go to stderr, which `cargo tauri dev` surfaces in the
+/// terminal you launched from, and the packaged app writes to
+/// the OS-standard stderr sink.
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,shax=info"));
+    // `try_init` — safe to call from tests that also set up a
+    // subscriber, and avoids panicking if run() somehow fires
+    // twice (e.g. a mobile-entry-point double-init).
+    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
+
     // Open the persistent store under the user's app data dir. If the open
     // fails (no writable disk, corrupted DB, etc.) we fall back to a
     // memory-only manager so the terminal still functions — losing history
