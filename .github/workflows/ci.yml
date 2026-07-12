@@ -16,7 +16,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # `macos-15` (not `-latest`) — GitHub rolled `macos-latest` to
+        # Xcode 26.5, whose clang moved compiler-rt to a path the
+        # linker doesn't search by default. `ort-sys`'s prebuilt ONNX
+        # Runtime bundles then fail to link with
+        # `ld: library 'clang_rt.osx' not found`. Revisit when the
+        # `ort` ecosystem catches up to Xcode 26.
+        os: [macos-15, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
