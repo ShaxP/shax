@@ -16,12 +16,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `macos-15` (not `-latest`) — GitHub rolled `macos-latest` to
-        # Xcode 26.5, whose clang moved compiler-rt to a path the
-        # linker doesn't search by default. `ort-sys`'s prebuilt ONNX
-        # Runtime bundles then fail to link with
-        # `ld: library 'clang_rt.osx' not found`. Revisit when the
-        # `ort` ecosystem catches up to Xcode 26.
         os: [macos-15, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -33,6 +27,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+
+      # macOS: GitHub rolled every macOS image to Xcode 26.5, whose
+      # clang moved compiler-rt to a directory the linker doesn't
+      # search. `ort-sys`'s prebuilt ONNX Runtime then fails with
+      # `ld: library 'clang_rt.osx' not found`. Runner images keep
+      # earlier Xcodes installed under /Applications; select the last
+      # known-good until the `ort` ecosystem catches up.
+      - name: Pin Xcode (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # List what's actually installed so a future toolchain roll
+          # is diagnosable from the log.
+          ls -1 /Applications | grep -i '^Xcode' || true
+          if [ -d "/Applications/Xcode_16.4.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app
+          elif [ -d "/Applications/Xcode_16.3.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.3.app
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          else
+            echo "No Xcode 16.x found; falling back to default." >&2
+          fi
+          xcodebuild -version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
