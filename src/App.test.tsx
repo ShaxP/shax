@@ -89,6 +89,12 @@ vi.mock("./lib/ipc", () => ({
   listCommunityFormatters: (): Promise<unknown[]> => Promise.resolve([]),
   base64Decode: (b64: string): Uint8Array => new TextEncoder().encode(b64),
   base64Encode: (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)),
+  // M7 slice 3 additions — semantic tier + progress polling. The
+  // App-level tests don't exercise the semantic path, so they're
+  // stubbed to empty/no-op values that keep the polling effect quiet.
+  semanticSearch: (): Promise<unknown[]> => Promise.resolve([]),
+  embeddingProgress: (): Promise<unknown> =>
+    Promise.resolve({ indexed: 0, total: 0, model_id: "unknown" }),
 }));
 
 class StubResizeObserver {

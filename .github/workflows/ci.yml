@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [macos-15, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +28,38 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev
 
+      # macOS: GitHub rolled every macOS image to Xcode 26.5, whose
+      # clang moved compiler-rt to a directory the linker doesn't
+      # search. `ort-sys`'s prebuilt ONNX Runtime then fails with
+      # `ld: library 'clang_rt.osx' not found`. Runner images keep
+      # earlier Xcodes installed under /Applications; select the last
+      # known-good until the `ort` ecosystem catches up.
+      #
+      # Must run BEFORE the cargo cache restore: build-script outputs
+      # (`-L` search paths, headers) bake in the current Xcode path.
+      # A cache produced under Xcode 26.5 poisons a run pinned to
+      # 16.x. Exporting DEVELOPER_DIR to $GITHUB_ENV lets rust-cache
+      # hash it into the cache key.
+      - name: Pin Xcode (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # List what's actually installed so a future toolchain roll
+          # is diagnosable from the log.
+          ls -1 /Applications | grep -i '^Xcode' || true
+          if [ -d "/Applications/Xcode_16.4.app" ]; then
+            SELECTED="/Applications/Xcode_16.4.app"
+          elif [ -d "/Applications/Xcode_16.3.app" ]; then
+            SELECTED="/Applications/Xcode_16.3.app"
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            SELECTED="/Applications/Xcode_16.2.app"
+          else
+            echo "No Xcode 16.x found; failing loudly rather than baking a poisoned cache." >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$SELECTED"
+          echo "DEVELOPER_DIR=$SELECTED/Contents/Developer" >> $GITHUB_ENV
+          xcodebuild -version
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,6 +69,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Include DEVELOPER_DIR so an Xcode swap on the runner
+          # invalidates the cache instead of restoring a build with
+          # stale toolchain paths baked into build-script outputs.
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST DEVELOPER_DIR"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

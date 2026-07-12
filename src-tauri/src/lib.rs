@@ -86,44 +86,95 @@ fn load_embedder(app: &tauri::AppHandle) -> SharedEmbedder {
     }
 }
 
-/// Embedding indexer progress: `(indexed, total)` block
-/// counts under the currently-active model. The search
-/// overlay's semantic tier (slice 3) surfaces this as a
-/// tiny "N of M indexed" indicator so users know whether a
-/// query is running against the full history yet.
+/// Embedding indexer progress under the currently-active
+/// model. The search overlay's semantic tier surfaces
+/// `indexed / total` as a tiny "N of M indexed" indicator so
+/// users know whether a query runs against the full history
+/// yet. `model_id` lets the frontend distinguish the real
+/// ONNX model from the mock fallback and adjust its copy
+/// (a `model_id` starting with `mock-` means semantic search
+/// is running on placeholder vectors).
+#[derive(serde::Serialize)]
+struct EmbeddingProgress {
+    indexed: u64,
+    total: u64,
+    model_id: String,
+}
+
 #[tauri::command]
 fn embedding_progress(
     manager: tauri::State<'_, Arc<PtyManager>>,
     embedder: tauri::State<'_, SharedEmbedder>,
-) -> Result<(u64, u64), String> {
+) -> Result<EmbeddingProgress, String> {
+    let model_id = embedder.model_id().to_string();
     let Some(store) = manager.store() else {
-        return Ok((0, 0));
+        return Ok(EmbeddingProgress {
+            indexed: 0,
+            total: 0,
+            model_id,
+        });
     };
-    store
-        .embedding_progress(embedder.model_id())
-        .map_err(|e| e.to_string())
+    let (indexed, total) = store
+        .embedding_progress(&model_id)
+        .map_err(|e| e.to_string())?;
+    Ok(EmbeddingProgress {
+        indexed,
+        total,
+        model_id,
+    })
 }
 
-/// Semantic nearest-neighbours query over the block
-/// embeddings. Returns `(block_id, similarity)` pairs
-/// sorted by similarity descending.
+/// One semantic-search result. Mirrors `SearchHit`'s shape
+/// so the frontend can render both tiers with the same row
+/// component, but replaces `snippet` / `fuzzy` (both
+/// FTS-specific) with a `similarity` score in `[-1.0, 1.0]`.
+#[derive(serde::Serialize)]
+struct SemanticHit {
+    block: crate::blocks::BlockSummary,
+    pane_id: crate::pty::PtyId,
+    similarity: f32,
+}
+
+/// Semantic nearest-neighbours query. Runs the active
+/// embedder over the query, walks the k-NN over stored
+/// block embeddings, then hydrates each hit back to a full
+/// `BlockSummary + pane_id` so the frontend doesn't need a
+/// second round-trip.
 #[tauri::command]
 fn semantic_search(
     query: String,
     limit: usize,
     manager: tauri::State<'_, Arc<PtyManager>>,
     embedder: tauri::State<'_, SharedEmbedder>,
-) -> Result<Vec<(String, f32)>, String> {
+) -> Result<Vec<SemanticHit>, String> {
     let Some(store) = manager.store() else {
         return Ok(vec![]);
     };
+    if query.trim().is_empty() {
+        // Similarity against an empty vector is meaningless —
+        // short-circuit so we don't waste an inference call.
+        return Ok(vec![]);
+    }
     let vector = embedder.embed(&query);
-    let hits = store
+    let ranked = store
         .nearest_neighbours(embedder.model_id(), &vector, limit)
         .map_err(|e| e.to_string())?;
-    Ok(hits
+    let ids: Vec<crate::blocks::BlockId> = ranked.iter().map(|(id, _)| *id).collect();
+    let similarities: std::collections::HashMap<crate::blocks::BlockId, f32> =
+        ranked.into_iter().collect();
+    let hydrated = store.hydrate_blocks(&ids).map_err(|e| e.to_string())?;
+    Ok(hydrated
         .into_iter()
-        .map(|(id, s)| (id.to_string(), s))
+        .filter_map(|(block, pane_id)| {
+            similarities
+                .get(&block.id)
+                .copied()
+                .map(|similarity| SemanticHit {
+                    block,
+                    pane_id,
+                    similarity,
+                })
+        })
         .collect())
 }
 
