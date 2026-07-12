@@ -34,6 +34,12 @@ jobs:
       # `ld: library 'clang_rt.osx' not found`. Runner images keep
       # earlier Xcodes installed under /Applications; select the last
       # known-good until the `ort` ecosystem catches up.
+      #
+      # Must run BEFORE the cargo cache restore: build-script outputs
+      # (`-L` search paths, headers) bake in the current Xcode path.
+      # A cache produced under Xcode 26.5 poisons a run pinned to
+      # 16.x. Exporting DEVELOPER_DIR to $GITHUB_ENV lets rust-cache
+      # hash it into the cache key.
       - name: Pin Xcode (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -41,14 +47,17 @@ jobs:
           # is diagnosable from the log.
           ls -1 /Applications | grep -i '^Xcode' || true
           if [ -d "/Applications/Xcode_16.4.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.4.app
+            SELECTED="/Applications/Xcode_16.4.app"
           elif [ -d "/Applications/Xcode_16.3.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.3.app
+            SELECTED="/Applications/Xcode_16.3.app"
           elif [ -d "/Applications/Xcode_16.2.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.2.app
+            SELECTED="/Applications/Xcode_16.2.app"
           else
-            echo "No Xcode 16.x found; falling back to default." >&2
+            echo "No Xcode 16.x found; failing loudly rather than baking a poisoned cache." >&2
+            exit 1
           fi
+          sudo xcode-select -s "$SELECTED"
+          echo "DEVELOPER_DIR=$SELECTED/Contents/Developer" >> $GITHUB_ENV
           xcodebuild -version
 
       - name: Setup Rust
@@ -60,6 +69,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Include DEVELOPER_DIR so an Xcode swap on the runner
+          # invalidates the cache instead of restoring a build with
+          # stale toolchain paths baked into build-script outputs.
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST DEVELOPER_DIR"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
