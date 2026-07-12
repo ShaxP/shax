@@ -13,6 +13,11 @@ target/
 **/*.rs.bk
 *.pdb
 
+# Embedder model files — downloaded by build.rs on first build.
+# Too large for git; cached locally under assets/.
+src-tauri/assets/*.onnx
+src-tauri/assets/tokenizer.json
+
 # Test output
 coverage/
 playwright-report/

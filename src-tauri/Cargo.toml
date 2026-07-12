@@ -44,4 +44,18 @@ rusqlite = { version = "0.37.0", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+ort = "2.0.0-rc.12"
+# `default-features = false` drops `esaxx-rs` (Unigram
+# trainer — unused; we load a pre-serialized `tokenizer.json`
+# and only encode with WordPiece) and `indicatif` (training
+# progress bars). Dropping `esaxx-rs` also fixes a Windows
+# MSVC-runtime mismatch — it defaults to `/MT` static, while
+# `ort-sys` builds `/MD` dynamic, and the linker can't merge
+# the two.
+#
+# `fancy-regex` (pure Rust) replaces the default `onig` (C
+# library) — tokenizers requires one of the two regex
+# backends, and fancy-regex avoids another C-linkage vector
+# on Windows.
+tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
 
