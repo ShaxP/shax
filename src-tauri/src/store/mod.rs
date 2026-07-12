@@ -1316,6 +1316,94 @@ impl Store {
         Ok(bytes)
     }
 
+    /// Batch-fetch `(BlockSummary, PtyId)` for a list of ids.
+    /// Preserves input order; ids that don't exist in the
+    /// store are silently dropped rather than returned as
+    /// `None` — the semantic-search caller pairs each row
+    /// back to its similarity score using the input list, and
+    /// wants the pairing to fall through the gap when a block
+    /// has been evicted.
+    ///
+    /// One `SELECT ... WHERE id IN (...)` internally, so
+    /// hydrating a top-K semantic result set is a single
+    /// query regardless of K.
+    pub fn hydrate_blocks(
+        &self,
+        ids: &[BlockId],
+    ) -> Result<Vec<(BlockSummary, PtyId)>, StoreError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let placeholders = std::iter::repeat_n('?', ids.len())
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            r#"
+            SELECT id, pane_id, command, cwd, git_branch,
+                   started_at_ms, ended_at_ms, exit_code, duration_ms,
+                   aborted, interactive
+              FROM blocks
+             WHERE id IN ({placeholders})
+            "#
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params_owned: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_owned
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            let id_str: String = row.get(0)?;
+            let id = BlockId::parse(&id_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                )
+            })?;
+            let pane_id_str: String = row.get(1)?;
+            let pane_id = PtyId(uuid::Uuid::parse_str(&pane_id_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                )
+            })?);
+            let started_at_ms: i64 = row.get(5)?;
+            let ended_at_ms: Option<i64> = row.get(6)?;
+            let exit_code: Option<i32> = row.get(7)?;
+            let duration_ms: Option<i64> = row.get(8)?;
+            let aborted_int: i32 = row.get(9)?;
+            let interactive_int: i32 = row.get(10)?;
+            Ok((
+                BlockSummary {
+                    id,
+                    command: row.get(2)?,
+                    cwd: row.get(3)?,
+                    git_branch: row.get(4)?,
+                    started_at_ms: started_at_ms as u64,
+                    ended_at_ms: ended_at_ms.map(|v| v as u64),
+                    exit_code,
+                    duration_ms: duration_ms.map(|v| v as u64),
+                    aborted: aborted_int != 0,
+                    interactive: interactive_int != 0,
+                },
+                pane_id,
+            ))
+        })?;
+        let fetched: Vec<(BlockSummary, PtyId)> = rows.collect::<Result<_, _>>()?;
+        // The IN-clause query returns rows in an arbitrary
+        // order; reorder to match the input so the caller's
+        // ranking is preserved.
+        let mut by_id: std::collections::HashMap<BlockId, (BlockSummary, PtyId)> =
+            fetched.into_iter().map(|(b, p)| (b.id, (b, p))).collect();
+        let ordered: Vec<(BlockSummary, PtyId)> =
+            ids.iter().filter_map(|id| by_id.remove(id)).collect();
+        Ok(ordered)
+    }
+
     /// Fetch the command text for a block. Used by the
     /// embedder to build the "command + output-head" input
     /// string. Returns `None` when the block id isn't in the
@@ -1857,6 +1945,44 @@ mod tests {
             store.nearest_neighbours("model-a", &v, 10).unwrap().len(),
             1
         );
+    }
+
+    #[test]
+    fn hydrate_blocks_preserves_input_order() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let b1 = make_block(pane, 1000, "one", b"");
+        let b2 = make_block(pane, 2000, "two", b"");
+        let b3 = make_block(pane, 3000, "three", b"");
+        for b in [&b1, &b2, &b3] {
+            store.insert_block(b).unwrap();
+        }
+        // Reverse-similarity-style order: highest-scored first.
+        let ordered = store.hydrate_blocks(&[b3.id, b1.id, b2.id]).unwrap();
+        assert_eq!(ordered.len(), 3);
+        assert_eq!(ordered[0].0.id, b3.id);
+        assert_eq!(ordered[1].0.id, b1.id);
+        assert_eq!(ordered[2].0.id, b2.id);
+        // Pane id came through.
+        assert_eq!(ordered[0].1, pane);
+    }
+
+    #[test]
+    fn hydrate_blocks_skips_missing_ids() {
+        let store = Store::open_in_memory().unwrap();
+        let pane = PtyId::new();
+        let b1 = make_block(pane, 1000, "kept", b"");
+        store.insert_block(&b1).unwrap();
+        let missing = BlockId(Uuid::new_v4());
+        let ordered = store.hydrate_blocks(&[missing, b1.id]).unwrap();
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(ordered[0].0.id, b1.id);
+    }
+
+    #[test]
+    fn hydrate_blocks_empty_input_is_empty_output() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.hydrate_blocks(&[]).unwrap().is_empty());
     }
 
     #[test]

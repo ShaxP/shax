@@ -20,10 +20,17 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { gitRootFor, listBranches, listCwds, searchBlocks } from "../lib/ipc";
-import type { SearchHit, SearchStatus } from "../lib/ipc";
+import {
+  embeddingProgress,
+  gitRootFor,
+  listBranches,
+  listCwds,
+  searchBlocks,
+  semanticSearch,
+} from "../lib/ipc";
+import type { EmbeddingProgress, SearchHit, SearchStatus, SemanticHit } from "../lib/ipc";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 
 export interface SearchOverlayProps {
@@ -46,6 +53,8 @@ export interface SearchOverlayProps {
 
 const DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 50;
+const SEMANTIC_LIMIT = 8;
+const PROGRESS_POLL_MS = 2000;
 
 /** One entry in a filter dropdown's option list. */
 interface FilterOption<T extends string> {
@@ -206,6 +215,55 @@ const STATUS_ROW: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.5,
   borderBottom: "1px solid var(--border)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+};
+
+const PROGRESS_PILL: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10.5,
+  color: "var(--fg-dim)",
+  textTransform: "none",
+  letterSpacing: 0,
+  border: "1px solid var(--border)",
+  borderRadius: 999,
+  padding: "1px 8px",
+  whiteSpace: "nowrap",
+};
+
+const SECTION_HEADER: CSSProperties = {
+  padding: "6px 16px 4px 16px",
+  fontFamily: "var(--font-ui)",
+  fontSize: 10.5,
+  letterSpacing: 0.6,
+  textTransform: "uppercase",
+  color: "var(--fg-faint)",
+  background: "var(--pane2)",
+  borderBottom: "1px solid var(--border)",
+};
+
+const SEMANTIC_EMPTY: CSSProperties = {
+  padding: "10px 16px",
+  fontFamily: "var(--font-ui)",
+  fontSize: 12,
+  color: "var(--fg-dim)",
+  fontStyle: "italic",
+  borderBottom: "1px solid var(--border)",
+};
+
+const SIMILARITY_BADGE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  color: "var(--fg-dim)",
+  border: "1px solid var(--border-strong)",
+  borderRadius: 3,
+  padding: "1px 5px",
+  flexShrink: 0,
+  letterSpacing: 0.5,
+  textTransform: "uppercase",
+  lineHeight: 1.4,
 };
 
 const RESULT_LIST: CSSProperties = {
@@ -461,6 +519,13 @@ export function SearchOverlay({
   const [results, setResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(0);
+  // Slice 3: parallel semantic tier. `null` model means we
+  // haven't heard back from `embeddingProgress` yet; the
+  // section renders a placeholder-free skeleton while we
+  // wait rather than committing to a "unavailable" state.
+  const [semanticResults, setSemanticResults] = useState<SemanticHit[]>([]);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [progress, setProgress] = useState<EmbeddingProgress | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -676,6 +741,60 @@ export function SearchOverlay({
     return () => clearTimeout(handle);
   }, [query, status, time, cwd, branch, currentCwd, currentBranch, repoRoot, cwdGlobInput]);
 
+  // Semantic tier fires in parallel on the same debounce.
+  // Filter chips deliberately don't gate this — vector
+  // similarity doesn't compose with SQL filters in a way the
+  // user would expect, so semantic hits are always
+  // whole-corpus for now.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === "") {
+      setSemanticResults([]);
+      setSemanticLoading(false);
+      return;
+    }
+    setSemanticLoading(true);
+    const handle = setTimeout(() => {
+      void semanticSearch(trimmed, SEMANTIC_LIMIT).then((hits) => {
+        setSemanticResults(hits);
+        setSemanticLoading(false);
+      });
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  // Poll `embedding_progress` while the overlay is open.
+  // Cheap: one COUNT(*) per model_id, no vector ops. The
+  // status pill needs both the fresh number and the
+  // `model_id` to distinguish real / mock embedders.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = (): void => {
+      void embeddingProgress().then((p) => {
+        if (!cancelled) setProgress(p);
+      });
+    };
+    tick();
+    const handle = window.setInterval(tick, PROGRESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
+
+  // Combined nav list — literal hits first, then semantic.
+  // Selected index walks this flat sequence so ↑ / ↓ crosses
+  // the section boundary transparently. Memoised so the
+  // keyboard-handler ref effect below doesn't reallocate on
+  // every render.
+  const combined: CombinedHit[] = useMemo(
+    () => [
+      ...results.map((hit) => ({ kind: "literal" as const, hit })),
+      ...semanticResults.map((hit) => ({ kind: "semantic" as const, hit })),
+    ],
+    [results, semanticResults],
+  );
+
   // Keyboard handling — scoped to the window while the overlay is up.
   // Refs let the listener observe the latest results/selected without
   // re-registering on every state change (which would otherwise tear down
@@ -685,11 +804,11 @@ export function SearchOverlay({
   // fire from a queued event between commit and paint and observe a
   // stale view (e.g. results was rendered but the ref hasn't caught up
   // yet, which surfaces as flaky keyboard nav in the tests).
-  const resultsRef = useRef(results);
+  const combinedRef = useRef(combined);
   const selectedRef = useRef(selected);
   useLayoutEffect(() => {
-    resultsRef.current = results;
-  }, [results]);
+    combinedRef.current = combined;
+  }, [combined]);
   useLayoutEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
@@ -700,7 +819,7 @@ export function SearchOverlay({
         onClose();
         return;
       }
-      const hits = resultsRef.current;
+      const hits = combinedRef.current;
       if (hits.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -714,8 +833,9 @@ export function SearchOverlay({
       }
       if (e.key === "Enter") {
         e.preventDefault();
-        const hit = hits[selectedRef.current];
-        if (hit !== undefined) onSelect(hit);
+        const entry = hits[selectedRef.current];
+        if (entry === undefined) return;
+        onSelect(toSearchHit(entry));
         return;
       }
     };
@@ -750,8 +870,10 @@ export function SearchOverlay({
   // and the empty-results case should read like "nothing matches your
   // filter" instead.
   const isActive = trimmed !== "" || hasFilter;
-  const showEmpty = isActive && !loading && results.length === 0;
+  const showEmpty = isActive && !loading && !semanticLoading && combined.length === 0;
   const showHint = !isActive;
+  const semanticActive = trimmed !== "";
+  const semanticAvailable = progress !== null && !progress.model_id.startsWith("mock-");
 
   return (
     <div data-testid="search-overlay" style={BACKDROP} onPointerDown={handleBackdropPointerDown}>
@@ -826,20 +948,30 @@ export function SearchOverlay({
           )}
         </div>
         <div style={STATUS_ROW} data-testid="search-status">
-          {showHint && "Type to search across commands and output"}
-          {!showHint && loading && "Searching…"}
-          {!showHint && !loading && results.length > 0 && (
-            <>
-              {results.length} {results.length === 1 ? "result" : "results"} ·{" "}
-              <span style={{ textTransform: "none" }}>↑↓ navigate · ↵ open</span>
-            </>
+          <span>
+            {showHint && "Type to search across commands and output"}
+            {!showHint && loading && "Searching…"}
+            {!showHint && !loading && combined.length > 0 && (
+              <>
+                {combined.length} {combined.length === 1 ? "result" : "results"} ·{" "}
+                <span style={{ textTransform: "none" }}>↑↓ navigate · ↵ open</span>
+              </>
+            )}
+            {showEmpty && "No matches"}
+          </span>
+          {progress !== null && progress.total > 0 && (
+            <span data-testid="search-embedding-progress" style={PROGRESS_PILL}>
+              {progress.indexed}/{progress.total} indexed
+            </span>
           )}
-          {showEmpty && "No matches"}
         </div>
         <div style={RESULT_LIST} data-testid="search-results" ref={listRef}>
+          {results.length > 0 && (
+            <SectionHeader testId="search-section-literal" label={`Literal · ${results.length}`} />
+          )}
           {results.map((hit, i) => (
             <SearchResultRow
-              key={hit.block.id}
+              key={`literal-${hit.block.id}`}
               hit={hit}
               index={i}
               selected={i === selected}
@@ -848,6 +980,45 @@ export function SearchOverlay({
               onSelect={() => onSelect(hit)}
             />
           ))}
+          {semanticActive && (semanticAvailable || progress === null) && (
+            <>
+              <SectionHeader
+                testId="search-section-semantic"
+                label={
+                  semanticLoading ? "Semantic · searching…" : `Semantic · ${semanticResults.length}`
+                }
+              />
+              {semanticResults.map((hit, i) => {
+                const combinedIdx = results.length + i;
+                return (
+                  <SemanticResultRow
+                    key={`semantic-${hit.block.id}`}
+                    hit={hit}
+                    index={combinedIdx}
+                    selected={combinedIdx === selected}
+                    query={query}
+                    onHover={() => setSelected(combinedIdx)}
+                    onSelect={() =>
+                      onSelect({ block: hit.block, pane_id: hit.pane_id, snippet: null })
+                    }
+                  />
+                );
+              })}
+              {!semanticLoading && semanticResults.length === 0 && (
+                <div data-testid="search-semantic-empty" style={SEMANTIC_EMPTY}>
+                  No semantically-related history yet.
+                </div>
+              )}
+            </>
+          )}
+          {semanticActive && progress !== null && !semanticAvailable && (
+            <>
+              <SectionHeader testId="search-section-semantic" label="Semantic" />
+              <div data-testid="search-semantic-unavailable" style={SEMANTIC_EMPTY}>
+                Semantic search unavailable — model not loaded.
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1187,6 +1358,125 @@ function SearchResultRow({
           <>
             <span style={{ padding: "0 6px" }}>·</span>
             interactive
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Combined nav element — the flat sequence of literal-then-semantic
+ * hits that keyboard nav walks through. Discriminated on `kind` so
+ * `toSearchHit` below can shape either variant into the caller's
+ * `SearchHit`-typed `onSelect` handler.
+ */
+type CombinedHit = { kind: "literal"; hit: SearchHit } | { kind: "semantic"; hit: SemanticHit };
+
+/**
+ * Adapt a combined entry to the `SearchHit` shape the parent expects.
+ * Semantic hits synthesise a `SearchHit` with `snippet: null` — the
+ * caller only reads `block` / `pane_id`, so the missing FTS-specific
+ * fields don't matter downstream.
+ */
+function toSearchHit(entry: CombinedHit): SearchHit {
+  if (entry.kind === "literal") return entry.hit;
+  return { block: entry.hit.block, pane_id: entry.hit.pane_id, snippet: null };
+}
+
+interface SectionHeaderProps {
+  testId: string;
+  label: string;
+}
+
+function SectionHeader({ testId, label }: SectionHeaderProps): React.ReactElement {
+  return (
+    <div data-testid={testId} style={SECTION_HEADER}>
+      {label}
+    </div>
+  );
+}
+
+interface SemanticResultRowProps {
+  hit: SemanticHit;
+  index: number;
+  selected: boolean;
+  /** Passed through only for command-text highlighting parity with the literal tier. */
+  query: string;
+  onHover: () => void;
+  onSelect: () => void;
+}
+
+/**
+ * One semantic-tier row. Same visual language as `SearchResultRow` so
+ * the eye reads them as members of the same list, but the fuzzy badge
+ * is swapped for a similarity readout (e.g. `~0.62`) and there's no
+ * output snippet — semantic hits don't carry one, and inventing an FTS
+ * `<mark>` snippet against a cosine ranking would be dishonest.
+ */
+function SemanticResultRow({
+  hit,
+  index,
+  selected,
+  query,
+  onHover,
+  onSelect,
+}: SemanticResultRowProps): React.ReactElement {
+  const { block, similarity } = hit;
+  const style: CSSProperties = {
+    ...RESULT_ROW_BASE,
+    background: selected ? "var(--surface-hover)" : "transparent",
+    borderLeft: selected ? "2px solid var(--accent)" : "2px solid transparent",
+    paddingLeft: 14,
+  };
+  return (
+    <div
+      data-testid="search-result-semantic"
+      data-index={index}
+      data-block-id={block.id}
+      data-selected={selected ? "true" : "false"}
+      data-similarity={similarity.toFixed(3)}
+      style={style}
+      onClick={onSelect}
+      onMouseEnter={onHover}
+    >
+      <div style={COMMAND_LINE}>
+        <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
+        <span style={COMMAND_TEXT}>
+          {block.command !== null ? highlightCommand(block.command, query) : "(no command)"}
+        </span>
+        <span
+          data-testid="search-result-similarity"
+          title={`Cosine similarity: ${similarity.toFixed(3)}`}
+          style={SIMILARITY_BADGE}
+        >
+          ~{similarity.toFixed(2)}
+        </span>
+        <span
+          style={{ ...TIMESTAMP, display: "inline-flex", alignItems: "center", gap: 4 }}
+          title={new Date(block.started_at_ms).toLocaleString()}
+        >
+          {formatTimestamp(block.started_at_ms)}
+        </span>
+      </div>
+      <div style={META_LINE}>
+        {block.cwd ?? "—"}
+        {block.git_branch !== null && (
+          <>
+            <span style={{ padding: "0 6px" }}>·</span>
+            <span aria-hidden="true" style={{ marginRight: 4 }}>
+              ⎇
+            </span>
+            {block.git_branch}
+          </>
+        )}
+        {block.duration_ms !== null && (
+          <>
+            <span style={{ padding: "0 6px" }}>·</span>
+            <span aria-hidden="true" style={{ marginRight: 4 }}>
+              {""}
+            </span>
+            {formatDuration(block.duration_ms)}
           </>
         )}
       </div>

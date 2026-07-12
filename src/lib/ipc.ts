@@ -332,6 +332,51 @@ export async function searchBlocks(opts: SearchOptions): Promise<SearchHit[]> {
 }
 
 /**
+ * One semantic-search result. Shape mirrors `SearchHit` so the overlay
+ * can reuse `SearchResultRow`, but replaces the FTS-specific `snippet`
+ * / `fuzzy` fields with a cosine `similarity` in `[-1, 1]`.
+ */
+export interface SemanticHit {
+  block: BlockSummary;
+  pane_id: PtyId;
+  /** Cosine similarity in `[-1, 1]`. Higher = more relevant. */
+  similarity: number;
+}
+
+/**
+ * Semantic nearest-neighbours query over the block embeddings. Runs the
+ * active embedder (the real ONNX `all-MiniLM-L6-v2` when available,
+ * otherwise the mock fallback — see `embeddingProgress`) over `query`
+ * and returns the top-`limit` hits sorted by similarity descending.
+ * Empty / whitespace-only queries short-circuit to an empty array —
+ * similarity against no query is meaningless.
+ */
+export async function semanticSearch(query: string, limit: number): Promise<SemanticHit[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SemanticHit[]>("semantic_search", { query, limit });
+}
+
+/**
+ * Progress + identity of the active embedder. `indexed` / `total` drive
+ * the overlay's "N of M indexed" pill. `model_id` starts with `mock-`
+ * when the real ONNX model isn't loaded (missing bundle file, ORT init
+ * failure) so the frontend can flag the semantic tier as unavailable
+ * instead of pretending its placeholder ranking is meaningful.
+ */
+export interface EmbeddingProgress {
+  indexed: number;
+  total: number;
+  model_id: string;
+}
+
+export async function embeddingProgress(): Promise<EmbeddingProgress> {
+  if (!isTauriContext()) return { indexed: 0, total: 0, model_id: "unknown" };
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<EmbeddingProgress>("embedding_progress");
+}
+
+/**
  * Faceted branch list: distinct non-empty git branches that exist in
  * the result set of `opts`, ordered most-recently-used first. Mirrors
  * `searchBlocks(opts)` for the same query / cwd / status / since
