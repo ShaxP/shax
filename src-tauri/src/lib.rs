@@ -26,6 +26,7 @@ use ipc::{
 use preferences::Preferences;
 use pty::PtyManager;
 use store::{default_db_path, Store};
+use tauri::Manager as _;
 
 /// Load the persisted app-level preferences (theme, etc.).
 /// Missing / malformed file → defaults.
@@ -40,18 +41,64 @@ fn set_preferences(preferences: Preferences) -> Result<(), String> {
     preferences::save(&preferences).map_err(|e| e.to_string())
 }
 
+/// Managed handle to the process-wide `Embedder`. Shared by
+/// the background sweep task and the two semantic-search
+/// commands so that every code path uses the same
+/// `model_id()` — otherwise the sweep might index under one
+/// tag while queries look up another and return nothing.
+type SharedEmbedder = Arc<dyn search::embedding::Embedder>;
+
+/// Try to load the real ONNX-backed embedder from the app's
+/// resource dir. Falls back to the mock `HashEmbedder` if
+/// the model / tokenizer files are missing (e.g. offline
+/// build that skipped the fetch) or the ONNX runtime fails
+/// to initialise. Never panics — semantic search degrades to
+/// mock-quality rather than crashing the app.
+fn load_embedder(app: &tauri::AppHandle) -> SharedEmbedder {
+    // Prefer the bundled resource dir (packaged app). In dev
+    // Tauri points this at `src-tauri/`, so the same lookup
+    // works from `cargo tauri dev`.
+    let resource_dir = match app.path().resource_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!("no resource dir; using mock embedder: {e}");
+            return Arc::new(search::embedding::HashEmbedder::default());
+        }
+    };
+    let model = resource_dir.join("assets/all-MiniLM-L6-v2.onnx");
+    let tokenizer = resource_dir.join("assets/tokenizer.json");
+    if !model.exists() || !tokenizer.exists() {
+        tracing::warn!(
+            "onnx model or tokenizer missing under {}; using mock embedder",
+            resource_dir.display()
+        );
+        return Arc::new(search::embedding::HashEmbedder::default());
+    }
+    match search::onnx::OnnxMiniLmEmbedder::load(&model, &tokenizer) {
+        Ok(e) => {
+            tracing::info!("loaded onnx embedder from {}", model.display());
+            Arc::new(e)
+        }
+        Err(e) => {
+            tracing::warn!("failed to init onnx embedder; using mock: {e:?}");
+            Arc::new(search::embedding::HashEmbedder::default())
+        }
+    }
+}
+
 /// Embedding indexer progress: `(indexed, total)` block
 /// counts under the currently-active model. The search
 /// overlay's semantic tier (slice 3) surfaces this as a
 /// tiny "N of M indexed" indicator so users know whether a
 /// query is running against the full history yet.
 #[tauri::command]
-fn embedding_progress(manager: tauri::State<'_, Arc<PtyManager>>) -> Result<(u64, u64), String> {
-    use search::embedding::Embedder as _;
+fn embedding_progress(
+    manager: tauri::State<'_, Arc<PtyManager>>,
+    embedder: tauri::State<'_, SharedEmbedder>,
+) -> Result<(u64, u64), String> {
     let Some(store) = manager.store() else {
         return Ok((0, 0));
     };
-    let embedder = search::embedding::HashEmbedder::default();
     store
         .embedding_progress(embedder.model_id())
         .map_err(|e| e.to_string())
@@ -59,21 +106,17 @@ fn embedding_progress(manager: tauri::State<'_, Arc<PtyManager>>) -> Result<(u64
 
 /// Semantic nearest-neighbours query over the block
 /// embeddings. Returns `(block_id, similarity)` pairs
-/// sorted by similarity descending. Wired now so slice 3
-/// can start on the UI without waiting for the real model;
-/// the mock embedder makes the results non-meaningful but
-/// the plumbing works.
+/// sorted by similarity descending.
 #[tauri::command]
 fn semantic_search(
     query: String,
     limit: usize,
     manager: tauri::State<'_, Arc<PtyManager>>,
+    embedder: tauri::State<'_, SharedEmbedder>,
 ) -> Result<Vec<(String, f32)>, String> {
-    use search::embedding::Embedder as _;
     let Some(store) = manager.store() else {
         return Ok(vec![]);
     };
-    let embedder = search::embedding::HashEmbedder::default();
     let vector = embedder.embed(&query);
     let hits = store
         .nearest_neighbours(embedder.model_id(), &vector, limit)
@@ -147,19 +190,21 @@ pub fn run() {
         // installs window-event handlers automatically; no other glue needed.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(manager)
-        .setup(move |_app| {
-            // Kick off the background embedder sweep once the
-            // tokio runtime is up. Uses the mock hash embedder
-            // for now — slice 2b swaps in the real
-            // `all-MiniLM-L6-v2` ONNX model. When there's no
-            // store (fell back to memory-only), skip the
-            // sweep entirely.
+        .setup(move |app| {
+            // Prefer the real ONNX-backed `all-MiniLM-L6-v2`
+            // model if the resource files are present; fall
+            // back to the mock `HashEmbedder` otherwise so a
+            // broken bundle never bricks the app — semantic
+            // search just isn't meaningful until the model is
+            // fixed. The same instance is shared with the
+            // `embedding_progress` / `semantic_search`
+            // commands via managed state so every path uses
+            // the same `model_id()`.
+            let embedder: SharedEmbedder = load_embedder(app.handle());
+            app.manage(embedder.clone());
+            // Kick off the background sweep. Skip when there's
+            // no store (memory-only fallback).
             if let Some(store) = store_for_embedder.clone() {
-                let embedder: Arc<dyn search::embedding::Embedder> =
-                    Arc::new(search::embedding::HashEmbedder::default());
-                // Fire-and-forget; the JoinHandle lives with
-                // the runtime and doesn't need explicit
-                // awaiting. `drop` on shutdown detaches it.
                 std::mem::drop(search::backfill::spawn(store, embedder));
             }
             Ok(())

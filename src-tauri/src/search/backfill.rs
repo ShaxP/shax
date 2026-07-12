@@ -51,7 +51,7 @@ pub const BATCH_SIZE: usize = 32;
 pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> JoinHandle<()> {
     async_runtime::spawn(async move {
         loop {
-            match sweep_once(&store, embedder.as_ref()).await {
+            match sweep_once(&store, &embedder).await {
                 Ok(indexed) => {
                     if indexed > 0 {
                         tracing::info!(
@@ -72,8 +72,8 @@ pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> JoinHandle<()> {
 /// empty. Returns the number of blocks embedded during this
 /// sweep so the caller can log progress.
 async fn sweep_once(
-    store: &Store,
-    embedder: &dyn Embedder,
+    store: &Arc<Store>,
+    embedder: &Arc<dyn Embedder>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let mut total = 0usize;
     loop {
@@ -84,10 +84,9 @@ async fn sweep_once(
             return Ok(total);
         }
         for id in ids {
-            if let Err(e) = embed_one(store, embedder, id) {
-                tracing::warn!("embedder: failed to embed block {id}: {e:?}");
-            } else {
-                total += 1;
+            match embed_one(store.clone(), embedder.clone(), id).await {
+                Ok(()) => total += 1,
+                Err(e) => tracing::warn!("embedder: failed to embed block {id}: {e:?}"),
             }
         }
         // Yield between batches so we don't hog the runtime.
@@ -95,9 +94,9 @@ async fn sweep_once(
     }
 }
 
-fn embed_one(
-    store: &Store,
-    embedder: &dyn Embedder,
+async fn embed_one(
+    store: Arc<Store>,
+    embedder: Arc<dyn Embedder>,
     id: BlockId,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Assemble the text to embed: command line + a bounded
@@ -113,10 +112,15 @@ fn embed_one(
         format!("{command}\n\n{output_head}")
     };
 
-    // The mock embedder is fast enough to run inline. When
-    // the real ONNX-backed one lands in slice 2b, wrap this
-    // in `spawn_blocking` at the call site above.
-    let vector = embedder.embed(&text);
+    // Inference is CPU-heavy for the real ONNX embedder
+    // (10-100 ms/block). Push it onto the blocking-thread
+    // pool so we don't monopolise an async worker. The mock
+    // embedder returns almost instantly but pays the same
+    // pool-hop tax — negligible in absolute terms.
+    let embedder_task = embedder.clone();
+    let vector = tokio::task::spawn_blocking(move || embedder_task.embed(&text))
+        .await
+        .map_err(box_err)?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -150,7 +154,7 @@ mod tests {
         // sweep_once itself is async only because of yields.
         let rt = tokio::runtime::Runtime::new().expect("build runtime");
         let store = make_store();
-        let embedder = HashEmbedder::default();
+        let embedder: Arc<dyn Embedder> = Arc::new(HashEmbedder::default());
         let n = rt
             .block_on(sweep_once(&store, &embedder))
             .expect("sweep succeeds");
