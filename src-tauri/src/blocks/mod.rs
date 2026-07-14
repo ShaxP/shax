@@ -271,6 +271,29 @@ impl BlockMachine {
                 self.at_input_prompt = false;
                 self.on_command_finished(exit_code, cwd, git_branch)
             }
+            VtEvent::ScrollbackCleared => {
+                // Soft-clear signal. The frontend will drop its
+                // visible block list on the corresponding
+                // `ScrollbackCleared` PtyEvent; we mirror that here
+                // by dropping the machine's records so subsequent
+                // sync-and-persist cycles don't re-emit them.
+                //
+                // The store keeps every block that was already
+                // persisted — search still surfaces them — but any
+                // running block that was mid-flight is dropped
+                // without a completion event. That matches what
+                // `clear` does on the terminal itself: the mid-flight
+                // command's output disappears from view, though the
+                // process keeps running under the hood.
+                //
+                // `persisted` (owned by the reader task) is not
+                // touched here — those ids are already in the store,
+                // and the machine no longer references them.
+                self.records.clear();
+                self.state = BlockState::Idle;
+                self.at_input_prompt = false;
+                vec![PtyEvent::ScrollbackCleared]
+            }
         }
     }
 
@@ -1031,5 +1054,53 @@ mod tests {
         // to emit a fresh B before we treat bytes as user input again.
         machine.handle_vt_event(VtEvent::AltScreenLeft);
         assert!(!machine.at_input_prompt());
+    }
+
+    #[test]
+    fn scrollback_cleared_drops_records_and_emits_pty_event() {
+        let mut machine = BlockMachine::new();
+        // Land one completed block in the machine's records.
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::PromptEnd);
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("ls".into()),
+        });
+        machine.handle_vt_event(VtEvent::CommandFinished {
+            exit_code: 0,
+            cwd: None,
+            git_branch: None,
+        });
+        assert_eq!(machine.block_summaries().len(), 1);
+
+        // `clear` (ED 3 on the wire → ScrollbackCleared event) wipes
+        // the visible list. Machine drops its records and emits a
+        // single `ScrollbackCleared` PtyEvent so the frontend can
+        // mirror the wipe.
+        let events = machine.handle_vt_event(VtEvent::ScrollbackCleared);
+        assert!(matches!(events.as_slice(), [PtyEvent::ScrollbackCleared]));
+        assert!(machine.block_summaries().is_empty());
+    }
+
+    #[test]
+    fn scrollback_cleared_mid_running_block_drops_it() {
+        // Same shape as running `clear` while a command is
+        // in-flight — the mid-flight block goes away too, which
+        // matches what `clear` does to a normal terminal display.
+        let mut machine = BlockMachine::new();
+        machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        machine.handle_vt_event(VtEvent::CommandStart {
+            command: Some("sleep 5".into()),
+        });
+        assert!(machine.current_block_id().is_some());
+
+        machine.handle_vt_event(VtEvent::ScrollbackCleared);
+        assert!(machine.current_block_id().is_none());
+        assert!(machine.block_summaries().is_empty());
     }
 }

@@ -15,11 +15,28 @@
  * selection border that follows a search jump.
  */
 
+import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
 import type { UiBlock } from "./blockReducer";
+
+/**
+ * Shared style for the keyboard-shortcut chips in the empty-state
+ * placeholder. Mirrors the visual weight of the pill filters in the
+ * search overlay so it reads as "clickable-ish hint" rather than raw
+ * text.
+ */
+const KBD_STYLE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10.5,
+  padding: "1px 5px",
+  border: "1px solid var(--border)",
+  borderRadius: 3,
+  color: "var(--fg-dim)",
+  marginRight: 6,
+};
 
 export interface BlockListProps {
   pty: PtyId | null;
@@ -221,13 +238,42 @@ export function BlockList({
               <div
                 data-testid="block-list-empty"
                 style={{
-                  padding: 16,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 12,
-                  color: "var(--fg-faint)",
+                  padding: "20px 18px 18px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                  fontFamily: "var(--font-ui)",
                 }}
               >
-                Run a command to see it captured here.
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--fg-dim)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Ready. Run a command in the terminal — it will show up here as a block you can
+                  select, format, and inspect.
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    fontSize: 11.5,
+                    color: "var(--fg-faint)",
+                  }}
+                >
+                  <span data-testid="block-list-empty-hint-search">
+                    <kbd style={KBD_STYLE}>⌘F</kbd> search everything you&rsquo;ve run
+                  </span>
+                  <span data-testid="block-list-empty-hint-assistant">
+                    <kbd style={KBD_STYLE}>⌘K</kbd> ask the assistant
+                  </span>
+                  <span data-testid="block-list-empty-hint-settings">
+                    <kbd style={KBD_STYLE}>⌘,</kbd> theme &amp; preferences
+                  </span>
+                </div>
               </div>
             )
           : // pty is set together with the first block; once we have blocks we

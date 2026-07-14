@@ -85,6 +85,15 @@ export type PtyEvent =
       kind: "prompt_chunk";
       /** Base64-encoded bytes. */
       data: string;
+    }
+  | {
+      /**
+       * Soft-clear signal — the shell ran `clear` / `Ctrl+L` / any alias
+       * that emits `CSI 3 J` on the wire. The frontend drops the pane's
+       * visible block list in response. Persistent storage is untouched;
+       * the cleared blocks stay searchable via the overlay.
+       */
+      kind: "scrollback_cleared";
     };
 
 /**
