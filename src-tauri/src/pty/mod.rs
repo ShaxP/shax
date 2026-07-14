@@ -137,6 +137,11 @@ pub enum PtyEvent {
     /// The raw `Output` event continues to flow to xterm.js unchanged so
     /// non-shell-integrated programs and alt-screen passthrough still work.
     PromptChunk { data: String },
+    /// Soft-clear signal — the shell ran `clear`, the user hit `Ctrl+L`, or
+    /// any equivalent that emits `CSI 3 J`. The frontend drops the pane's
+    /// visible block list in response; the store is untouched so the
+    /// blocks remain searchable via the overlay.
+    ScrollbackCleared,
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────
@@ -176,16 +181,6 @@ pub struct PtyManager {
     store: Option<Arc<Store>>,
 }
 
-/// How many historical blocks to load on each pane spawn so the user sees
-/// their previous session's commands in the BlockList. Older blocks are
-/// still in the store and will be reachable via search at M3.
-///
-/// Bounded deliberately: the frontend's non-virtualized BlockList commits
-/// every row synchronously on mount, and a large seed starves xterm's
-/// render scheduler. 50 fits comfortably in one frame; virtualization
-/// lifts this in M3 when the search surface lands.
-const HISTORY_SEED_LIMIT: usize = 50;
-
 impl PtyManager {
     /// Create an empty manager without persistence. For tests that don't
     /// want a DB file; production code uses `with_store`.
@@ -197,8 +192,10 @@ impl PtyManager {
         }
     }
 
-    /// Create a manager that writes completed blocks to `store` and seeds
-    /// each new pane with the most recent `HISTORY_SEED_LIMIT` blocks.
+    /// Create a manager that writes completed blocks to `store`.
+    /// Panes always start blank — historical blocks live in the store
+    /// and are reachable through the search overlay, not by rehydrating
+    /// the new pane's list.
     pub fn with_store(store: Arc<Store>) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
@@ -263,24 +260,12 @@ impl PtyManager {
 
         let child = Arc::new(Mutex::new(child));
 
-        // Create a per-pane block shared state for the reader thread, seeded
-        // with the most recent historical blocks so the BlockList shows the
-        // user's previous session immediately on boot. Their ids are also
-        // pre-loaded into the reader's `persisted` set further down so the
-        // first VT round doesn't try to re-UPSERT them (and clobber their
-        // stored output bytes with the empty live cache).
-        let mut shared = BlockShared::default();
-        let mut seeded_ids: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
-        if let Some(store) = &self.store {
-            match store.load_recent(HISTORY_SEED_LIMIT) {
-                Ok(history) => {
-                    seeded_ids = history.iter().map(|s| s.id).collect();
-                    shared.summaries = history;
-                }
-                Err(e) => tracing::warn!("failed to load block history: {e}"),
-            }
-        }
-        let block_shared: Arc<Mutex<BlockShared>> = Arc::new(Mutex::new(shared));
+        // Per-pane block shared state for the reader thread. Panes
+        // always start blank (M7 slice 4): historical blocks live in
+        // the store and are surfaced via the search overlay, not
+        // rehydrated into the new pane's list. This keeps a fresh
+        // pane from feeling cluttered with unrelated history.
+        let block_shared: Arc<Mutex<BlockShared>> = Arc::new(Mutex::new(BlockShared::default()));
         self.blocks
             .lock()
             .await
@@ -302,7 +287,6 @@ impl PtyManager {
             on_event,
             block_shared,
             self.store.clone(),
-            seeded_ids,
         );
 
         tracing::info!(%id, rows = opts.rows, cols = opts.cols, "PTY spawned");
@@ -464,7 +448,6 @@ fn spawn_reader_task(
     on_event: Channel<PtyEvent>,
     block_shared: Arc<Mutex<BlockShared>>,
     store: Option<Arc<Store>>,
-    seeded_persisted: std::collections::HashSet<BlockId>,
 ) {
     let rt = tokio::runtime::Handle::current();
 
@@ -473,13 +456,11 @@ fn spawn_reader_task(
 
         let mut buf = [0u8; 4096];
 
-        // Ids that have already been written to the store. Pre-seeded with
-        // the historical block ids loaded into the BlockList on spawn so the
-        // first VT round doesn't re-UPSERT those rows — which would also
-        // clobber their stored output bytes with the empty live cache and
-        // overwrite their original `pane_id` with this session's. From there
-        // on, new completions are added as they're persisted.
-        let mut persisted: std::collections::HashSet<BlockId> = seeded_persisted;
+        // Ids that have already been written to the store during this
+        // session. Populated as each block completes and gets
+        // UPSERTed. Panes no longer seed from history (M7 slice 4),
+        // so this always starts empty.
+        let mut persisted: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
 
         // The VT parser and block machine live entirely inside this thread;
         // they are never moved or accessed from outside.
@@ -1532,83 +1513,21 @@ mod tests {
         assert!(bytes.is_empty());
     }
 
-    /// The first VT round of a freshly spawned pane must not re-UPSERT the
-    /// historical blocks that were just loaded into the BlockList — doing
-    /// so would clobber their stored output bytes (the live cache is empty
-    /// at that point) and overwrite their original `pane_id` with the new
-    /// session's id. The seeded `persisted` set is what prevents that.
+    /// A newly-spawned pane must start with an empty block list even when
+    /// the store already holds history from earlier sessions (M7 slice 4).
+    /// Historical blocks are reachable through the search overlay, not
+    /// rehydrated into the fresh pane.
     #[cfg(unix)]
     #[tokio::test]
-    async fn spawn_preserves_historical_block_output_on_first_round() {
+    async fn spawn_starts_with_empty_block_list_even_with_history() {
         use crate::store::PersistedBlock;
 
         let store = Arc::new(Store::open_in_memory().expect("open store"));
-        // Pre-populate a historical block with real output bytes and a
-        // specific pane_id from an "earlier session".
+        // Pre-populate with a block from an earlier session.
         let earlier_pane = PtyId::new();
         let historical = PersistedBlock {
             id: BlockId(Uuid::new_v4()),
             pane_id: earlier_pane,
-            command: Some("ls".into()),
-            cwd: Some("/Users/me".into()),
-            git_branch: Some("main".into()),
-            started_at_ms: 1000,
-            ended_at_ms: Some(1050),
-            exit_code: Some(0),
-            duration_ms: Some(50),
-            aborted: false,
-            interactive: false,
-            output: b"a.txt b.txt".to_vec(),
-        };
-        store.insert_block(&historical).expect("seed historical");
-
-        let manager = Arc::new(PtyManager::with_store(Arc::clone(&store)));
-        set_global_manager(Arc::clone(&manager));
-
-        let (channel, _rx) = make_test_channel();
-        let id = manager
-            .spawn(
-                SpawnOpts {
-                    rows: 24,
-                    cols: 80,
-                    cwd: None,
-                    env: None,
-                },
-                channel,
-            )
-            .await
-            .expect("spawn");
-
-        // Drive a short delay so the reader thread has time to process the
-        // shell's first prompt chunk (which is what would have triggered the
-        // bad re-UPSERT prior to this fix).
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // The stored output must still be the historical bytes — not empty.
-        let bytes = store.load_output(historical.id).expect("load_output");
-        assert_eq!(
-            bytes.as_deref(),
-            Some(&b"a.txt b.txt"[..]),
-            "historical output must not be clobbered by an empty re-UPSERT on first VT round",
-        );
-
-        manager.kill(id).await.expect("kill");
-    }
-
-    /// New pane spawns seed `BlockShared.summaries` with the most recent
-    /// blocks from the store so the BlockList shows previous-session history
-    /// the moment the user opens the app.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn spawn_seeds_block_list_from_store() {
-        use crate::store::PersistedBlock;
-
-        let store = Arc::new(Store::open_in_memory().expect("open store"));
-        // Pre-populate with one historical block from an earlier session.
-        let historical_pane = PtyId::new();
-        let historical = PersistedBlock {
-            id: BlockId(Uuid::new_v4()),
-            pane_id: historical_pane,
             command: Some("git status".into()),
             cwd: Some("/Users/me/repo".into()),
             git_branch: Some("main".into()),
@@ -1639,15 +1558,26 @@ mod tests {
             .await
             .expect("spawn");
 
+        // Give the reader thread a beat to process the shell's first
+        // prompt chunk — if the seed-then-persist path had somehow
+        // regressed, that would be when the historical block would
+        // reappear in the summaries.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
         let summaries = manager.list_blocks(id).await;
         assert!(
-            summaries.iter().any(|s| s.id == historical.id),
-            "expected historical block to appear in the new pane's BlockList"
+            !summaries.iter().any(|s| s.id == historical.id),
+            "fresh pane must not show historical blocks; got {summaries:?}",
         );
 
-        // get_block_output for a historical id should fall through to the store.
-        let bytes = manager.get_block_output(id, historical.id).await;
-        assert_eq!(bytes, b"clean");
+        // Store still holds the historical block untouched — it's
+        // reachable through the search overlay, just not shown here.
+        let bytes = store.load_output(historical.id).expect("load_output");
+        assert_eq!(
+            bytes.as_deref(),
+            Some(&b"clean"[..]),
+            "store must retain the historical block's output bytes",
+        );
 
         manager.kill(id).await.expect("kill");
     }

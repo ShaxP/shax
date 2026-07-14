@@ -57,6 +57,13 @@ describe("BlockList", () => {
     expect(screen.getByTestId("block-list-empty")).toHaveTextContent(/Run a command/i);
   });
 
+  it("empty state points users at the search, assistant, and settings shortcuts (M7 slice 4)", () => {
+    render(<BlockList pty={null} blocks={[]} />);
+    expect(screen.getByTestId("block-list-empty-hint-search")).toHaveTextContent(/⌘F/);
+    expect(screen.getByTestId("block-list-empty-hint-assistant")).toHaveTextContent(/⌘K/);
+    expect(screen.getByTestId("block-list-empty-hint-settings")).toHaveTextContent(/⌘,/);
+  });
+
   it("scrolls to the bottom whenever the block count changes", () => {
     const restore = withFakeScrollHeight(1000);
     try {

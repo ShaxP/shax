@@ -25,11 +25,11 @@
  *     don't see it.
  */
 
-import { memo, startTransition, useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { spawnPty, writePty, resizePty, killPty, listBlocks, base64Decode } from "../lib/ipc";
+import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
 import type { BlockId, PtyId, PtyEvent } from "../lib/ipc";
 import type { UiBlock } from "./blockReducer";
 import { blockReducer, initialBlockState } from "./blockReducer";
@@ -881,6 +881,14 @@ function TerminalPaneInner({
           });
           break;
 
+        case "scrollback_cleared":
+          // Shell emitted `CSI 3 J` — the wire signal for `clear`,
+          // `Ctrl+L`, or any alias with the same effect. Wipe the
+          // visible block list without touching the store; the
+          // cleared blocks stay searchable via the overlay.
+          dispatch({ type: "scrollback_cleared" });
+          break;
+
         case "exit":
           // The shell died (user typed `exit`, it crashed, or a
           // `kill -9` from outside). The PTY entry is gone from the
@@ -902,13 +910,9 @@ function TerminalPaneInner({
       }
       ptyIdRef.current = id;
       setPtyId(id);
-      void listBlocks(id).then((blocks) => {
-        if (blocks.length > 0) {
-          startTransition(() => {
-            dispatch({ type: "seed", blocks });
-          });
-        }
-      });
+      // Panes start blank (M7 slice 4). Historical blocks live in the
+      // store and surface through the search overlay; the pane's own
+      // list only shows commands run in this session.
     });
 
     return () => {

@@ -1253,8 +1253,13 @@ impl Store {
     }
 
     /// Return the most recent `limit` blocks across all panes, oldest-first
-    /// within the window (so the UI's chronological append order is preserved
-    /// when seeding the BlockList on app boot).
+    /// within the window.
+    ///
+    /// Not used by production code today — panes start blank and reach the
+    /// store via the search overlay (M7 slice 4). Kept because the store
+    /// tests below use it as a general read-back helper, and it's the
+    /// natural building block for a future "recent history" surface.
+    #[allow(dead_code)]
     pub fn load_recent(&self, limit: usize) -> Result<Vec<BlockSummary>, StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut stmt = conn.prepare(

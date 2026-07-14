@@ -48,6 +48,16 @@ pub enum VtEvent {
         cwd: Option<String>,
         git_branch: Option<String>,
     },
+    /// `CSI 3 J` – the shell asked to erase saved lines (scrollback).
+    /// Emitted whenever the user hits `clear`, `Ctrl+L`, or any alias
+    /// that lands the same ED-3 sequence on the wire.
+    ///
+    /// This is a *soft-clear* signal: the frontend wipes the pane's
+    /// visible block list in response; the persistent store is
+    /// untouched, so search still surfaces the cleared blocks.
+    /// The raw bytes still flow through to xterm.js so the terminal
+    /// display clears too — same as before.
+    ScrollbackCleared,
 }
 
 /// One item in the VT layer's interleaved message stream.
@@ -168,6 +178,20 @@ impl vte::Perform for Performer {
                     }
                     _ => {}
                 }
+            }
+        }
+        // `ED 3` – "erase saved lines" (scrollback). The shell emits
+        // this whenever the user runs `clear`, hits `Ctrl+L`, or uses
+        // any alias with the same effect. We *observe* it (emit an
+        // event so the block layer can soft-clear the visible list)
+        // but still pass the bytes through so xterm.js clears its own
+        // grid — the fidelity contract stays intact.
+        if action == 'J' && intermediates.is_empty() {
+            let has_ed3 = params.iter().any(|sub| sub.first().copied() == Some(3));
+            if has_ed3 {
+                self.emit_event(VtEvent::ScrollbackCleared);
+                // Fall through: still write the sequence into `pending`
+                // below so downstream terminals see it too.
             }
         }
         // Pass through: ESC + [ + intermediates + params + action.
@@ -621,5 +645,60 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(concat, b"hello\r\nworld");
+    }
+
+    #[test]
+    fn ed3_emits_scrollback_cleared_event_and_passes_bytes_through() {
+        // `\x1b[3J` — the shell's "erase saved lines" (scrollback)
+        // sequence. Emitted by `clear`, `Ctrl+L` (in most shell
+        // bindings), `tput reset`, and `printf '\ec'` (RIS). The VT
+        // layer must:
+        //   1. Emit `VtEvent::ScrollbackCleared` so the block layer
+        //      can soft-clear the pane's visible block list.
+        //   2. Still pass the bytes through to xterm.js so the
+        //      terminal display clears too (fidelity contract).
+        let bytes = b"before\x1b[3Jafter";
+        let messages = collect_messages(bytes);
+        let events: Vec<_> = messages
+            .iter()
+            .filter_map(|m| match m {
+                VtMessage::Event(e) => Some(e.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(events, vec![VtEvent::ScrollbackCleared]);
+        let concat: Vec<u8> = messages
+            .into_iter()
+            .filter_map(|m| match m {
+                VtMessage::Output(b) => Some(b),
+                VtMessage::Event(_) => None,
+            })
+            .flatten()
+            .collect();
+        // Both the raw ED-3 escape and the surrounding text must
+        // still reach downstream — xterm consumes the ED-3 itself.
+        assert_eq!(concat, b"before\x1b[3Jafter");
+    }
+
+    #[test]
+    fn ed_without_param_3_does_not_emit_scrollback_cleared() {
+        // `\x1b[J` (no param, defaults to ED 0 — erase from cursor to
+        // end of screen) and `\x1b[2J` (erase entire visible screen)
+        // must NOT trigger the soft-clear signal. Only `\x1b[3J`
+        // targets the scrollback.
+        for bytes in [&b"\x1b[J"[..], &b"\x1b[0J"[..], &b"\x1b[2J"[..]] {
+            let messages = collect_messages(bytes);
+            let events: Vec<_> = messages
+                .into_iter()
+                .filter_map(|m| match m {
+                    VtMessage::Event(e) => Some(e),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                events.is_empty(),
+                "ED without param 3 must not emit ScrollbackCleared, got: {events:?} for {bytes:?}"
+            );
+        }
     }
 }

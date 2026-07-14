@@ -107,7 +107,14 @@ export type BlockAction =
    * previously-inspected block. The block is rendered above the live
    * list with a "from history" tag and immediately selected.
    */
-  | { type: "inspect_block"; block: UiBlock };
+  | { type: "inspect_block"; block: UiBlock }
+  /**
+   * Soft-clear the pane's visible block list. Dispatched when the shell
+   * emits `CSI 3 J` (the wire signal for `clear`, `Ctrl+L`, and
+   * equivalents). Blocks remain in the persistent store and are still
+   * reachable through search; this only wipes what the pane is showing.
+   */
+  | { type: "scrollback_cleared" };
 
 export const initialBlockState: BlockState = {
   blocks: [],
@@ -272,6 +279,21 @@ export function blockReducer(state: BlockState, action: BlockAction): BlockState
         ...state,
         inspectedBlock: action.block,
         selectedBlockId: action.block.id,
+      };
+
+    case "scrollback_cleared":
+      // Soft-clear: wipe the visible block list, drop any live
+      // per-block output buffers, and clear the "inspected via search"
+      // and selection state. Preserve the alt-screen flag and the
+      // prompt-line renderer — those describe the shell's *current*
+      // state, not history, and the shell keeps running through a
+      // `clear`. The persistent store is not touched.
+      return {
+        ...state,
+        blocks: [],
+        liveOutputs: new Map(),
+        selectedBlockId: null,
+        inspectedBlock: null,
       };
   }
 }

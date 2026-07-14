@@ -598,3 +598,69 @@ describe("blockReducer / reset", () => {
     expect(next).toBe(initialBlockState);
   });
 });
+
+// ---------------------------------------------------------------------------
+// scrollback_cleared (M7 slice 4 — `clear` / Ctrl+L soft-clear)
+// ---------------------------------------------------------------------------
+
+describe("blockReducer / scrollback_cleared", () => {
+  it("wipes visible blocks, live outputs, and selection", () => {
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "a" }), makeBlock({ id: "b" })],
+      altScreen: false,
+      liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
+      promptLine: {
+        text: "> ",
+        styled: [],
+        cursor: 2,
+        currentStyled: false,
+      },
+      selectedBlockId: "a",
+      inspectedBlock: makeBlock({ id: "history" }),
+    };
+    const next = blockReducer(state, { type: "scrollback_cleared" });
+    expect(next.blocks).toEqual([]);
+    expect(next.liveOutputs.size).toBe(0);
+    expect(next.selectedBlockId).toBeNull();
+    expect(next.inspectedBlock).toBeNull();
+  });
+
+  it("preserves the alt-screen flag and prompt line — those describe the live shell, not history", () => {
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "a" })],
+      altScreen: true,
+      liveOutputs: new Map(),
+      promptLine: {
+        text: "current",
+        styled: [],
+        cursor: 7,
+        currentStyled: false,
+      },
+      selectedBlockId: null,
+      inspectedBlock: null,
+    };
+    const next = blockReducer(state, { type: "scrollback_cleared" });
+    expect(next.altScreen).toBe(true);
+    expect(next.promptLine).toEqual(state.promptLine);
+  });
+
+  it("does not mutate the previous state", () => {
+    const state: BlockState = {
+      blocks: [makeBlock({ id: "a" })],
+      altScreen: false,
+      liveOutputs: new Map([["a", new Uint8Array([1])]]),
+      promptLine: { text: "", styled: [], cursor: 0, currentStyled: false },
+      selectedBlockId: "a",
+      inspectedBlock: null,
+    };
+    const snapshot = {
+      blocks: [...state.blocks],
+      liveOutputs: new Map(state.liveOutputs),
+      selectedBlockId: state.selectedBlockId,
+    };
+    blockReducer(state, { type: "scrollback_cleared" });
+    expect(state.blocks).toEqual(snapshot.blocks);
+    expect(state.liveOutputs).toEqual(snapshot.liveOutputs);
+    expect(state.selectedBlockId).toEqual(snapshot.selectedBlockId);
+  });
+});
