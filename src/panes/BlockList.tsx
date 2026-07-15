@@ -17,25 +17,87 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
+import shaxIconUrl from "../assets/shax-icon.svg";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
 import type { UiBlock } from "./blockReducer";
 
-/**
- * Shared style for the keyboard-shortcut chips in the empty-state
- * placeholder. Mirrors the visual weight of the pill filters in the
- * search overlay so it reads as "clickable-ish hint" rather than raw
- * text.
- */
+// --- Empty-state styles (M7.5a) ---------------------------------------
+//
+// The empty state (no blocks, no inspected search hit) is a centered
+// hero: mark glyph, status dot + "Ready.", one-sentence description,
+// and three shortcut cards. All styles live in this block so they read
+// as a unit and don't get scattered through the render body.
+
+const EMPTY_WRAPPER: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "48px 24px",
+  fontFamily: "var(--font-ui)",
+  color: "var(--fg)",
+};
+
+const EMPTY_HEADING_ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginTop: 20,
+  fontSize: 18,
+  fontWeight: 600,
+  letterSpacing: 0.1,
+};
+
+const EMPTY_READY_DOT: CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+  background: "var(--green)",
+  boxShadow: "0 0 6px color-mix(in srgb, var(--green) 55%, transparent)",
+};
+
+const EMPTY_DESCRIPTION: CSSProperties = {
+  marginTop: 14,
+  maxWidth: 480,
+  textAlign: "center",
+  fontSize: 13.5,
+  lineHeight: 1.55,
+  color: "var(--fg-dim)",
+};
+
+const EMPTY_CHIP_LIST: CSSProperties = {
+  marginTop: 36,
+  width: "min(460px, 100%)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const EMPTY_CHIP: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "10px 12px",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  background: "var(--pane)",
+  fontSize: 13,
+  color: "var(--fg-dim)",
+};
+
 const KBD_STYLE: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 10.5,
-  padding: "1px 5px",
-  border: "1px solid var(--border)",
-  borderRadius: 3,
-  color: "var(--fg-dim)",
-  marginRight: 6,
+  fontSize: 11,
+  padding: "3px 8px",
+  minWidth: 42,
+  textAlign: "center",
+  border: "1px solid var(--border-strong)",
+  borderRadius: "var(--radius-sm)",
+  background: "var(--pane2)",
+  color: "var(--fg)",
 };
 
 export interface BlockListProps {
@@ -181,8 +243,14 @@ export function BlockList({
           // / status) slot in above it. See
           // `.block-row[data-widget-live="true"]` in
           // BlockRow.css for the rule.
+          //
+          // `minHeight: 100%` lets the M7.5a empty-state hero
+          // centre itself vertically in the visible pane when
+          // no blocks are present. When blocks exist the
+          // column grows past 100% and this is a no-op.
           display: "flex",
           flexDirection: "column",
+          minHeight: "100%",
         }}
       >
         <header
@@ -235,44 +303,36 @@ export function BlockList({
         )}
         {blocks.length === 0
           ? inspectedBlock === null && (
-              <div
-                data-testid="block-list-empty"
-                style={{
-                  padding: "20px 18px 18px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 12,
-                  fontFamily: "var(--font-ui)",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: "var(--fg-dim)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Ready. Run a command in the terminal — it will show up here as a block you can
-                  select, format, and inspect.
+              <div data-testid="block-list-empty" style={EMPTY_WRAPPER}>
+                <img
+                  src={shaxIconUrl}
+                  alt="Shax"
+                  width={64}
+                  height={64}
+                  style={{ display: "block" }}
+                />
+                <div style={EMPTY_HEADING_ROW}>
+                  <span aria-hidden="true" style={EMPTY_READY_DOT} />
+                  <span>Ready</span>
                 </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    fontSize: 11.5,
-                    color: "var(--fg-faint)",
-                  }}
-                >
-                  <span data-testid="block-list-empty-hint-search">
-                    <kbd style={KBD_STYLE}>⌘F</kbd> search everything you&rsquo;ve run
-                  </span>
-                  <span data-testid="block-list-empty-hint-assistant">
-                    <kbd style={KBD_STYLE}>⌘K</kbd> ask the assistant
-                  </span>
-                  <span data-testid="block-list-empty-hint-settings">
-                    <kbd style={KBD_STYLE}>⌘,</kbd> theme &amp; preferences
-                  </span>
+                <p style={EMPTY_DESCRIPTION}>
+                  Run a command in the terminal — it&rsquo;ll show up here as a{" "}
+                  <strong style={{ color: "var(--fg)", fontWeight: 600 }}>block</strong> you can
+                  select, format, and inspect.
+                </p>
+                <div style={EMPTY_CHIP_LIST}>
+                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-search">
+                    <kbd style={KBD_STYLE}>⌘F</kbd>
+                    <span>search everything you&rsquo;ve run</span>
+                  </div>
+                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-assistant">
+                    <kbd style={KBD_STYLE}>⌘K</kbd>
+                    <span>ask the assistant</span>
+                  </div>
+                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-settings">
+                    <kbd style={KBD_STYLE}>⌘,</kbd>
+                    <span>theme &amp; preferences</span>
+                  </div>
                 </div>
               </div>
             )
