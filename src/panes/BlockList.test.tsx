@@ -64,6 +64,17 @@ describe("BlockList", () => {
     expect(screen.getByTestId("block-list-empty-hint-settings")).toHaveTextContent(/⌘,/);
   });
 
+  it("empty state hero has the mark glyph and a 'Ready.' heading (M7.5a)", () => {
+    render(<BlockList pty={null} blocks={[]} />);
+    // ShaxMark is inline SVG with role="img" and aria-label="Shax".
+    expect(screen.getByRole("img", { name: /shax/i })).toBeInTheDocument();
+    expect(screen.getByTestId("block-list-empty")).toHaveTextContent(/Ready\./);
+    // The description emphasises "block" as the noun of the product.
+    expect(screen.getByTestId("block-list-empty").querySelector("strong")?.textContent).toBe(
+      "block",
+    );
+  });
+
   it("scrolls to the bottom whenever the block count changes", () => {
     const restore = withFakeScrollHeight(1000);
     try {
