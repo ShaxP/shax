@@ -45,7 +45,12 @@ const BACKDROP: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 90,
+  // Above the pane focus ring (zIndex 100 in LayoutRender) so a
+  // multi-pane window doesn't leak its active-pane border through the
+  // modal. Below the block viewer (1500). Sibling with the search
+  // overlay backdrop (1000) — both are user-invoked, only one open at
+  // a time.
+  zIndex: 1200,
 };
 
 const PANEL: CSSProperties = {
@@ -270,6 +275,18 @@ const LANE_STATUS: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
+};
+
+// Multi-line prose inside a lane's reveal area (e.g. the Ollama
+// capabilities disclaimer). Deliberately NOT flex — inline `<em>` /
+// `<code>` in the middle of the paragraph would otherwise be treated as
+// separate flex items and fragment the text into columns.
+const LANE_NOTE: CSSProperties = {
+  fontSize: 11.5,
+  color: "var(--fg-faint)",
+  marginTop: 8,
+  lineHeight: 1.55,
+  fontStyle: "italic",
 };
 
 const INPUT_ROW: CSSProperties = {
@@ -938,15 +955,7 @@ function AssistantSection(props: AssistantSectionProps): React.ReactElement {
                       testId="settings-ollama-cap-vision"
                     />
                   </div>
-                  <div
-                    data-testid="settings-ollama-capabilities-note"
-                    style={{
-                      ...LANE_STATUS,
-                      marginTop: 6,
-                      fontStyle: "italic",
-                      color: "var(--fg-faint)",
-                    }}
-                  >
+                  <div data-testid="settings-ollama-capabilities-note" style={LANE_NOTE}>
                     Capabilities reflect what the model{" "}
                     <em style={{ fontStyle: "normal", fontWeight: 600 }}>declares</em>, not tested
                     behaviour. Real-world tool use varies — smaller models (e.g. Llama 3.2 1B/3B)
