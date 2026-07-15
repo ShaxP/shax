@@ -17,7 +17,7 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
-import shaxIconUrl from "../assets/shax-icon.png";
+import { ShaxMark } from "../assets/ShaxMark";
 import type { BlockId, PtyId } from "../lib/ipc";
 import { getBlockOutput } from "../lib/ipc";
 import { BlockRow } from "./BlockRow";
@@ -304,13 +304,7 @@ export function BlockList({
         {blocks.length === 0
           ? inspectedBlock === null && (
               <div data-testid="block-list-empty" style={EMPTY_WRAPPER}>
-                <img
-                  src={shaxIconUrl}
-                  alt="Shax"
-                  width={64}
-                  height={64}
-                  style={{ display: "block" }}
-                />
+                <ShaxMark size={64} style={{ display: "block" }} />
                 <div style={EMPTY_HEADING_ROW}>
                   <span aria-hidden="true" style={EMPTY_READY_DOT} />
                   <span>Ready</span>
