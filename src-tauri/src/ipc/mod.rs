@@ -526,6 +526,26 @@ pub async fn git_status_porcelain(cwd: String) -> Result<String, String> {
     run_git(&cwd, &["status", "--porcelain=v2", "--branch", "-z"]).await
 }
 
+/// Return the current user's home directory as a string. The frontend
+/// uses this once, on boot, to compact cwds for display — turning
+/// `/Users/ada/dev/shax` into `~/dev/shax` in the tab, prompt strip,
+/// and statusline (M7.6).
+///
+/// Reads `HOME` (macOS / Linux) or `USERPROFILE` (Windows) directly
+/// instead of pulling in the `dirs` crate — same pattern the store's
+/// `data_dir()` uses. Returns `None` when neither env var is present,
+/// in which case the caller falls back to the full path.
+#[tauri::command]
+pub async fn home_dir() -> Result<Option<String>, String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let raw = std::env::var_os("HOME");
+    #[cfg(target_os = "windows")]
+    let raw = std::env::var_os("USERPROFILE");
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let raw: Option<std::ffi::OsString> = None;
+    Ok(raw.and_then(|h| h.into_string().ok()))
+}
+
 /// Run `git diff <args>` in `cwd`. `args` is the part of the
 /// user's command after `diff` — we replay it verbatim because
 /// the user might have typed `git diff HEAD`, `git diff

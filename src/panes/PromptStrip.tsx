@@ -28,6 +28,8 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   Ref,
 } from "react";
+import { useHomeDir } from "../lib/HomeDirContext";
+import { compactCwd } from "./blockFormat";
 import type { PromptLine } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
 
@@ -163,8 +165,28 @@ function PromptStripInner(
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
   const hasTyping = line.text.length > 0;
+  const home = useHomeDir();
+  const displayCwd = compactCwd(cwd, home);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    // `?` on an empty prompt opens the assistant, matching the strip's
+    // placeholder hint (M7.6). Only fires when the user hasn't typed
+    // anything yet AND no modifier is held — otherwise `?` is just a
+    // character (or part of a shortcut like Shift-/ for search).
+    const isBareQuestion =
+      event.key === "?" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !hasTyping &&
+      line.cursor === 0;
+    if (isBareQuestion) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(new CustomEvent("shax:assistant-open"));
+      return;
+    }
+
     const bytes = keyToBytes(event);
     if (bytes === null) return;
     // Any key we map is one the browser shouldn't also handle (Tab moving
@@ -213,7 +235,7 @@ function PromptStripInner(
     >
       <span style={META_GROUP}>
         <span style={CWD_LABEL} data-testid="prompt-cwd">
-          {cwd ?? "—"}
+          {displayCwd}
         </span>
         <span style={BRANCH_LABEL} data-testid="prompt-branch">
           <span style={{ fontSize: 11 }}>⎇</span>

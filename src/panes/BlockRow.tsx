@@ -467,7 +467,7 @@ function BlockRowInner({
         e as CustomEvent<{
           pty: PtyId | null;
           blockId: string;
-          kind: "toggle-fmt-raw" | "yank" | "collapse" | "expand";
+          kind: "toggle-fmt-raw" | "yank" | "collapse" | "expand" | "ask-shax";
         }>
       ).detail;
       // Pane-scope filter: only react when the event originated
@@ -537,12 +537,24 @@ function BlockRowInner({
         setUserOpen(false);
         return;
       }
+      if (detail.kind === "ask-shax") {
+        // ⌘↩ from block-focus mode. Ignore on non-failed blocks —
+        // the button-driven click path already gates on exit code,
+        // but keyboard dispatch reaches here for any focused row.
+        if (block.exit_code === null || block.exit_code === 0 || block.aborted) return;
+        const prompt = buildExplainPrompt(block, outputText);
+        window.dispatchEvent(new CustomEvent("shax:assistant-ask", { detail: { prompt } }));
+        return;
+      }
     };
     window.addEventListener("shax:block-action", onAction);
     return () => window.removeEventListener("shax:block-action", onAction);
   }, [
-    block.id,
-    block.command,
+    // `block` covers `.id`, `.command`, `.exit_code`, `.aborted` —
+    // all read inside the handler (M7.6 ask-shax gates on the last
+    // two). Passing the whole object avoids drifting the dep list
+    // as the ask-shax handler grows.
+    block,
     formatter,
     outputText,
     isRunning,
@@ -856,22 +868,6 @@ function BlockRowInner({
           )}
 
           <div className="block-row-actions" data-testid="block-actions">
-            {block.exit_code !== null && block.exit_code !== 0 && (
-              <span
-                title="Ask Shax why this failed"
-                data-testid="block-ask-shax"
-                style={{ ...ACTION_ICON, color: "var(--amber)" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const prompt = buildExplainPrompt(block, outputText);
-                  window.dispatchEvent(
-                    new CustomEvent("shax:assistant-ask", { detail: { prompt } }),
-                  );
-                }}
-              >
-                {"?"}
-              </span>
-            )}
             <span
               title="copy"
               style={{ ...ACTION_ICON, color: "var(--fg-faint)" }}
@@ -1037,6 +1033,59 @@ function BlockRowInner({
           >
             {rawDisplayText === null ? "…" : <AnsiSpans text={rawDisplayText} />}
           </pre>
+        )}
+        {open && block.exit_code !== null && block.exit_code !== 0 && !block.aborted && (
+          <button
+            type="button"
+            data-testid="block-ask-shax"
+            title="Ask Shax why this command failed"
+            onClick={(e) => {
+              e.stopPropagation();
+              const prompt = buildExplainPrompt(block, outputText);
+              window.dispatchEvent(new CustomEvent("shax:assistant-ask", { detail: { prompt } }));
+            }}
+            style={{
+              // Prominent inline affordance under a failed block's
+              // output (M7.6). Accent-outlined pill, matches the
+              // design's "+ Ask Shax why this failed  ⌘↩" treatment.
+              // The keyboard shortcut hint on the right corresponds
+              // to the ⌘↩ handler wired in `blockFocus.ts` — pressing
+              // it while this block is selected fires the same
+              // event.
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 10,
+              padding: "6px 12px",
+              border: "1px solid var(--accent)",
+              borderRadius: 999,
+              background: "color-mix(in srgb, var(--accent) 10%, transparent)",
+              color: "var(--fg)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            <span aria-hidden="true" style={{ color: "var(--accent)" }}>
+              +
+            </span>
+            <span>Ask Shax why this failed</span>
+            <span
+              aria-hidden="true"
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                padding: "1px 6px",
+                border: "1px solid var(--border-strong)",
+                borderRadius: 3,
+                color: "var(--fg-dim)",
+                marginLeft: 4,
+              }}
+            >
+              ⌘↩
+            </span>
+          </button>
         )}
       </div>
     </div>

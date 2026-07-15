@@ -379,6 +379,7 @@ function TerminalPaneInner({
         case "collapse":
         case "expand":
         case "open-modal":
+        case "ask-shax":
           // Fall through to the normal handlers below.
           break;
       }
@@ -527,6 +528,7 @@ function TerminalPaneInner({
       case "toggle-fmt-raw":
       case "toggle-side-by-side":
       case "yank":
+      case "ask-shax":
         if (currentId !== null) {
           window.dispatchEvent(
             new CustomEvent("shax:block-action", {

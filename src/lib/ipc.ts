@@ -424,6 +424,20 @@ export async function gitRootFor(path: string): Promise<string | null> {
 }
 
 /**
+ * Fetch the user's home directory once. Used by the M7.6 cwd
+ * compaction — the frontend caches the result at boot and passes it
+ * into `compactCwd()` to display `~/dev/shax` instead of
+ * `/Users/ada/dev/shax` in tab labels, the prompt strip, and the
+ * statusline. `null` when the backend can't resolve one (rare —
+ * minimal sandbox / headless test).
+ */
+export async function homeDir(): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("home_dir");
+}
+
+/**
  * Fetch a block's captured bytes by id alone, straight from the store.
  * Used by the search-results viewer: hits are scoped to history, not to
  * any specific live pane, so we can't address the bytes by `(pty, block)`.

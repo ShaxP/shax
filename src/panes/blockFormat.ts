@@ -64,3 +64,43 @@ export function formatTimestamp(ms: number, nowMs: number = Date.now()): string 
   }
   return `${month} ${day}, ${date.getFullYear()}`;
 }
+
+/**
+ * Compact a cwd string for display in the tab, prompt strip, and
+ * statusline (M7.6).
+ *
+ *   `/Users/ada/dev/shax`      + `/Users/ada`  → `~/dev/shax`
+ *   `/tmp/scratch`             + `/Users/ada`  → `/tmp/scratch` (unchanged)
+ *   `/Users/ada`               + `/Users/ada`  → `~`
+ *
+ * A `maxLength` cap collapses long descendants to `~/…/<lastseg>` so a
+ * deep tree doesn't blow out the chip width. The tail (last path
+ * segment) is always preserved because it's the piece users recognise
+ * (`shax`, not `Users`).
+ *
+ * `home` is `null` when the backend couldn't resolve the user's home
+ * directory (rare — headless sandbox); we then just apply the length
+ * cap and return the shortened absolute path.
+ */
+export function compactCwd(cwd: string | null, home: string | null, maxLength = 28): string {
+  if (cwd === null || cwd.length === 0) return "—";
+  let display = cwd;
+  if (home !== null && home.length > 0) {
+    const normalisedHome = home.replace(/\/+$/, "");
+    if (display === normalisedHome) {
+      display = "~";
+    } else if (display.startsWith(normalisedHome + "/")) {
+      display = "~" + display.slice(normalisedHome.length);
+    }
+  }
+  if (display.length <= maxLength) return display;
+  const slash = display.lastIndexOf("/");
+  if (slash <= 0) return display; // No parent to collapse.
+  const tail = display.slice(slash); // Includes the leading slash.
+  // If the tail alone exceeds the cap (a very long single path
+  // segment), fall back to just the tail — we can't compress an
+  // atomic segment. Otherwise glue the sensible prefix in front.
+  const prefix = display.startsWith("~/") ? "~/…" : "…";
+  const shortened = `${prefix}${tail}`;
+  return shortened.length <= display.length ? shortened : display;
+}
