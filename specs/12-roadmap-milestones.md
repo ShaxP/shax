@@ -134,6 +134,100 @@ Three slices, in this order. None gates the next milestone — but doing them no
 
 **Exit:** hybrid search answers fuzzy intent queries; the app is fast under large histories; dark and light are both polished; onboarding teaches the keyboard model.
 
+**Slice status.** Slices already landed under M7: semantic-search infrastructure with a mock embedder (slice 2), real ONNX `all-MiniLM-L6-v2` swap (slice 2b), the search-overlay semantic tier (slice 3), and blank-panes + `clear` soft-wipe + first-cut empty-state hints (slice 4). Remaining M7 polish threads, each broken out as its own sub-milestone below: **M7.5** design landing, **M7.6** terminal window polish, **M7.7** assistant in its own pane. A performance pass and any tail follow-ups from `05` are M7-scoped but not yet slotted.
+
+## M7.5 Design landing
+
+**Goal:** the two visual surfaces the design covers land in the app, at the fidelity the design specifies. **Lead:** frontend.
+
+Bridge slice pair between M7's plumbing work and any further polish. The design bundle exported to `/design/` covers two product surfaces in this milestone (`empty-state.png`, `preferences.png`); a third and fourth image (`terminal-window.png`, `terminal-window-assistant-docked.png`) document the resting terminal state and the assistant-in-a-pane view — both are reference only, out of scope here, and revisited in their own milestone.
+
+Non-negotiables from `13`: every reshape ships with dark **and** light variants; existing behaviour (block anatomy, prompt strip, safety gate, provider lanes) is preserved; the fonts stay the ones the app already ships (`--font-ui` Hanken Grotesk, `--font-mono` JetBrainsMono Nerd Font — see `src/theme/tokens.css`).
+
+Two slices:
+
+1. **M7.5a — Empty pane "Ready" state.** Reshape today's right-column of hints into the centered treatment in `empty-state.png`: a tinted chevron-in-rounded-square icon, a "Ready." heading with a small status dot, a one-sentence explanatory paragraph, and three wide chip-cards for the `⌘F` / `⌘K` / `⌘,` shortcuts. Bundle the icon glyph as an SVG under `src/assets/`. macOS traffic lights the design shows are OS-owned — nothing to render. Statusline / prompt-strip changes visible in the design image are part of the deferred terminal-window reshape; leave them untouched.
+
+2. **M7.5b — Preferences modal reshape.** Keep the current modal — the design's full-window framing is a Claude Design canvas artifact, not the product shape. Take from `preferences.png`: a left-nav list with **two** entries (Appearance, Assistant), the right-side pane restyled to match — radio-in-card lane treatment (selected lane gets an accent-outlined card, unselected lanes are lower-contrast), a keychain-reassurance lock-icon strip under the API-key input, and a bottom status bar with `● all changes saved` on the left and `Esc or ⌘, to close` on the right. The Assistant nav item covers both Claude and Ollama in a single scrollable right pane; today they're two separate top-level sections. The design's Formatters and Keybindings nav entries are illustrative placeholders and are omitted from this slice.
+
+**Exit criteria** (both slices):
+
+- Visual layout matches the corresponding PNG at typical window sizes on both themes.
+- No font changes; every new surface consumes `var(--font-ui)` / `var(--font-mono)`.
+- Behaviour parity with what shipped in slice 4 (empty state) and today's `SettingsModal` (preferences): existing tests stay green, and no reduction in what the settings surface can do.
+- `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm prettier --check`, `cargo test --lib`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` all clean.
+- The PR description references the specific PNG under `/design/` and calls out any deliberate departure.
+
+**Deferred, and named here so nobody accidentally scopes them in:**
+
+- `terminal-window.png` — tab-with-cwd labels, statusline restructure, prompt-strip placeholder copy, and the "Ask Shax why this failed" inline button on failed blocks. Lives in **M7.6** below.
+- `terminal-window-assistant-docked.png` — the assistant-in-a-pane flow in its entirety. Lives in **M7.7** below.
+- `?`-as-prompt-line assistant shortcut. The keystroke handler ships in M7.6; the assistant surface it opens ships in M7.7.
+- Formatters / Keybindings preference sub-pages. Waits for those features to have functionality behind them; no milestone slotted yet.
+
+## M7.6 Terminal window polish
+
+**Goal:** the resting terminal window matches `design/terminal-window.png` at the fidelity the design specifies. **Lead:** frontend.
+
+The chrome and block-affordance changes visible in the terminal-window design that were deferred out of M7.5. Small enough to consider one slice; natural split if it needs one is (a) chrome (tabs + statusline + prompt strip) and (b) inline block affordance ("Ask Shax why this failed").
+
+Non-negotiables from `13`: dark + light; fonts stay Hanken Grotesk + JetBrainsMono; existing behaviour (keystroke routing, cwd/branch propagation, block streaming, safety gate) preserved.
+
+Scope:
+
+- **Tab labels carry cwd.** Format: `<shell-name> <compact-cwd>` (e.g. `shax ~/dev/shax`). Compact rules: `$HOME`-prefixed paths shown as `~/…`; long paths shortened at the tail (`~/…/bar`). Truthful — the cwd shown is the pane's latest OSC 133 A cwd.
+- **Statusline restructure.** Left: mode chip (`NORMAL` / `INSERT`). Middle: git status compact (`⎇ main +1 ~2`) followed by cwd. Right: assistant shortcut hint (`+ ⌘K Ask Shax`) and `shax •` brand tag. `utf-8 · ln 1, col 1` from the design is viewer-only — omit from the pane's statusline where it has no honest source, or move it into the viewer surface where it does.
+- **Prompt-strip placeholder copy.** Change to `type a command, or ? to ask Shax`. Add a keystroke handler that intercepts `?` as the *first character on an empty prompt* and instead opens the assistant (whatever surface M7.7 gives us). If the prompt already has content or the caret isn't at position 0, `?` is a normal character.
+- **"Ask Shax why this failed" inline button.** On completed blocks with `exit_code != 0 && !aborted`, render an inline `+ Ask Shax why this failed  ⌘↩` button under the block content. `⌘↩` triggers when the block is selected. Activation emits the explain-on-error flow already sketched in `09` — the button is the affordance, not the flow.
+
+**Exit:**
+
+- Every affordance in `terminal-window.png` that isn't the illustrative btop panel is visible in the resting app on both themes.
+- `?`-first-char handler does not hijack `?` when it isn't the first character.
+- The Ask-Shax button routes to the active assistant provider with a well-formed prompt containing the block's command + a bounded slice of its output; the current M6 explain-on-error path works from the button.
+- All existing tests stay green; keystroke routing, cwd / branch propagation, and block streaming unchanged.
+- Standard gates (`pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm prettier --check`, `cargo test --lib`, `cargo clippy -D warnings`, `cargo fmt --check`) clean.
+
+## M7.7 Assistant in its own pane
+
+**Goal:** the assistant lives as a docked right-side pane matching `design/terminal-window-assistant-docked.png`, replacing today's overlay. **Lead:** frontend, with safety review from ai.
+
+**Depends on:** M7.6 lands first — M7.7 uses M7.6's `?`-first-char handler as one of its open triggers and the statusline slots M7.6 restructures for the "approval pending" / "assistant active" indicators.
+
+Non-negotiables from `13` and CLAUDE.md: every side effect passes through the safety gate at `10`; every approved action emits a visible command into the pane's scrollback (honest-log contract); provider-appropriate privacy posture is surfaced (`● local — nothing leaves this machine` for Ollama, appropriate variant per Claude lane).
+
+Scope:
+
+- **Docked-pane model.** Assistant becomes a right-side pane instead of a modal overlay. Toggle open/close via ⌘K, `?` on empty prompt, or the header assistant-icon. Persist docked state (open / closed / width) across launches. Resizable by dragging the split boundary — reuse the M2 pane-split infrastructure.
+- **Header.** `+ Shax` label with provider badge (`claude` / `ollama`), `+ New` (starts a fresh conversation, replacing the current one — no tabs), close ✕.
+- **Message rendering.**
+  - Assistant text as plain prose with minimal chrome (existing `ChatMarkdown` treatment).
+  - **Suggested read-only actions** as bordered cards: `SUGGESTED — READ ONLY` header with `✓ no side effects` chip, inline command in monospace, `Run` button. Clicking Run emits the command into the active pane's prompt as visible input.
+  - **User replies** as accent-outlined chip-bubbles on the right — the shortcut phrasings the assistant offered as follow-ups.
+  - **APPROVAL REQUIRED** amber-outlined cards: warning header (`⚠ writes N files · staged`), monospace command list, affected-file preview (`📎 path + stage`), Approve / Decline buttons. The actual approval goes through the safety gate at `10` — the card is the visual, not the gate.
+- **Input footer.**
+  - Multiline input with placeholder `Ask Shax, or describe a command…`.
+  - Bottom row: `⏎ send` hint, `⌘G goal mode` toggle button, right-aligned privacy-reassurance strip (provider-appropriate).
+- **Statusline integration.** When the pane is open, right side gains `⚠ N approvals pending` (only when any pending) and `+ assistant active`.
+- **Prompt-strip integration.** When the pane is open, the main pane's prompt-strip placeholder becomes `assistant is working beside you`.
+- **Mode indicator.** Focus in the assistant input → statusline shows `INSERT`. Focus back in the block list → `NORMAL`.
+
+**Non-goals:**
+
+- Multiple concurrent assistant panes. One at a time; toggling from another pane moves the dock.
+- Tabs within the assistant pane. `+ New` replaces, doesn't tab.
+- Cross-pane context. The assistant is scoped to the pane it's docked in.
+
+**Exit:**
+
+- Assistant dock / undock / resize / persist works across launches.
+- The chat panel renders each message shape from the design (assistant prose, suggested-read-only card, user-reply chip, approval-required card).
+- Every action a user takes from the pane (Run on suggestions, Approve on approval-required) goes through the safety gate; every approved side effect emits a visible command into the target pane's scrollback.
+- Provider-appropriate privacy reassurance is visible in the input footer for both Claude lanes and Ollama.
+- Existing tool-use behaviour continues to work.
+- Dark + light.
+- Standard gates clean.
+
 ## M8 Pane command palette
 
 **Goal:** a `Cmd+K` palette that exposes pane-scoped operations as guided UIs that emit real shell commands. **Lead:** frontend, with safety review from ai.
