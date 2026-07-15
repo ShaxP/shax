@@ -30,7 +30,7 @@
     <div data-label="Header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:32px; flex-wrap:wrap;">
       <div style="max-width:780px;">
         <div style="display:flex; align-items:center; gap:13px; margin-bottom:14px;">
-          <span style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:8px; background:oklch(0.72 0.13 250); color:#fff; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:17px; line-height:1;">x</span>
+          <span style="display:inline-flex; align-items:center; justify-content:center; gap:3px; width:30px; height:30px; border-radius:8px; background:oklch(0.72 0.13 250); padding:0 6px;"><span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:13px; color:#fff; line-height:1;">&#10095;</span><span style="display:flex; flex-direction:column; gap:2px; flex:1;"><span style="height:2.5px; border-radius:1.5px; background:#fff; opacity:.95;"></span><span style="height:2.5px; border-radius:1.5px; background:#fff; opacity:.55; width:68%;"></span></span></span>
           <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.01em; color:#f2f3f5;">Shax — the main shell</h1>
           <span style="font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#7d8088; border:1px solid #2c2e31; padding:3px 8px; border-radius:20px;">Surface 01 · hero</span>
         </div>
@@ -67,29 +67,370 @@
 
     <!-- ===== MARKS ===== -->
     <div data-label="Marks">
-      <div style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b; margin-bottom:13px;">Mark — typographic explorations</div>
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:6px;">
+        <div style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b;">App icon — terminal-native concepts</div>
+      </div>
+      <p style="margin:0 0 15px; font-size:12.5px; line-height:1.6; color:#71747b; max-width:760px;">Dropping the &ldquo;x&rdquo;. These lean on the honest vocabulary of a terminal — the shell prompt, the block cursor, and Shax&rsquo;s own idea of capturing output as stacked <span style="font-family:'JetBrains Mono',monospace; color:#9a9da4;">blocks</span>. All purely geometric / typographic. Rendered on a dark tile; each works on light too.</p>
       <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:14px;">
-        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
-          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:30px; letter-spacing:-0.02em; color:#e4e6ea;">sha<span style="color:oklch(0.72 0.13 250);">x</span></div>
-          <div style="font-size:11px; color:#6a6d74; text-align:center;">Mono wordmark · accent x</div>
+
+        <!-- 1 · Prompt chevron -->
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:24px 18px 15px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="width:60px; height:60px; border-radius:15px; background:linear-gradient(150deg,#1a1c22,#0e0f13); border:1px solid #2b2e37; display:flex; align-items:center; justify-content:center;">
+            <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:30px; color:oklch(0.72 0.13 250); line-height:1; margin-left:-2px;">&#10095;</span>
+          </div>
+          <div style="font-size:11px; color:#8b8f97; text-align:center; font-weight:600;">The prompt</div>
+          <div style="font-size:10.5px; color:#5f636b; text-align:center; line-height:1.4; margin-top:-11px;">the universal shell chevron</div>
         </div>
-        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
-          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:30px; letter-spacing:-0.02em;"><span style="color:#5a5e66;">sh</span><span style="color:#e4e6ea;">ax</span></div>
-          <div style="font-size:11px; color:#6a6d74; text-align:center;">Shell nod · sh dimmed</div>
+
+        <!-- 2 · Prompt + block cursor -->
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:24px 18px 15px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="width:60px; height:60px; border-radius:15px; background:linear-gradient(150deg,#1a1c22,#0e0f13); border:1px solid #2b2e37; display:flex; align-items:center; justify-content:center; gap:5px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:24px; color:#cfd2d8; line-height:1;">&#10095;</span>
+            <span style="display:inline-block; width:9px; height:22px; background:oklch(0.72 0.13 250); animation:shax-blink 1.1s step-start infinite;"></span>
+          </div>
+          <div style="font-size:11px; color:#8b8f97; text-align:center; font-weight:600;">Prompt + cursor</div>
+          <div style="font-size:10.5px; color:#5f636b; text-align:center; line-height:1.4; margin-top:-11px;">a live command line, waiting</div>
         </div>
-        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:22px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:16px;">
-          <div style="width:46px; height:46px; border-radius:11px; background:oklch(0.72 0.13 250); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; color:#fff;">x</div>
-          <div style="font-size:11px; color:#6a6d74; text-align:center;">Monogram tile · app icon</div>
+
+        <!-- 3 · Stacked blocks (the Shax metaphor) -->
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:24px 18px 15px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="width:60px; height:60px; border-radius:15px; background:oklch(0.72 0.13 250); display:flex; flex-direction:column; align-items:stretch; justify-content:center; gap:5px; padding:0 14px;">
+            <span style="height:6px; border-radius:2px; background:#fff; opacity:.95;"></span>
+            <span style="height:6px; border-radius:2px; background:#fff; opacity:.62; width:78%;"></span>
+            <span style="height:6px; border-radius:2px; background:#fff; opacity:.62; width:60%;"></span>
+          </div>
+          <div style="font-size:11px; color:#8b8f97; text-align:center; font-weight:600;">Stacked blocks</div>
+          <div style="font-size:10.5px; color:#5f636b; text-align:center; line-height:1.4; margin-top:-11px;">output as structured units</div>
         </div>
-        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
-          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:28px; letter-spacing:-0.01em; display:flex; align-items:center; gap:7px;"><span style="color:oklch(0.72 0.13 250);">&#10095;</span><span style="color:#e4e6ea;">shax</span></div>
-          <div style="font-size:11px; color:#6a6d74; text-align:center;">Prompt mark</div>
+
+        <!-- 4 · Chevron + block (mark of the product) -->
+        <div style="background:#0c0d10; border:1px solid oklch(0.72 0.13 250); border-radius:12px; padding:24px 18px 15px; display:flex; flex-direction:column; align-items:center; gap:18px; position:relative;">
+          <span style="position:absolute; top:10px; right:10px; font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:oklch(0.72 0.13 250); background:oklch(0.72 0.13 250 / 0.14); padding:2px 7px; border-radius:20px;">Chosen</span>
+          <div style="width:60px; height:60px; border-radius:15px; background:linear-gradient(150deg,#1a1c22,#0e0f13); border:1px solid #2b2e37; display:flex; align-items:center; justify-content:center; gap:6px; padding:0 12px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:22px; color:oklch(0.72 0.13 250); line-height:1;">&#10095;</span>
+            <span style="display:flex; flex-direction:column; gap:3.5px; flex:1;">
+              <span style="height:4px; border-radius:2px; background:#cfd2d8;"></span>
+              <span style="height:4px; border-radius:2px; background:#5a5e66; width:70%;"></span>
+            </span>
+          </div>
+          <div style="font-size:11px; color:#8b8f97; text-align:center; font-weight:600;">Prompt &amp; block</div>
+          <div style="font-size:10.5px; color:#5f636b; text-align:center; line-height:1.4; margin-top:-11px;">command → its captured output</div>
         </div>
-        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:26px 20px 16px; display:flex; flex-direction:column; align-items:center; gap:18px;">
-          <div style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:28px; letter-spacing:-0.01em; color:#e4e6ea; display:flex; align-items:center;">shax<span style="display:inline-block; width:13px; height:24px; margin-left:3px; background:oklch(0.72 0.13 250); animation:shax-blink 1.1s step-start infinite;"></span></div>
-          <div style="font-size:11px; color:#6a6d74; text-align:center;">Block-cursor lockup</div>
+
+        <!-- 5 · sh shell nod monogram -->
+        <div style="background:#0c0d10; border:1px solid #232529; border-radius:12px; padding:24px 18px 15px; display:flex; flex-direction:column; align-items:center; gap:18px;">
+          <div style="width:60px; height:60px; border-radius:15px; background:linear-gradient(150deg,#1a1c22,#0e0f13); border:1px solid #2b2e37; display:flex; align-items:baseline; justify-content:center; padding-bottom:2px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; color:#cfd2d8; line-height:1;">sh</span><span style="display:inline-block; width:7px; height:16px; background:oklch(0.72 0.13 250); margin-left:2px; align-self:center;"></span>
+          </div>
+          <div style="font-size:11px; color:#8b8f97; text-align:center; font-weight:600;">Shell nod</div>
+          <div style="font-size:10.5px; color:#5f636b; text-align:center; line-height:1.4; margin-top:-11px;">the quiet &ldquo;sh&rdquo; origin</div>
         </div>
       </div>
+
+      <!-- wordmark lockups -->
+      <div style="display:flex; flex-wrap:wrap; gap:26px; margin-top:20px; padding-top:18px; border-top:1px solid #1f2126;">
+        <div style="display:flex; align-items:center; gap:11px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; letter-spacing:-0.01em; color:#e4e6ea; display:flex; align-items:center; gap:8px;"><span style="color:oklch(0.72 0.13 250);">&#10095;</span>shax</span>
+          <span style="font-size:10.5px; color:#5f636b;">prompt lockup</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:11px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; letter-spacing:-0.01em; color:#e4e6ea; display:flex; align-items:center;">shax<span style="display:inline-block; width:12px; height:22px; margin-left:3px; background:oklch(0.72 0.13 250); animation:shax-blink 1.1s step-start infinite;"></span></span>
+          <span style="font-size:10.5px; color:#5f636b;">block-cursor lockup</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:11px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; letter-spacing:-0.02em;"><span style="color:#5a5e66;">sh</span><span style="color:#e4e6ea;">ax</span></span>
+          <span style="font-size:10.5px; color:#5f636b;">shell-nod wordmark</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PREFERENCES WINDOW ===== -->
+    <div data-label="Preferences">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:13px;">
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b;">Preferences · &#8984;, sheet</span>
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#7d8088; border:1px solid #2c2e31; padding:2px 8px; border-radius:20px;">Surface 08 · settings</span>
+      </div>
+
+      <div data-screen-label="Shax preferences" style="{{ rootStyle }}">
+        <!-- title bar -->
+        <div style="display:flex; align-items:center; gap:14px; height:46px; padding:0 14px; background:var(--titlebar); border-bottom:1px solid var(--border);">
+          <div style="display:flex; gap:8px; flex-shrink:0;">
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0635a;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0ab4f;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#56b770;"></span>
+          </div>
+          <span style="font-size:13px; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; font-weight:600;">Preferences</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:11px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif;">changes apply instantly</span>
+          <span title="close" style="display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:var(--radius-sm); color:var(--fg-faint); font-size:15px; cursor:pointer;">&times;</span>
+        </div>
+
+        <!-- body: sidebar + detail -->
+        <div style="display:flex; height:600px; background:var(--bg);">
+
+          <!-- SIDEBAR -->
+          <div style="width:210px; flex:0 0 210px; background:var(--pane2); border-right:1px solid var(--border); padding:16px 12px; display:flex; flex-direction:column; gap:3px; font-family:'Hanken Grotesk',sans-serif;">
+            <div style="display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--radius); background:var(--accent-soft); color:var(--fg); font-size:13px; font-weight:600;">
+              <span style="color:var(--accent); font-size:14px;">&#9681;</span> Appearance
+            </div>
+            <div style="display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--radius); color:var(--fg-dim); font-size:13px; font-weight:500; cursor:pointer;">
+              <span style="font-size:14px;">&#10022;</span> Assistant
+            </div>
+            <div style="display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--radius); color:var(--fg-dim); font-size:13px; font-weight:500; cursor:pointer;">
+              <span style="font-size:14px;">&#9636;</span> Formatters
+            </div>
+            <div style="display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--radius); color:var(--fg-dim); font-size:13px; font-weight:500; cursor:pointer;">
+              <span style="font-size:14px;">&#9000;</span> Keybindings
+            </div>
+            <span style="flex:1;"></span>
+            <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; font-size:11px; color:var(--fg-faint);">
+              <span style="width:5px; height:5px; border-radius:50%; background:var(--green);"></span> local-first · nothing syncs
+            </div>
+          </div>
+
+          <!-- DETAIL -->
+          <div style="flex:1; min-width:0; overflow:auto; padding:26px 30px 30px; font-family:'Hanken Grotesk',sans-serif;">
+            <div style="max-width:620px; display:flex; flex-direction:column; gap:30px;">
+
+              <!-- APPEARANCE -->
+              <section>
+                <h2 style="margin:0 0 4px; font-size:16px; font-weight:600; color:var(--fg); letter-spacing:-0.01em;">Appearance</h2>
+                <p style="margin:0 0 16px; font-size:12.5px; color:var(--fg-faint);">Theme applies instantly — there's no save.</p>
+                <div style="display:flex; gap:10px;">
+                  <div onClick="{{ themeDark.onClick }}" style="{{ themeDark.style }}">
+                    <span style="width:100%; height:34px; border-radius:6px; background:linear-gradient(135deg,#0c0d10,#15161c); border:1px solid #2b2e37;"></span>
+                    {{ themeDark.label }}
+                  </div>
+                  <div onClick="{{ themeLight.onClick }}" style="{{ themeLight.style }}">
+                    <span style="width:100%; height:34px; border-radius:6px; background:linear-gradient(135deg,#fbfbfc,#e3e5ea); border:1px solid #ccd0d8;"></span>
+                    {{ themeLight.label }}
+                  </div>
+                  <div onClick="{{ themeSystem.onClick }}" style="{{ themeSystem.style }}">
+                    <span style="width:100%; height:34px; border-radius:6px; background:linear-gradient(105deg,#0c0d10 0%,#15161c 48%,#e3e5ea 52%,#fbfbfc 100%); border:1px solid var(--border-strong);"></span>
+                    {{ themeSystem.label }}
+                  </div>
+                </div>
+                <p style="margin:12px 0 0; font-size:12.5px; color:var(--fg-dim); display:flex; align-items:center; gap:7px;">
+                  <span style="color:var(--accent); font-size:12px;">&#9432;</span> {{ themeExplain }}
+                </p>
+              </section>
+
+              <div style="height:1px; background:var(--border);"></div>
+
+              <!-- ASSISTANT · CLAUDE -->
+              <section>
+                <div style="display:flex; align-items:center; gap:9px; margin-bottom:4px;">
+                  <span style="font-size:14px; color:var(--fg-dim);">&#9729;</span>
+                  <h2 style="margin:0; font-size:16px; font-weight:600; color:var(--fg); letter-spacing:-0.01em;">Assistant · Claude</h2>
+                  <span style="font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--fg-faint); border:1px solid var(--border); padding:2px 8px; border-radius:20px;">cloud</span>
+                </div>
+                <p style="margin:0 0 16px; font-size:12.5px; color:var(--fg-faint);">The assistant is opt-in. With it off, Shax is a plain terminal.</p>
+
+                <div style="display:flex; flex-direction:column; gap:9px;">
+                  <!-- Off -->
+                  <div onClick="{{ pickOff }}" style="{{ laneOff }}">
+                    <span style="{{ dotOff }}"></span>
+                    <div style="flex:1;">
+                      <div style="font-size:13.5px; font-weight:600; color:var(--fg);">Off</div>
+                      <div style="font-size:12px; color:var(--fg-faint); margin-top:2px;">No assistant surface anywhere. The terminal works as usual.</div>
+                    </div>
+                  </div>
+
+                  <!-- API key -->
+                  <div style="{{ laneApi }}">
+                    <span onClick="{{ pickApi }}" style="{{ dotApi }}"></span>
+                    <div style="flex:1;">
+                      <div onClick="{{ pickApi }}" style="cursor:pointer;">
+                        <div style="font-size:13.5px; font-weight:600; color:var(--fg);">Use my Anthropic API key</div>
+                        <div style="font-size:12px; color:var(--fg-faint); margin-top:2px;">Pay-per-token via api.anthropic.com.</div>
+                      </div>
+                      <sc-if value="{{ showApiReveal }}" hint-placeholder-val="{{ true }}">
+                        <div style="margin-top:13px; display:flex; flex-direction:column; gap:10px;">
+                          <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg-dim);">
+                            <span style="{{ keyStatusDot }}"></span> {{ keyStatusText }}
+                          </div>
+                          <div style="display:flex; gap:8px; align-items:center;">
+                            <div style="flex:1; display:flex; align-items:center; gap:8px; background:var(--surface); border:1px solid var(--border-strong); border-radius:8px; padding:9px 12px; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--fg);">
+                              <span style="color:var(--fg-faint);">&#128273;</span>
+                              <span style="letter-spacing:2px; color:var(--fg-dim);">sk-ant-&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+                            </div>
+                            <button onClick="{{ saveKey }}" style="border:none; cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:12.5px; font-weight:600; color:#fff; background:var(--accent); padding:9px 16px; border-radius:8px;">Save</button>
+                            <sc-if value="{{ keySaved }}" hint-placeholder-val="{{ true }}">
+                              <button onClick="{{ removeKey }}" style="border:1px solid var(--border-strong); cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:12.5px; font-weight:600; color:var(--fg-dim); background:transparent; padding:9px 14px; border-radius:8px;">Remove</button>
+                            </sc-if>
+                          </div>
+                          <div style="font-size:11.5px; color:var(--fg-faint); display:flex; align-items:center; gap:6px;">
+                            <span style="color:var(--green);">&#128274;</span> Stored in your OS keychain — never written to disk in plain form.
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+
+                  <!-- Subscription -->
+                  <div style="{{ laneSub }}">
+                    <span onClick="{{ pickSub }}" style="{{ dotSub }}"></span>
+                    <div style="flex:1;">
+                      <div onClick="{{ pickSub }}" style="cursor:inherit;">
+                        <div style="display:flex; align-items:center; gap:9px;">
+                          <span style="font-size:13.5px; font-weight:600; color:var(--fg);">Use my Claude subscription</span>
+                          <span style="font-size:10.5px; color:var(--fg-faint); font-family:'JetBrains Mono',monospace;">Claude Code</span>
+                        </div>
+                        <div style="font-size:12px; color:var(--fg-faint); margin-top:2px;">Shax spawns your local <span style="font-family:'JetBrains Mono',monospace;">claude</span> CLI for each request.</div>
+                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg-dim); margin-top:9px;">
+                          <span style="{{ subDot }}"></span> {{ subText }}
+                        </div>
+                      </div>
+                      <sc-if value="{{ showSubReveal }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:11px; font-size:11.5px; color:var(--fg-faint); display:flex; align-items:center; gap:6px;">
+                          <span style="color:var(--green);">&#128274;</span> Shax never sees the subscription credential; auth is handled by Claude Code.
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div style="height:1px; background:var(--border);"></div>
+
+              <!-- ASSISTANT · OLLAMA -->
+              <section>
+                <div style="display:flex; align-items:center; gap:9px; margin-bottom:4px;">
+                  <span style="font-size:14px; color:var(--fg-dim);">&#9737;</span>
+                  <h2 style="margin:0; font-size:16px; font-weight:600; color:var(--fg); letter-spacing:-0.01em;">Assistant · Ollama</h2>
+                  <span style="font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--green); border:1px solid var(--border); padding:2px 8px; border-radius:20px;">local</span>
+                </div>
+                <p style="margin:0 0 16px; font-size:12.5px; color:var(--fg-faint);">Runs entirely on your machine. Selecting Ollama turns off Claude.</p>
+
+                <div style="{{ laneOll }}">
+                  <span onClick="{{ pickOll }}" style="{{ dotOll }}"></span>
+                  <div style="flex:1;">
+                    <div onClick="{{ pickOll }}" style="cursor:inherit;">
+                      <div style="font-size:13.5px; font-weight:600; color:var(--fg);">Use my local Ollama daemon</div>
+                      <div style="font-size:12px; color:var(--fg-faint); margin-top:2px;">Connects to <span style="font-family:'JetBrains Mono',monospace;">localhost:11434</span>.</div>
+                      <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg-dim); margin-top:9px;">
+                        <span style="{{ ollDot }}"></span> {{ ollText }}
+                      </div>
+                    </div>
+                    <sc-if value="{{ showOllReveal }}" hint-placeholder-val="{{ false }}">
+                      <div style="margin-top:13px; display:flex; flex-direction:column; gap:12px;">
+                        <div>
+                          <div style="font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-faint); margin-bottom:6px;">Model</div>
+                          <div style="display:inline-flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border-strong); border-radius:8px; padding:9px 13px; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--fg); cursor:pointer;">
+                            {{ ollamaModel }} <span style="color:var(--fg-faint); font-size:10px;">&#9662;</span>
+                          </div>
+                        </div>
+                        <div>
+                          <div style="font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-faint); margin-bottom:8px;">Capabilities</div>
+                          <div style="display:flex; gap:8px;">
+                            <span style="{{ capTools.style }}"><span style="{{ capTools.dotStyle }}"></span> {{ capTools.label }} <span style="color:var(--fg-faint);">{{ capTools.text }}</span></span>
+                            <span style="{{ capVision.style }}"><span style="{{ capVision.dotStyle }}"></span> {{ capVision.label }} <span style="color:var(--fg-faint);">{{ capVision.text }}</span></span>
+                          </div>
+                        </div>
+                        <p style="margin:0; font-size:11.5px; font-style:italic; line-height:1.55; color:var(--fg-faint);">Capabilities reflect what the model declares, not tested behaviour. Smaller models (Llama 3.2 1B/3B) often claim tool support but fabricate answers — Qwen 2.5, Llama 3.1, or Mistral Nemo are more reliable.</p>
+                      </div>
+                    </sc-if>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- statusline -->
+        <div style="display:flex; align-items:center; height:30px; background:var(--titlebar); border-top:1px solid var(--border); font-size:11px;">
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim);"><span style="width:6px; height:6px; border-radius:50%; background:var(--green);"></span> all changes saved</span>
+          <span style="flex:1;"></span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-faint); border-left:1px solid var(--border);">Esc or &#8984;, to close</span>
+        </div>
+      </div>
+
+      <p style="margin:14px 2px 0; font-size:12px; line-height:1.6; color:#6e7178; max-width:900px;"><span style="color:#9a9da4; font-weight:600;">Preferences:</span> promoted from a cramped modal into a calm sidebar + detail sheet. Everything applies instantly (no Save button); local probes for the Claude CLI and Ollama daemon show their <span style="font-family:'JetBrains Mono',monospace;">checking…</span> pending state on open, then resolve. Try the theme picker (drives the live theme), and select the API-key / subscription / Ollama lanes to reveal each one's controls. Credential handling is stated in copy, not buried.</p>
+    </div>
+
+    <!-- ===== FIRST-RUN / EMPTY WINDOW ===== -->
+    <div data-label="First run">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:13px;">
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b;">The window · first run · empty state</span>
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#7d8088; border:1px solid #2c2e31; padding:2px 8px; border-radius:20px;">Surface 09 · onboarding</span>
+      </div>
+
+      <div data-screen-label="Shax first run" style="{{ rootStyle }}">
+
+        <!-- ----- TITLE / TAB BAR ----- -->
+        <div style="display:flex; align-items:center; gap:14px; height:46px; padding:0 14px; background:var(--titlebar); border-bottom:1px solid var(--border);">
+          <div style="display:flex; gap:8px; flex-shrink:0;">
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0635a;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0ab4f;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#56b770;"></span>
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:2px; height:100%; flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:9px; height:34px; padding:0 14px; background:var(--pane); border:1px solid var(--border); border-bottom:1px solid var(--pane); border-radius:8px 8px 0 0; margin-bottom:-1px; max-width:240px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:var(--accent); flex-shrink:0;"></span>
+              <span style="font-size:12.5px; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; font-weight:600; white-space:nowrap;">shax</span>
+              <span style="font-size:11.5px; color:var(--fg-faint); white-space:nowrap;">~</span>
+              <span style="margin-left:4px; color:var(--fg-faint); font-size:13px; cursor:pointer;">&times;</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:9px; height:30px; padding:0 12px; opacity:.62;"><span style="font-size:13px; color:var(--fg-faint);">+</span></div>
+          </div>
+          <div style="display:flex; align-items:center; gap:3px; flex-shrink:0; color:var(--fg-faint);">
+            <span title="split vertical" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="split horizontal" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="search" style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 9px; border-radius:var(--radius-sm); cursor:pointer; font-size:12px; background:var(--surface); color:var(--fg-dim);">&#9906; <span style="font-family:'Hanken Grotesk',sans-serif; font-size:11px;">&#8984;K</span></span>
+            <span title="assistant" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:13px; color:var(--accent);">&#10022;</span>
+            <span title="settings" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:15px;">&#9881;</span>
+          </div>
+        </div>
+
+        <!-- ----- EMPTY BODY / ONBOARDING ----- -->
+        <div style="height:582px; background:var(--bg); border-top:2px solid var(--accent); display:flex; flex-direction:column;">
+          <div style="flex:1; display:flex; align-items:center; justify-content:center; padding:32px;">
+            <div style="display:flex; flex-direction:column; align-items:center; text-align:center; max-width:460px;">
+              <div style="width:52px; height:52px; border-radius:13px; background:oklch(0.72 0.13 250); display:flex; align-items:center; justify-content:center; gap:6px; padding:0 12px; margin-bottom:22px;"><span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:20px; color:#fff; line-height:1;">&#10095;</span><span style="display:flex; flex-direction:column; gap:4px; flex:1;"><span style="height:4px; border-radius:2px; background:#fff; opacity:.95;"></span><span style="height:4px; border-radius:2px; background:#fff; opacity:.55; width:68%;"></span></span></div>
+              <div style="display:inline-flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:14px; color:var(--fg); margin-bottom:12px;">
+                <span style="width:8px; height:8px; border-radius:50%; background:var(--green);"></span> Ready.
+              </div>
+              <p style="margin:0 0 30px; font-size:14.5px; line-height:1.62; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif;">Run a command in the terminal — it'll show up here as a <span style="color:var(--fg); font-weight:600;">block</span> you can select, format, and inspect.</p>
+              <div style="display:flex; flex-direction:column; gap:2px; width:100%; text-align:left;">
+                <div style="display:flex; align-items:center; gap:13px; padding:11px 14px; border-radius:var(--radius); border:1px solid var(--border);">
+                  <kbd style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--fg); background:var(--surface); border:1px solid var(--border-strong); border-radius:6px; padding:3px 9px; min-width:46px; text-align:center;">&#8984;F</kbd>
+                  <span style="font-size:13.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif;">search everything you've run</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:13px; padding:11px 14px; border-radius:var(--radius); border:1px solid var(--border);">
+                  <kbd style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--fg); background:var(--surface); border:1px solid var(--border-strong); border-radius:6px; padding:3px 9px; min-width:46px; text-align:center;">&#8984;K</kbd>
+                  <span style="font-size:13.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif;">ask the assistant</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:13px; padding:11px 14px; border-radius:var(--radius); border:1px solid var(--border);">
+                  <kbd style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--fg); background:var(--surface); border:1px solid var(--border-strong); border-radius:6px; padding:3px 9px; min-width:46px; text-align:center;">&#8984;,</kbd>
+                  <span style="font-size:13.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif;">theme &amp; preferences</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ACTIVE PROMPT (empty, waiting) -->
+          <div style="display:flex; align-items:center; gap:11px; padding:12px 18px; border-top:1px solid var(--border); background:var(--pane); font-family:'JetBrains Mono',monospace;">
+            <span style="display:inline-flex; align-items:center; gap:7px; font-size:11.5px;">
+              <span style="color:var(--fg-dim);">~</span>
+            </span>
+            <span style="color:var(--accent); font-size:14px; font-weight:700;">&#10095;</span>
+            <span style="font-size:13px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif; flex:1;">type a command, or <span style="font-family:'JetBrains Mono',monospace; color:var(--fg-dim);">?</span> to ask Shax</span>
+            <span style="display:inline-block; width:8px; height:16px; background:var(--accent); opacity:.85;"></span>
+          </div>
+        </div>
+
+        <!-- ----- STATUSLINE ----- -->
+        <div style="display:flex; align-items:center; height:30px; background:var(--titlebar); border-top:1px solid var(--border); font-size:11px;">
+          <span style="display:inline-flex; align-items:center; height:100%; padding:0 13px; background:var(--accent); color:#fff; font-weight:700; letter-spacing:0.08em;">NORMAL</span>
+          <span style="color:var(--fg-faint); padding:0 13px;">~ · new session</span>
+          <span style="flex:1;"></span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);"><span style="color:var(--accent);">&#10022;</span> &#8984;K Ask Shax</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);">shax <span style="width:6px; height:6px; border-radius:50%; background:var(--accent);"></span></span>
+        </div>
+      </div>
+
+      <p style="margin:14px 2px 0; font-size:12px; line-height:1.6; color:#6e7178; max-width:900px;"><span style="color:#9a9da4; font-weight:600;">First run:</span> a calm empty state that teaches the keyboard model before there's any output to distract from it. The moment a command runs, this fades to the block stack below.</p>
     </div>
 
     <!-- ===== THE SHELL WINDOW ===== -->
@@ -346,6 +687,220 @@ over the real bytes.
       <p style="margin:14px 2px 0; font-size:12px; line-height:1.6; color:#6e7178; max-width:900px;"><span style="color:#9a9da4; font-weight:600;">Next:</span> from this system I'll build the block-anatomy detail sheet (3 states up close), then promote git status / git diff / ls into live widget blocks, then the search overlay and the approval gate. Tell me which direction wins — or ask for a side-by-side of all four theme combos.</p>
     </div>
 
+    <!-- ===== ASSISTANT SHELL WINDOW ===== -->
+    <div data-label="Assistant shell">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:13px;">
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; color:#71747b;">The window · assistant docked right</span>
+        <span style="font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#7d8088; border:1px solid #2c2e31; padding:2px 8px; border-radius:20px;">Surface 06 · assistant</span>
+      </div>
+
+      <div data-screen-label="Shax assistant shell" style="{{ rootStyle }}">
+
+        <!-- ----- TITLE / TAB BAR ----- -->
+        <div style="display:flex; align-items:center; gap:14px; height:46px; padding:0 14px; background:var(--titlebar); border-bottom:1px solid var(--border);">
+          <div style="display:flex; gap:8px; flex-shrink:0;">
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0635a;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#e0ab4f;"></span>
+            <span style="width:11px; height:11px; border-radius:50%; background:#56b770;"></span>
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:2px; height:100%; flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:9px; height:34px; padding:0 14px; background:var(--pane); border:1px solid var(--border); border-bottom:1px solid var(--pane); border-radius:8px 8px 0 0; margin-bottom:-1px; max-width:240px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:var(--accent); flex-shrink:0;"></span>
+              <span style="font-size:12.5px; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; font-weight:600; white-space:nowrap;">shax</span>
+              <span style="font-size:11.5px; color:var(--fg-faint); white-space:nowrap;">~/dev/shax</span>
+              <span style="margin-left:4px; color:var(--fg-faint); font-size:13px; cursor:pointer;">&times;</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:9px; height:30px; padding:0 14px; opacity:.62;">
+              <span style="font-size:12.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif; font-weight:500;">api</span>
+              <span style="font-size:11.5px; color:var(--fg-faint);">~/dev/api</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:9px; height:30px; padding:0 12px; opacity:.62;"><span style="font-size:13px; color:var(--fg-faint);">+</span></div>
+          </div>
+          <div style="display:flex; align-items:center; gap:3px; flex-shrink:0; color:var(--fg-faint);">
+            <span title="split vertical" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="split horizontal" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">&#9707;</span>
+            <span title="search" style="display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 9px; border-radius:var(--radius-sm); cursor:pointer; font-size:12px; background:var(--surface); color:var(--fg-dim);">&#9906; <span style="font-family:'Hanken Grotesk',sans-serif; font-size:11px;">&#8984;K</span></span>
+            <span title="assistant" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:13px; color:var(--accent); background:var(--accent-soft);">&#10022;</span>
+            <span title="settings" style="display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--radius-sm); cursor:pointer; font-size:15px;">&#9881;</span>
+          </div>
+        </div>
+
+        <!-- ----- BODY: assistant pane (left) + terminal (right) ----- -->
+        <div style="display:flex; height:582px; background:var(--bg);">
+
+          <!-- LEFT: ASSISTANT PANE (focused) -->
+          <div style="width:384px; flex:0 0 384px; order:2; display:flex; flex-direction:column; background:var(--pane2); border-left:1px solid var(--border); border-top:2px solid var(--accent);">
+            <!-- pane header -->
+            <div style="display:flex; align-items:center; gap:9px; padding:10px 14px; border-bottom:1px solid var(--border);">
+              <span style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; background:var(--accent-soft); color:var(--accent); font-size:12px;">&#10022;</span>
+              <span style="font-size:13px; font-weight:600; color:var(--fg); font-family:'Hanken Grotesk',sans-serif; white-space:nowrap;">Shax</span>
+              <span style="flex:1;"></span>
+              <span style="font-size:10.5px; color:var(--fg-dim); font-family:'Hanken Grotesk',sans-serif; padding:2px 8px; border:1px solid var(--border); border-radius:20px; white-space:nowrap;">claude</span>
+              <button title="New chat" style="display:inline-flex; align-items:center; gap:5px; border:1px solid var(--border-strong); background:transparent; cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:11px; font-weight:600; color:var(--fg-dim); padding:3px 9px; border-radius:20px; white-space:nowrap;"><span style="font-size:12px; line-height:1;">&#65291;</span> New</button>
+              <span style="color:var(--fg-faint); font-size:13px; cursor:pointer;">&times;</span>
+            </div>
+
+            <!-- thread -->
+            <div style="flex:1; overflow:auto; padding:16px 14px; display:flex; flex-direction:column; gap:15px; font-family:'Hanken Grotesk',sans-serif;">
+
+              <!-- invoke context chip -->
+              <div style="display:flex; align-items:center; gap:8px; align-self:center;">
+                <span style="height:1px; width:22px; background:var(--border);"></span>
+                <span style="font-size:10.5px; color:var(--fg-faint);">invoked from the failed block · <span style="font-family:'JetBrains Mono',monospace;">&#8984;&#8629;</span></span>
+                <span style="height:1px; width:22px; background:var(--border);"></span>
+              </div>
+
+              <!-- user turn -->
+              <div style="align-self:flex-end; max-width:86%; background:var(--accent-soft); border:1px solid var(--accent); border-radius:12px 12px 4px 12px; padding:9px 12px;">
+                <div style="font-size:13px; line-height:1.55; color:var(--fg);">Why did the release build fail, and how do I fix it?</div>
+              </div>
+
+              <!-- assistant turn -->
+              <div style="align-self:flex-start; max-width:94%; display:flex; flex-direction:column; gap:10px;">
+                <div style="display:flex; align-items:center; gap:7px;">
+                  <span style="color:var(--accent); font-size:11px;">&#10022;</span>
+                  <span style="font-size:11px; color:var(--fg-faint);">Shax</span>
+                </div>
+                <div style="font-size:13px; line-height:1.62; color:var(--fg-dim);">Block <span style="font-family:'JetBrains Mono',monospace; color:var(--fg);">#2</span> failed with <span style="font-family:'JetBrains Mono',monospace; color:var(--red);">E0432</span> — <span style="color:var(--fg);">src/block.rs:14</span> imports <span style="font-family:'JetBrains Mono',monospace; color:var(--fg);">crate::render::Diff</span>, but <span style="font-family:'JetBrains Mono',monospace;">render</span> exports <span style="font-family:'JetBrains Mono',monospace; color:var(--fg);">DiffView</span>, not <span style="font-family:'JetBrains Mono',monospace;">Diff</span>. Looks like a rename that missed this call site.</div>
+
+                <!-- read-only inspect suggestion (safe, no gate) -->
+                <div style="border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); overflow:hidden;">
+                  <div style="display:flex; align-items:center; gap:8px; padding:7px 11px; border-bottom:1px solid var(--border);">
+                    <span style="font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--fg-faint); font-weight:600;">Suggested — read only</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:10.5px; color:var(--green); display:inline-flex; align-items:center; gap:4px;">&#10003; no side effects</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:9px; padding:9px 11px;">
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--fg); flex:1;"><span style="color:var(--accent);">&#10095;</span> grep -n &quot;Diff&quot; src/render/mod.rs</span>
+                    <button style="border:none; cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-soft); padding:4px 11px; border-radius:6px;">Run</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- user turn 2 -->
+              <div style="align-self:flex-end; max-width:86%; background:var(--accent-soft); border:1px solid var(--accent); border-radius:12px 12px 4px 12px; padding:9px 12px;">
+                <div style="font-size:13px; line-height:1.55; color:var(--fg);">fix it and stage the change</div>
+              </div>
+
+              <!-- assistant turn 2 — approval gate -->
+              <div style="align-self:flex-start; max-width:94%; display:flex; flex-direction:column; gap:10px;">
+                <div style="display:flex; align-items:center; gap:7px;">
+                  <span style="color:var(--accent); font-size:11px;">&#10022;</span>
+                  <span style="font-size:11px; color:var(--fg-faint);">Shax</span>
+                </div>
+                <div style="font-size:13px; line-height:1.62; color:var(--fg-dim);">I'll rename the import and stage it. This writes to disk — approve before it runs.</div>
+
+                <!-- APPROVAL / PERMISSION GATE -->
+                <div style="border:1px solid var(--amber); border-radius:var(--radius); background:var(--surface); overflow:hidden;">
+                  <div style="display:flex; align-items:center; gap:8px; padding:8px 11px; border-bottom:1px solid var(--border); background:var(--pane);">
+                    <span style="color:var(--amber); font-size:12px;">&#9888;</span>
+                    <span style="font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--fg); font-weight:700;">Approval required</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:10.5px; color:var(--fg-faint);">writes 1 file · staged</span>
+                  </div>
+                  <div style="padding:11px;">
+                    <div style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.7; color:var(--fg); background:var(--pane); border:1px solid var(--border); border-radius:6px; padding:9px 11px;">
+                      <div><span style="color:var(--accent);">&#10095;</span> sed -i '' 's/render::Diff/render::DiffView/' src/block.rs</div>
+                      <div><span style="color:var(--accent);">&#10095;</span> git add src/block.rs</div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:9px; margin-top:8px; font-size:11px; color:var(--fg-faint);">
+                      <span style="display:inline-flex; align-items:center; gap:5px;"><span style="color:var(--amber);">&#9998;</span> src/block.rs</span>
+                      <span style="display:inline-flex; align-items:center; gap:5px;"><span style="color:var(--green);">+</span> stage</span>
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:12px;">
+                      <button style="flex:1; border:none; cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:12.5px; font-weight:600; color:#fff; background:var(--accent); padding:8px; border-radius:7px;">Approve &amp; run <span style="opacity:.7; font-family:'JetBrains Mono',monospace; font-size:11px;">&#8629;</span></button>
+                      <button style="border:1px solid var(--border-strong); cursor:pointer; font-family:'Hanken Grotesk',sans-serif; font-size:12.5px; font-weight:600; color:var(--fg-dim); background:transparent; padding:8px 16px; border-radius:7px;">Decline</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- assistant input -->
+            <div style="border-top:1px solid var(--border); padding:11px 12px;">
+              <div style="display:flex; align-items:flex-end; gap:9px; background:var(--surface); border:1px solid var(--border-strong); border-radius:10px; padding:9px 11px;">
+                <span style="color:var(--accent); font-size:13px; padding-bottom:1px;">&#10022;</span>
+                <span style="flex:1; font-size:13px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif;">Ask Shax, or describe a command…</span>
+                <span style="display:inline-block; width:7px; height:15px; background:var(--accent); opacity:.85;"></span>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px; margin-top:8px; padding:0 2px; font-size:10.5px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif;">
+                <span><span style="font-family:'JetBrains Mono',monospace; color:var(--fg-dim);">&#8629;</span> send</span>
+                <span><span style="font-family:'JetBrains Mono',monospace; color:var(--fg-dim);">&#8984;G</span> goal mode</span>
+                <span style="flex:1;"></span>
+                <span style="display:inline-flex; align-items:center; gap:5px;"><span style="width:5px; height:5px; border-radius:50%; background:var(--green);"></span> local · nothing leaves this machine</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT: TERMINAL PANE (unfocused) -->
+          <div style="flex:1; min-width:0; order:1; display:flex; flex-direction:column; background:var(--pane); opacity:.92;">
+            <div style="flex:1; overflow:auto; padding:16px 18px; display:flex; flex-direction:column; gap:15px; font-family:'JetBrains Mono',monospace;">
+
+              <!-- success block -->
+              <div style="display:flex; gap:13px;">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--green); margin:3px 0;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span style="color:var(--green); font-size:12px;">&#10095;</span>
+                    <span style="font-size:13px; color:var(--fg); font-weight:500; white-space:nowrap;">grep -n "Diff" src/render/mod.rs</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">6ms</span>
+                    <span style="font-size:11px; color:var(--green);">&#10003; 0</span>
+                  </div>
+                  <div style="margin-top:7px; font-size:12.5px; line-height:1.7; color:var(--fg-dim);">
+                    <div style="white-space:pre;"><span style="color:var(--fg-faint);">12:</span> pub struct <span style="color:var(--fg);">DiffView</span> {</div>
+                    <div style="white-space:pre;"><span style="color:var(--fg-faint);">48:</span> impl <span style="color:var(--fg);">DiffView</span> {</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- failed block (referenced by assistant) -->
+              <div style="display:flex; gap:13px; border-radius:var(--radius); box-shadow:0 0 0 1px var(--accent-soft); background:var(--accent-soft); padding:6px 8px; margin:-6px -8px;">
+                <div style="width:3px; flex:0 0 3px; border-radius:3px; background:var(--red); margin:3px 0;"></div>
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:9px; min-height:24px;">
+                    <span style="font-size:10px; color:var(--fg-faint);">#2</span>
+                    <span style="color:var(--red); font-size:12px;">&#10095;</span>
+                    <span style="font-size:13px; color:var(--fg); font-weight:500; white-space:nowrap;">cargo build --release</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:11px; color:var(--fg-faint);">1.84s</span>
+                    <span style="font-size:11px; color:var(--red); font-weight:600;">&#10005; exit 101</span>
+                  </div>
+                  <div style="margin-top:7px; font-size:12.5px; line-height:1.62; color:var(--fg-dim);">
+                    <div style="white-space:pre-wrap;"><span style="color:var(--red); font-weight:600;">error[E0432]</span>: unresolved import `crate::render::Diff`</div>
+                    <div style="white-space:pre;"><span style="color:var(--fg-faint);">  --&gt;</span> src/block.rs:14:5</div>
+                    <div style="white-space:pre;">   <span style="color:var(--fg-faint);">|</span>         <span style="color:var(--red);">^^^^^^^^^^^^^^^^^^</span> no `Diff` in `render`</div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+            <!-- prompt -->
+            <div style="display:flex; align-items:center; gap:11px; padding:12px 18px; border-top:1px solid var(--border); background:var(--pane);">
+              <span style="font-size:11.5px; color:var(--fg-dim);">~/dev/shax</span>
+              <span style="display:inline-flex; align-items:center; gap:4px; color:var(--accent); font-size:11.5px;"><span style="font-size:11px;">&#9095;</span>main</span>
+              <span style="color:var(--accent); font-size:14px; font-weight:700;">&#10095;</span>
+              <span style="font-size:13px; color:var(--fg-faint); font-family:'Hanken Grotesk',sans-serif; flex:1;">assistant is working beside you</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ----- STATUSLINE ----- -->
+        <div style="display:flex; align-items:center; height:30px; background:var(--titlebar); border-top:1px solid var(--border); font-size:11px;">
+          <span style="display:inline-flex; align-items:center; height:100%; padding:0 13px; background:var(--accent); color:#fff; font-weight:700; letter-spacing:0.08em;">INSERT</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim);"><span style="color:var(--accent);">&#9095;</span> main <span style="color:var(--green);">+1</span> <span style="color:var(--amber);">~2</span></span>
+          <span style="color:var(--fg-faint); padding:0 6px;">~/dev/shax</span>
+          <span style="flex:1;"></span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);"><span style="color:var(--amber);">&#9888;</span> 1 approval pending</span>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:0 13px; color:var(--fg-dim); border-left:1px solid var(--border);"><span style="color:var(--accent);">&#10022;</span> assistant active</span>
+        </div>
+
+      </div>
+
+      <p style="margin:14px 2px 0; font-size:12px; line-height:1.6; color:#6e7178; max-width:900px;"><span style="color:#9a9da4; font-weight:600;">The AI, sprinkled in:</span> the assistant lives in its own docked pane (dimmed terminal keeps focus on your work). It explains the failed block, proposes a safe read-only command inline, and gates every side-effectful action behind an explicit approval showing the exact commands and what they touch — nothing runs, and nothing leaves the machine, without you.</p>
+    </div>
+
   </div>
 </div>
 </x-dc>
@@ -359,7 +914,21 @@ class Component extends DCLogic {
     mdView: 'rendered',
     statusView: 'formatted',
     accentHue: 250,
+    // ----- preferences -----
+    prefTheme: 'system',
+    assistant: 'claude-api',   // 'off' | 'claude-api' | 'claude-sub' | 'ollama'
+    keySaved: true,
+    ollamaModel: 'qwen2.5:7b',
+    subStatus: 'checking',     // 'checking' | 'detected' | 'missing'
+    ollamaStatus: 'checking',  // 'checking' | 'ready' | 'no-models' | 'unreachable'
   };
+
+  componentDidMount() {
+    // simulate the local-probe state machines resolving after first open
+    this._t1 = setTimeout(() => this.setState({ subStatus: 'detected' }), 1600);
+    this._t2 = setTimeout(() => this.setState({ ollamaStatus: 'ready' }), 2200);
+  }
+  componentWillUnmount() { clearTimeout(this._t1); clearTimeout(this._t2); }
 
   pal(theme, precise) {
     if (theme === 'dark') {
@@ -428,6 +997,65 @@ class Component extends DCLogic {
     const fmtOff = { ...pillBase, background:'transparent', color:'var(--fg-faint)' };
     const paneEdge = (on) => ({ borderTop: on ? '2px solid var(--accent)' : '2px solid transparent', opacity: on ? 1 : 0.46, display:'flex', flexDirection:'column', cursor:'default' });
 
+    // ---------- preferences ----------
+    const { prefTheme, assistant, keySaved, ollamaModel, subStatus, ollamaStatus } = this.state;
+
+    const themeExplain = {
+      dark: 'Dark palette, always.',
+      light: 'Light palette, always.',
+      system: 'Follows the OS setting. Updates instantly when you flip macOS Appearance.',
+    }[prefTheme];
+
+    const themeChip = (val, label) => ({
+      onClick: () => this.setState({ prefTheme: val, theme: val === 'system' ? isDark ? 'dark' : 'dark' : val }),
+      label,
+      style: {
+        flex: '1', display:'flex', flexDirection:'column', alignItems:'center', gap:'9px',
+        padding:'14px 10px 12px', cursor:'pointer', fontFamily:"'Hanken Grotesk',sans-serif",
+        borderRadius:'var(--radius)',
+        border: prefTheme === val ? '1px solid var(--accent)' : '1px solid var(--border)',
+        background: prefTheme === val ? 'var(--accent-soft)' : 'transparent',
+        color: prefTheme === val ? 'var(--fg)' : 'var(--fg-dim)',
+        fontSize:'12.5px', fontWeight: prefTheme === val ? 600 : 500,
+      },
+    });
+
+    // lane selector: radio dot style + selectable row
+    const laneRow = (val, disabled) => ({
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      display:'flex', gap:'12px', padding:'13px 15px', borderRadius:'var(--radius)',
+      border: assistant === val ? '1px solid var(--accent)' : '1px solid var(--border)',
+      background: assistant === val ? 'var(--accent-soft)' : 'transparent',
+      opacity: disabled ? 0.5 : 1,
+      transition:'background .12s ease, border-color .12s ease',
+    });
+    const radioDot = (val) => ({
+      flex:'0 0 16px', width:'16px', height:'16px', borderRadius:'50%', marginTop:'1px',
+      border: assistant === val ? '5px solid var(--accent)' : '1.5px solid var(--border-strong)',
+      background: assistant === val ? 'var(--pane)' : 'transparent',
+      boxSizing:'border-box',
+    });
+    const pickLane = (val, disabled) => disabled ? undefined : () => this.setState({ assistant: val });
+
+    const dotColor = { checking:'var(--amber)', detected:'var(--green)', ready:'var(--green)', missing:'var(--red)', 'no-models':'var(--amber)', unreachable:'var(--red)' };
+    const statusDot = (s) => ({ width:'6px', height:'6px', borderRadius:'50%', flex:'0 0 6px', background: dotColor[s] || 'var(--fg-faint)', animation: s === 'checking' ? 'shax-edge 1.1s ease-in-out infinite' : 'none' });
+
+    const subText = { checking:'checking for the claude binary…', detected:'detected · Claude Code v1.0.42', missing:'not installed' }[subStatus];
+    const subReady = subStatus === 'detected';
+    const ollText = { checking:'checking localhost:11434…', ready:'reachable · 4 models installed', 'no-models':'reachable · no models installed', unreachable:'not reachable' }[ollamaStatus];
+    const ollReady = ollamaStatus === 'ready';
+
+    const capChip = (label, state) => ({
+      label,
+      dotStyle: statusDot(state === 'yes' ? 'ready' : state === 'no' ? 'missing' : 'checking'),
+      text: state === 'yes' ? 'supported' : state === 'no' ? 'not supported' : 'checking…',
+      style: {
+        display:'inline-flex', alignItems:'center', gap:'7px', padding:'5px 11px',
+        borderRadius:'20px', border:'1px solid var(--border)', background:'var(--surface)',
+        fontSize:'11.5px', color:'var(--fg-dim)', fontFamily:"'Hanken Grotesk',sans-serif",
+      },
+    });
+
     return {
       rootStyle: {
         ...this.pal(theme, precise),
@@ -468,6 +1096,32 @@ class Component extends DCLogic {
       setStatusRaw: () => this.setState({ statusView:'raw' }),
       statFmtSeg: statusView === 'formatted' ? fmtOn : fmtOff,
       statRawSeg: statusView === 'raw' ? fmtOn : fmtOff,
+
+      // ---------- preferences ----------
+      themeExplain,
+      themeDark: themeChip('dark', 'Dark'),
+      themeLight: themeChip('light', 'Light'),
+      themeSystem: themeChip('system', 'System'),
+
+      laneOff: laneRow('off', false), pickOff: pickLane('off', false), dotOff: radioDot('off'),
+      laneApi: laneRow('claude-api', false), pickApi: pickLane('claude-api', false), dotApi: radioDot('claude-api'),
+      laneSub: laneRow('claude-sub', !subReady), pickSub: pickLane('claude-sub', !subReady), dotSub: radioDot('claude-sub'),
+      laneOll: laneRow('ollama', !ollReady), pickOll: pickLane('ollama', !ollReady), dotOll: radioDot('ollama'),
+
+      showApiReveal: assistant === 'claude-api',
+      showSubReveal: assistant === 'claude-sub',
+      showOllReveal: assistant === 'ollama',
+      keySaved,
+      keyStatusText: keySaved ? 'configured · stored in macOS Keychain' : 'not configured',
+      keyStatusDot: statusDot(keySaved ? 'ready' : 'missing'),
+      removeKey: () => this.setState({ keySaved: false }),
+      saveKey: () => this.setState({ keySaved: true }),
+
+      subDot: statusDot(subStatus), subText, subReady,
+      ollDot: statusDot(ollamaStatus), ollText, ollReady,
+      ollamaModel,
+      capTools: capChip('tools', ollReady ? 'yes' : 'checking'),
+      capVision: capChip('vision', ollReady ? 'no' : 'checking'),
     };
   }
 }

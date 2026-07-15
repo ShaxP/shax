@@ -134,6 +134,37 @@ Three slices, in this order. None gates the next milestone — but doing them no
 
 **Exit:** hybrid search answers fuzzy intent queries; the app is fast under large histories; dark and light are both polished; onboarding teaches the keyboard model.
 
+**Slice status.** Slices already landed under M7: semantic-search infrastructure with a mock embedder (slice 2), real ONNX `all-MiniLM-L6-v2` swap (slice 2b), the search-overlay semantic tier (slice 3), and blank-panes + `clear` soft-wipe + first-cut empty-state hints (slice 4). Remaining M7 polish threads: **M7.5** (design landing — this file's next section), the assistant-in-its-own-pane flow (its own milestone once designed), a performance pass, and any tail follow-ups from `05`.
+
+## M7.5 Design landing
+
+**Goal:** the two visual surfaces the design covers land in the app, at the fidelity the design specifies. **Lead:** frontend.
+
+Bridge slice pair between M7's plumbing work and any further polish. The design bundle exported to `/design/` covers two product surfaces in this milestone (`empty-state.png`, `preferences.png`); a third and fourth image (`terminal-window.png`, `terminal-window-assistant-docked.png`) document the resting terminal state and the assistant-in-a-pane view — both are reference only, out of scope here, and revisited in their own milestone.
+
+Non-negotiables from `13`: every reshape ships with dark **and** light variants; existing behaviour (block anatomy, prompt strip, safety gate, provider lanes) is preserved; the fonts stay the ones the app already ships (`--font-ui` Hanken Grotesk, `--font-mono` JetBrainsMono Nerd Font — see `src/theme/tokens.css`).
+
+Two slices:
+
+1. **M7.5a — Empty pane "Ready" state.** Reshape today's right-column of hints into the centered treatment in `empty-state.png`: a tinted chevron-in-rounded-square icon, a "Ready." heading with a small status dot, a one-sentence explanatory paragraph, and three wide chip-cards for the `⌘F` / `⌘K` / `⌘,` shortcuts. Bundle the icon glyph as an SVG under `src/assets/`. macOS traffic lights the design shows are OS-owned — nothing to render. Statusline / prompt-strip changes visible in the design image are part of the deferred terminal-window reshape; leave them untouched.
+
+2. **M7.5b — Preferences modal reshape.** Keep the current modal — the design's full-window framing is a Claude Design canvas artifact, not the product shape. Take from `preferences.png`: a left-nav list with **two** entries (Appearance, Assistant), the right-side pane restyled to match — radio-in-card lane treatment (selected lane gets an accent-outlined card, unselected lanes are lower-contrast), a keychain-reassurance lock-icon strip under the API-key input, and a bottom status bar with `● all changes saved` on the left and `Esc or ⌘, to close` on the right. The Assistant nav item covers both Claude and Ollama in a single scrollable right pane; today they're two separate top-level sections. The design's Formatters and Keybindings nav entries are illustrative placeholders and are omitted from this slice.
+
+**Exit criteria** (both slices):
+
+- Visual layout matches the corresponding PNG at typical window sizes on both themes.
+- No font changes; every new surface consumes `var(--font-ui)` / `var(--font-mono)`.
+- Behaviour parity with what shipped in slice 4 (empty state) and today's `SettingsModal` (preferences): existing tests stay green, and no reduction in what the settings surface can do.
+- `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm prettier --check`, `cargo test --lib`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` all clean.
+- The PR description references the specific PNG under `/design/` and calls out any deliberate departure.
+
+**Deferred, and named here so nobody accidentally scopes them in:**
+
+- `terminal-window.png` — tab-with-cwd labels, statusline restructure, prompt-strip placeholder copy, and the "Ask Shax why this failed" inline button on failed blocks. Belongs with the terminal-window polish slice.
+- `terminal-window-assistant-docked.png` — the assistant-in-a-pane flow in its entirety. Belongs with the assistant-in-its-own-pane milestone.
+- `?`-as-prompt-line assistant shortcut. Waits for the assistant-in-a-pane milestone.
+- Formatters / Keybindings preference sub-pages. Waits for those features to have functionality behind them.
+
 ## M8 Pane command palette
 
 **Goal:** a `Cmd+K` palette that exposes pane-scoped operations as guided UIs that emit real shell commands. **Lead:** frontend, with safety review from ai.
