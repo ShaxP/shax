@@ -29,10 +29,40 @@ pub enum ThemePreference {
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Default width in pixels for the assistant dock (M7.7a).
+/// Matches the current overlay panel width so users don't feel a
+/// jump when the dock lands.
+pub const DEFAULT_ASSISTANT_DOCK_WIDTH: u32 = 420;
+
+fn default_assistant_dock_width() -> u32 {
+    DEFAULT_ASSISTANT_DOCK_WIDTH
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preferences {
     #[serde(default)]
     pub theme: ThemePreference,
+    /// True when the assistant dock was open at last save. Restored
+    /// on launch (M7.7a). Defaults to false — a fresh install opens
+    /// with the assistant closed; the user opts in.
+    #[serde(default)]
+    pub assistant_docked: bool,
+    /// Width in pixels of the assistant dock's right-side column.
+    /// Persists across launches so a user's chosen width sticks. A
+    /// clamped range is enforced on write from the frontend; this
+    /// side just stores whatever it's given.
+    #[serde(default = "default_assistant_dock_width")]
+    pub assistant_dock_width: u32,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            theme: ThemePreference::default(),
+            assistant_docked: false,
+            assistant_dock_width: DEFAULT_ASSISTANT_DOCK_WIDTH,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -108,6 +138,7 @@ mod tests {
     fn serialises_theme_as_kebab_case() {
         let p = Preferences {
             theme: ThemePreference::Light,
+            ..Preferences::default()
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains(r#""theme":"light""#));
@@ -130,5 +161,37 @@ mod tests {
             let p: Preferences = serde_json::from_str(raw).unwrap();
             assert_eq!(p.theme, expected);
         }
+    }
+
+    #[test]
+    fn defaults_include_assistant_dock_fields() {
+        let p = Preferences::default();
+        assert!(!p.assistant_docked);
+        assert_eq!(p.assistant_dock_width, DEFAULT_ASSISTANT_DOCK_WIDTH);
+    }
+
+    #[test]
+    fn assistant_dock_fields_round_trip() {
+        let p = Preferences {
+            theme: ThemePreference::Dark,
+            assistant_docked: true,
+            assistant_dock_width: 512,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Preferences = serde_json::from_str(&json).unwrap();
+        assert!(back.assistant_docked);
+        assert_eq!(back.assistant_dock_width, 512);
+    }
+
+    #[test]
+    fn old_preferences_json_without_dock_fields_gets_defaults() {
+        // Backward compatibility — a preferences.json written before
+        // M7.7a shipped had only the `theme` field. Deserialise picks
+        // up defaults for the new fields via `#[serde(default)]`.
+        let old_json = r#"{"theme":"dark"}"#;
+        let p: Preferences = serde_json::from_str(old_json).unwrap();
+        assert_eq!(p.theme, ThemePreference::Dark);
+        assert!(!p.assistant_docked);
+        assert_eq!(p.assistant_dock_width, DEFAULT_ASSISTANT_DOCK_WIDTH);
     }
 }

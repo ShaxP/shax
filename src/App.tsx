@@ -37,10 +37,15 @@ import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
 import { SafetyGate } from "./safetyGate/SafetyGate";
+import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
 import { SettingsModal } from "./settings/SettingsModal";
 import { applyTheme } from "./theme/theme";
-import { loadPreferences } from "./theme/preferences";
+import {
+  DEFAULT_ASSISTANT_DOCK_WIDTH,
+  loadPreferences,
+  savePreferences,
+} from "./theme/preferences";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
@@ -452,6 +457,19 @@ export default function App(): React.ReactElement {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantSeed, setAssistantSeed] = useState<string | null>(null);
 
+  // M7.7a: the assistant panel now lives as a docked right-side column
+  // inside `<main>` instead of a fixed overlay. `assistantWidth` is the
+  // column's pixel width; persisted via preferences.json across launches.
+  // Ref-mirrored so a mid-drag `onResize` writes without cascading
+  // renders through the whole tab tree — we snap the DOM width via
+  // style inline and only setState on drag commit.
+  const [assistantWidth, setAssistantWidth] = useState<number>(DEFAULT_ASSISTANT_DOCK_WIDTH);
+  const tabHostRef = useRef<HTMLElement>(null);
+  // Guard so the persistence effect doesn't overwrite stored prefs with
+  // the default state during App's first render (before loadPreferences
+  // resolves). Flipped inside the boot loader below.
+  const prefsLoadedRef = useRef(false);
+
   // User's home directory, fetched once at boot. Used by
   // `compactCwd()` to display `~/dev/shax` instead of
   // `/Users/ada/dev/shax` in the tab chip, prompt strip, and
@@ -489,7 +507,16 @@ export default function App(): React.ReactElement {
   // event lets the settings modal notify the App when the
   // user flips the toggle without re-persisting.
   useEffect(() => {
-    void loadPreferences().then((prefs) => applyTheme(prefs.theme));
+    void loadPreferences().then((prefs) => {
+      applyTheme(prefs.theme);
+      // M7.7a: restore the docked state from the last save so the user
+      // lands back in whatever configuration they had. Both fields
+      // default to safe values in preferences.ts, so a fresh install
+      // opens with the dock closed and default width.
+      setAssistantOpen(prefs.assistant_docked);
+      setAssistantWidth(prefs.assistant_dock_width);
+      prefsLoadedRef.current = true;
+    });
     const onChanged = (e: Event): void => {
       const detail = (e as CustomEvent<{ theme?: "dark" | "light" | "system" }>).detail;
       if (detail?.theme !== undefined) applyTheme(detail.theme);
@@ -497,6 +524,23 @@ export default function App(): React.ReactElement {
     window.addEventListener("shax:preference-changed", onChanged);
     return () => window.removeEventListener("shax:preference-changed", onChanged);
   }, []);
+
+  // M7.7a: persist docked open/closed state + width whenever they
+  // change. `savePreferences` accepts a partial and merges with the
+  // stored value, so we don't have to carry the theme along here —
+  // the settings modal owns that field and writes it independently.
+  // No debounce needed: `assistantOpen` flips on user click,
+  // `assistantWidth` only updates on drag commit (mid-drag re-renders
+  // update DOM style but not this state).
+  useEffect(() => {
+    // Skip until the boot loader has resolved — otherwise we'd
+    // overwrite stored prefs with the initial defaults.
+    if (!prefsLoadedRef.current) return;
+    void savePreferences({
+      assistant_docked: assistantOpen,
+      assistant_dock_width: assistantWidth,
+    });
+  }, [assistantOpen, assistantWidth]);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -742,44 +786,89 @@ export default function App(): React.ReactElement {
           onSearch={() => setSearchOpen(true)}
         />
         <main
+          ref={tabHostRef}
           data-testid="tab-host"
-          style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--bg)" }}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "row",
+            background: "var(--bg)",
+          }}
         >
-          {tabs.map((tab) => {
-            const isActiveTab = tab.id === activeId;
-            return (
+          {/* Left column: the tab area. Was the whole of `<main>` before
+              M7.7a; the assistant now sits to its right in the same row
+              when docked. `position: relative` here so the absolutely-
+              positioned per-tab wrappers layout against this column
+              (they used to hang off `<main>` itself). */}
+          <div data-testid="tab-area" style={{ flex: 1, minWidth: 0, position: "relative" }}>
+            {tabs.map((tab) => {
+              const isActiveTab = tab.id === activeId;
+              return (
+                <div
+                  key={tab.id}
+                  data-testid="tab-pane-wrapper"
+                  data-tab-id={tab.id}
+                  data-active={isActiveTab ? "true" : "false"}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    visibility: isActiveTab ? "visible" : "hidden",
+                    pointerEvents: isActiveTab ? "auto" : "none",
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <LayoutRender
+                    tabId={tab.id}
+                    node={tab.layout}
+                    focusedPaneId={tab.focusedPaneId}
+                    tabActive={isActiveTab}
+                    // The callbacks are kept reference-stable (useCallback
+                    // with `[]`) so LayoutRender can hand stable handlers
+                    // to every PaneLeaf — re-renders during a divider drag
+                    // no longer cascade into the TerminalPane subtree.
+                    onPaneFocus={handlePaneFocus}
+                    onPaneMeta={handlePaneMeta}
+                    onPaneAltScreen={handlePaneAltScreen}
+                    onPanePtyId={handlePanePtyId}
+                    onSetRatio={handleSetRatio}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {/* Right column: the docked assistant. Sibling of the tab
+              area in the same flex row so opening the dock shrinks
+              the tab area rather than covering it. Rendered inside
+              `<main>` (not as a floating overlay) so it participates
+              in normal layout (M7.7a). */}
+          {assistantOpen && (
+            <>
+              <AssistantDockDivider
+                width={assistantWidth}
+                hostRef={tabHostRef}
+                onResize={setAssistantWidth}
+                onCommit={setAssistantWidth}
+              />
               <div
-                key={tab.id}
-                data-testid="tab-pane-wrapper"
-                data-tab-id={tab.id}
-                data-active={isActiveTab ? "true" : "false"}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  visibility: isActiveTab ? "visible" : "hidden",
-                  pointerEvents: isActiveTab ? "auto" : "none",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
+                data-testid="assistant-dock"
+                style={{ width: assistantWidth, flexShrink: 0, display: "flex" }}
               >
-                <LayoutRender
-                  tabId={tab.id}
-                  node={tab.layout}
-                  focusedPaneId={tab.focusedPaneId}
-                  tabActive={isActiveTab}
-                  // The callbacks are kept reference-stable (useCallback
-                  // with `[]`) so LayoutRender can hand stable handlers
-                  // to every PaneLeaf — re-renders during a divider drag
-                  // no longer cascade into the TerminalPane subtree.
-                  onPaneFocus={handlePaneFocus}
-                  onPaneMeta={handlePaneMeta}
-                  onPaneAltScreen={handlePaneAltScreen}
-                  onPanePtyId={handlePanePtyId}
-                  onSetRatio={handleSetRatio}
+                <AssistantOverlay
+                  seededPrompt={assistantSeed}
+                  onSeedConsumed={() => setAssistantSeed(null)}
+                  onClose={() => {
+                    setAssistantOpen(false);
+                    setAssistantSeed(null);
+                    refocusActivePane();
+                  }}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  targetPtyId={activeFocused?.ptyId ?? null}
                 />
               </div>
-            );
-          })}
+            </>
+          )}
         </main>
         <Statusline
           cwd={
@@ -873,19 +962,8 @@ export default function App(): React.ReactElement {
             }}
           />
         )}
-        {assistantOpen && (
-          <AssistantOverlay
-            seededPrompt={assistantSeed}
-            onSeedConsumed={() => setAssistantSeed(null)}
-            onClose={() => {
-              setAssistantOpen(false);
-              setAssistantSeed(null);
-              refocusActivePane();
-            }}
-            onOpenSettings={() => setSettingsOpen(true)}
-            targetPtyId={activeFocused?.ptyId ?? null}
-          />
-        )}
+        {/* AssistantOverlay lives inside <main> as a docked column (see
+            above) as of M7.7a — no longer a fixed overlay here. */}
       </div>
     </HomeDirProvider>
   );

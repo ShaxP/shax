@@ -43,21 +43,21 @@ import {
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
 import { getBlockOutput } from "../lib/ipc";
 
+// M7.7a: no longer `position: fixed`. The parent (App's `<main>`) lays
+// out `[tab-area | divider | assistant-panel]` as a flex row; this
+// panel is a plain flex-column child whose width is set by App from
+// the persisted `assistant_dock_width` preference. Height fills the
+// tab-host row.
 const PANEL: CSSProperties = {
-  position: "fixed",
-  top: 0,
-  right: 0,
-  bottom: 0,
-  width: 420,
+  height: "100%",
+  minWidth: 0,
   background: "var(--pane)",
   borderLeft: "1px solid var(--border-strong)",
-  boxShadow: "-10px 0 30px rgba(0, 0, 0, 0.35)",
   display: "flex",
   flexDirection: "column",
   fontFamily: "var(--font-ui)",
   fontSize: 13,
   color: "var(--fg)",
-  zIndex: 80,
   outline: "none",
 };
 
