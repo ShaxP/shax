@@ -205,6 +205,12 @@ export function LsWidget({
     if (blockEl === null) return;
     if (blockEl.getAttribute("data-is-latest") !== "true") setIsLive(false);
     blockEl.setAttribute("data-widget-live", "true");
+    // Capture the widget's own block id so we can distinguish "our
+    // block finished streaming" (no-op) from "the user typed a fresh
+    // command after us, freeze" (setIsLive(false)). Without this
+    // check the widget freezes itself the moment its own OSC 133 D
+    // fires, which shows the "historical" badge on every fresh ls.
+    const ownBlockId = blockEl.getAttribute("data-block-id");
     const onBlockComplete = (e: Event): void => {
       const detail = (
         e as CustomEvent<{
@@ -227,6 +233,10 @@ export function LsWidget({
         );
         return;
       }
+      // Our own block's completion event is not a "user typed a new
+      // command" signal — skip it. Only *subsequent* user-typed
+      // blocks should freeze this widget.
+      if (detail.blockId === ownBlockId) return;
       setIsLive(false);
     };
     window.addEventListener("shax:block-complete", onBlockComplete);

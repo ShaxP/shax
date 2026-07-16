@@ -289,4 +289,33 @@ describe("LsWidget", () => {
     });
     expect(screen.getByTestId("widget-ls")).toHaveAttribute("data-is-live", "false");
   });
+
+  it("does NOT freeze when the widget's own block finishes streaming", () => {
+    // Regression: every `ls` used to render with the 'historical'
+    // badge because the widget received its own block-complete event
+    // (source: 'user', because the user typed `ls`) and treated it
+    // as "some later command finished — freeze". The fix compares
+    // detail.blockId to the widget's own data-block-id and skips.
+    render(
+      withBlock("b-own")(
+        <LsWidget
+          initialEntries={[mkEntry("a")]}
+          dirPath="/x"
+          paneId="pty-88"
+          flags={parseLsArgv(["ls"])}
+        />,
+      ),
+    );
+    expect(screen.getByTestId("widget-ls")).toHaveAttribute("data-is-live", "true");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-complete", {
+          detail: { paneId: "pty-88", blockId: "b-own", source: "user" },
+        }),
+      );
+    });
+    // Still live — no historical badge.
+    expect(screen.getByTestId("widget-ls")).toHaveAttribute("data-is-live", "true");
+    expect(screen.queryByTestId("widget-ls-historical")).toBeNull();
+  });
 });
