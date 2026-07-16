@@ -1052,6 +1052,13 @@ function BlockRowInner({
               // to the ⌘↩ handler wired in `blockFocus.ts` — pressing
               // it while this block is selected fires the same
               // event.
+              //
+              // `alignSelf: flex-start` keeps the button as wide as
+              // its caption. Without it, the flex-column parent's
+              // default `align-items: stretch` overrides
+              // `display: inline-flex` and pulls the button to the
+              // full block width.
+              alignSelf: "flex-start",
               display: "inline-flex",
               alignItems: "center",
               gap: 10,
