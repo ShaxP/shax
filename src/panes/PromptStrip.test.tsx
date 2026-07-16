@@ -166,3 +166,85 @@ describe("PromptStrip / input ownership", () => {
     expect(screen.getByTestId("prompt-strip")).toHaveAttribute("tabindex", "0");
   });
 });
+
+describe("PromptStrip / M7.6 additions", () => {
+  it("? as the first character on an empty prompt opens the assistant", () => {
+    const onInput = vi.fn();
+    const listener = vi.fn();
+    window.addEventListener("shax:assistant-open", listener);
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "?" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    // The `?` byte itself is NOT forwarded to the shell.
+    expect(onInput).not.toHaveBeenCalled();
+    window.removeEventListener("shax:assistant-open", listener);
+  });
+
+  it("? with existing text on the line is a normal character", () => {
+    const onInput = vi.fn();
+    const listener = vi.fn();
+    window.addEventListener("shax:assistant-open", listener);
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{
+          text: "grep",
+          styled: [false, false, false, false],
+          cursor: 4,
+          currentStyled: false,
+        }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "?" });
+    expect(listener).not.toHaveBeenCalled();
+    expect(onInput).toHaveBeenCalledTimes(1);
+    window.removeEventListener("shax:assistant-open", listener);
+  });
+
+  it("? with a modifier (e.g. Shift-?) is passed to the shell as normal input", () => {
+    // Shift + / on many keyboards is what actually produces `?`;
+    // fireEvent sends us a synthetic `?` with shiftKey=true. The
+    // handler only intercepts bare `?` — anything else routes to
+    // the shell so shell-side `?` bindings still work.
+    const onInput = vi.fn();
+    const listener = vi.fn();
+    window.addEventListener("shax:assistant-open", listener);
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "?", metaKey: true });
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener("shax:assistant-open", listener);
+  });
+
+  it("cwd is compacted against the home dir from context (M7.6)", async () => {
+    // Import the provider lazily to keep the other tests in this
+    // file free of the wrapper.
+    const { HomeDirProvider } = await import("../lib/HomeDirContext");
+    render(
+      <HomeDirProvider value="/Users/ada">
+        <PromptStrip
+          cwd="/Users/ada/dev/shax"
+          branch="main"
+          line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+          onInput={noop}
+        />
+      </HomeDirProvider>,
+    );
+    expect(screen.getByTestId("prompt-cwd")).toHaveTextContent("~/dev/shax");
+  });
+});

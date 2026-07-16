@@ -19,7 +19,7 @@ use agent::{
 };
 use ipc::{
     app_state_load, app_state_save, block_get_output, git_diff, git_root_for, git_status_porcelain,
-    list_branches, list_community_formatters, list_cwds, pty_get_block_output, pty_kill,
+    home_dir, list_branches, list_community_formatters, list_cwds, pty_get_block_output, pty_kill,
     pty_list_blocks, pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes,
     search_blocks, stat_file,
 };
@@ -277,6 +277,7 @@ pub fn run() {
             read_file_bytes,
             read_dir_entries,
             git_status_porcelain,
+            home_dir,
             git_diff,
             list_community_formatters,
             stat_file,

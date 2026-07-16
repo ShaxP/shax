@@ -53,7 +53,9 @@ import {
   setRatio,
   splitLeaf,
 } from "./panes/layout";
-import { appStateLoad, appStateSave } from "./lib/ipc";
+import { HomeDirProvider } from "./lib/HomeDirContext";
+import { appStateLoad, appStateSave, homeDir } from "./lib/ipc";
+import { compactCwd } from "./panes/blockFormat";
 import { loadCommunityFormatters } from "./formatters";
 
 interface PaneMeta {
@@ -449,6 +451,16 @@ export default function App(): React.ReactElement {
   // button on failed blocks.
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantSeed, setAssistantSeed] = useState<string | null>(null);
+
+  // User's home directory, fetched once at boot. Used by
+  // `compactCwd()` to display `~/dev/shax` instead of
+  // `/Users/ada/dev/shax` in the tab chip, prompt strip, and
+  // statusline (M7.6). `null` until the boot probe resolves —
+  // during that window the full path is rendered.
+  const [home, setHome] = useState<string | null>(null);
+  useEffect(() => {
+    void homeDir().then((h) => setHome(h));
+  }, []);
   useEffect(() => {
     const onAsk = (e: Event): void => {
       const detail = (e as CustomEvent<{ prompt: string }>).detail;
@@ -456,8 +468,18 @@ export default function App(): React.ReactElement {
       setAssistantSeed(detail.prompt);
       setAssistantOpen(true);
     };
+    // `shax:assistant-open` — used by the M7.6 `?`-first-char handler
+    // in PromptStrip. Just toggles the overlay open without a seeded
+    // prompt; the user then types their question.
+    const onOpen = (): void => {
+      setAssistantOpen(true);
+    };
     window.addEventListener("shax:assistant-ask", onAsk);
-    return () => window.removeEventListener("shax:assistant-ask", onAsk);
+    window.addEventListener("shax:assistant-open", onOpen);
+    return () => {
+      window.removeEventListener("shax:assistant-ask", onAsk);
+      window.removeEventListener("shax:assistant-open", onOpen);
+    };
   }, []);
 
   // Apply the persisted theme preference on mount. The
@@ -681,177 +703,190 @@ export default function App(): React.ReactElement {
 
   const titleTabs: TabDescriptor[] = useMemo(
     () =>
-      tabs.map((t) => ({
-        id: t.id,
-        label: t.label,
-        cwd: t.panes[t.focusedPaneId]?.cwd ?? null,
-      })),
-    [tabs],
+      tabs.map((t) => {
+        const focusedCwd = t.panes[t.focusedPaneId]?.cwd ?? null;
+        // Compact for display (`~/dev/shax` over `/Users/ada/dev/shax`).
+        // `home` is `null` until the boot probe resolves; during that
+        // window the raw path is rendered.
+        return {
+          id: t.id,
+          label: t.label,
+          cwd: focusedCwd === null ? null : compactCwd(focusedCwd, home),
+        };
+      }),
+    [tabs, home],
   );
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const activeFocused = activeTab !== null ? activeTab.panes[activeTab.focusedPaneId] : null;
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg)",
-        color: "var(--fg)",
-        fontFamily: "var(--font-ui)",
-      }}
-    >
-      <TitleBar
-        tabs={titleTabs}
-        activeId={activeId}
-        onSwitch={handleSwitch}
-        onNew={handleNew}
-        onClose={handleCloseTab}
-        onSearch={() => setSearchOpen(true)}
-      />
-      <main
-        data-testid="tab-host"
-        style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--bg)" }}
+    <HomeDirProvider value={home}>
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          background: "var(--bg)",
+          color: "var(--fg)",
+          fontFamily: "var(--font-ui)",
+        }}
       >
-        {tabs.map((tab) => {
-          const isActiveTab = tab.id === activeId;
-          return (
-            <div
-              key={tab.id}
-              data-testid="tab-pane-wrapper"
-              data-tab-id={tab.id}
-              data-active={isActiveTab ? "true" : "false"}
-              style={{
-                position: "absolute",
-                inset: 0,
-                visibility: isActiveTab ? "visible" : "hidden",
-                pointerEvents: isActiveTab ? "auto" : "none",
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              <LayoutRender
-                tabId={tab.id}
-                node={tab.layout}
-                focusedPaneId={tab.focusedPaneId}
-                tabActive={isActiveTab}
-                // The callbacks are kept reference-stable (useCallback
-                // with `[]`) so LayoutRender can hand stable handlers
-                // to every PaneLeaf — re-renders during a divider drag
-                // no longer cascade into the TerminalPane subtree.
-                onPaneFocus={handlePaneFocus}
-                onPaneMeta={handlePaneMeta}
-                onPaneAltScreen={handlePaneAltScreen}
-                onPanePtyId={handlePanePtyId}
-                onSetRatio={handleSetRatio}
-              />
-            </div>
-          );
-        })}
-      </main>
-      <Statusline cwd={activeFocused?.cwd ?? null} branch={activeFocused?.branch ?? null} />
-      {searchOpen && (
-        <SearchOverlay
-          currentCwd={activeFocused?.cwd ?? null}
-          currentBranch={activeFocused?.branch ?? null}
-          onClose={() => {
-            setSearchOpen(false);
-            refocusActivePane();
-          }}
-          onSelect={(hit) => {
-            // Search hand-off rule (slice 3.2 polish):
-            //
-            //   1. Live pane exists for this block (its PTY is still in
-            //      this session) → switch tabs + focus that pane, then
-            //      tell it to select the matching block row.
-            //   2. No live pane (block from a previous session, or its
-            //      pane was closed) → surface the block in the *current
-            //      active* pane via the `inspect_block` reducer action,
-            //      tagged "from history". Same selection treatment.
-            //
-            // Either way the user lands in a pane with the matched
-            // block visible and selected — no separate viewer modal.
-            setSearchOpen(false);
-            const live = findPaneByPtyId(state.tabs, hit.pane_id);
-            const target =
-              live ??
-              (() => {
-                const tab = state.tabs.find((t) => t.id === state.activeId);
-                if (tab === undefined) return null;
-                return { tabId: tab.id, paneId: tab.focusedPaneId };
-              })();
-            if (target === null) return;
-            if (target.tabId !== state.activeId) {
-              dispatch({ type: "switch_tab", id: target.tabId });
-            }
-            dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
-            refocusActivePane();
-            // Defer one tick so the tab/pane switch commits before we
-            // ask the (now-visible) BlockList to scroll + select. The
-            // listeners live in the matching TerminalPane.
-            setTimeout(() => {
-              // `focus: true` opts the target pane into block-focus
-              // mode along with the selection. Search jumps are an
-              // explicit "I want to interact with this block" signal,
-              // so the keymap (j/k/Enter/Esc/…) should be live the
-              // moment the user lands. Click-to-select on a row
-              // omits the flag and only updates the highlight.
-              if (live !== null) {
-                window.dispatchEvent(
-                  new CustomEvent("shax:select-block", {
-                    detail: { paneId: target.paneId, blockId: hit.block.id, focus: true },
-                  }),
-                );
-              } else {
-                window.dispatchEvent(
-                  new CustomEvent("shax:inspect-block", {
-                    detail: { paneId: target.paneId, block: hit.block, focus: true },
-                  }),
-                );
+        <TitleBar
+          tabs={titleTabs}
+          activeId={activeId}
+          onSwitch={handleSwitch}
+          onNew={handleNew}
+          onClose={handleCloseTab}
+          onSearch={() => setSearchOpen(true)}
+        />
+        <main
+          data-testid="tab-host"
+          style={{ flex: 1, minHeight: 0, position: "relative", background: "var(--bg)" }}
+        >
+          {tabs.map((tab) => {
+            const isActiveTab = tab.id === activeId;
+            return (
+              <div
+                key={tab.id}
+                data-testid="tab-pane-wrapper"
+                data-tab-id={tab.id}
+                data-active={isActiveTab ? "true" : "false"}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  visibility: isActiveTab ? "visible" : "hidden",
+                  pointerEvents: isActiveTab ? "auto" : "none",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <LayoutRender
+                  tabId={tab.id}
+                  node={tab.layout}
+                  focusedPaneId={tab.focusedPaneId}
+                  tabActive={isActiveTab}
+                  // The callbacks are kept reference-stable (useCallback
+                  // with `[]`) so LayoutRender can hand stable handlers
+                  // to every PaneLeaf — re-renders during a divider drag
+                  // no longer cascade into the TerminalPane subtree.
+                  onPaneFocus={handlePaneFocus}
+                  onPaneMeta={handlePaneMeta}
+                  onPaneAltScreen={handlePaneAltScreen}
+                  onPanePtyId={handlePanePtyId}
+                  onSetRatio={handleSetRatio}
+                />
+              </div>
+            );
+          })}
+        </main>
+        <Statusline
+          cwd={
+            activeFocused?.cwd ? compactCwd(activeFocused.cwd, home) : (activeFocused?.cwd ?? null)
+          }
+          branch={activeFocused?.branch ?? null}
+        />
+        {searchOpen && (
+          <SearchOverlay
+            currentCwd={activeFocused?.cwd ?? null}
+            currentBranch={activeFocused?.branch ?? null}
+            onClose={() => {
+              setSearchOpen(false);
+              refocusActivePane();
+            }}
+            onSelect={(hit) => {
+              // Search hand-off rule (slice 3.2 polish):
+              //
+              //   1. Live pane exists for this block (its PTY is still in
+              //      this session) → switch tabs + focus that pane, then
+              //      tell it to select the matching block row.
+              //   2. No live pane (block from a previous session, or its
+              //      pane was closed) → surface the block in the *current
+              //      active* pane via the `inspect_block` reducer action,
+              //      tagged "from history". Same selection treatment.
+              //
+              // Either way the user lands in a pane with the matched
+              // block visible and selected — no separate viewer modal.
+              setSearchOpen(false);
+              const live = findPaneByPtyId(state.tabs, hit.pane_id);
+              const target =
+                live ??
+                (() => {
+                  const tab = state.tabs.find((t) => t.id === state.activeId);
+                  if (tab === undefined) return null;
+                  return { tabId: tab.id, paneId: tab.focusedPaneId };
+                })();
+              if (target === null) return;
+              if (target.tabId !== state.activeId) {
+                dispatch({ type: "switch_tab", id: target.tabId });
               }
-            }, 0);
-          }}
-        />
-      )}
-      {viewerTarget !== null && (
-        <BlockViewerModal
-          block={viewerTarget.block}
-          pty={viewerTarget.pty}
-          onClose={() => {
-            setViewerTarget(null);
-            refocusActivePane();
-          }}
-        />
-      )}
-      {/* One safety-gate instance for the whole app. Every
-       *  `shax:emit-command` from a widget, the assistant, or
-       *  the pane palette passes through this before it
-       *  reaches TerminalPane's PTY writer (spec §10). */}
-      <SafetyGate />
-      {settingsOpen && (
-        <SettingsModal
-          onClose={() => {
-            setSettingsOpen(false);
-            refocusActivePane();
-          }}
-        />
-      )}
-      {assistantOpen && (
-        <AssistantOverlay
-          seededPrompt={assistantSeed}
-          onSeedConsumed={() => setAssistantSeed(null)}
-          onClose={() => {
-            setAssistantOpen(false);
-            setAssistantSeed(null);
-            refocusActivePane();
-          }}
-          onOpenSettings={() => setSettingsOpen(true)}
-          targetPtyId={activeFocused?.ptyId ?? null}
-        />
-      )}
-    </div>
+              dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
+              refocusActivePane();
+              // Defer one tick so the tab/pane switch commits before we
+              // ask the (now-visible) BlockList to scroll + select. The
+              // listeners live in the matching TerminalPane.
+              setTimeout(() => {
+                // `focus: true` opts the target pane into block-focus
+                // mode along with the selection. Search jumps are an
+                // explicit "I want to interact with this block" signal,
+                // so the keymap (j/k/Enter/Esc/…) should be live the
+                // moment the user lands. Click-to-select on a row
+                // omits the flag and only updates the highlight.
+                if (live !== null) {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:select-block", {
+                      detail: { paneId: target.paneId, blockId: hit.block.id, focus: true },
+                    }),
+                  );
+                } else {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:inspect-block", {
+                      detail: { paneId: target.paneId, block: hit.block, focus: true },
+                    }),
+                  );
+                }
+              }, 0);
+            }}
+          />
+        )}
+        {viewerTarget !== null && (
+          <BlockViewerModal
+            block={viewerTarget.block}
+            pty={viewerTarget.pty}
+            onClose={() => {
+              setViewerTarget(null);
+              refocusActivePane();
+            }}
+          />
+        )}
+        {/* One safety-gate instance for the whole app. Every
+         *  `shax:emit-command` from a widget, the assistant, or
+         *  the pane palette passes through this before it
+         *  reaches TerminalPane's PTY writer (spec §10). */}
+        <SafetyGate />
+        {settingsOpen && (
+          <SettingsModal
+            onClose={() => {
+              setSettingsOpen(false);
+              refocusActivePane();
+            }}
+          />
+        )}
+        {assistantOpen && (
+          <AssistantOverlay
+            seededPrompt={assistantSeed}
+            onSeedConsumed={() => setAssistantSeed(null)}
+            onClose={() => {
+              setAssistantOpen(false);
+              setAssistantSeed(null);
+              refocusActivePane();
+            }}
+            onOpenSettings={() => setSettingsOpen(true)}
+            targetPtyId={activeFocused?.ptyId ?? null}
+          />
+        )}
+      </div>
+    </HomeDirProvider>
   );
 }

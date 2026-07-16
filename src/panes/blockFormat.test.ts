@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration } from "./blockFormat";
+import { compactCwd, formatDuration } from "./blockFormat";
 
 describe("formatDuration", () => {
   it("renders sub-second durations as ms", () => {
@@ -30,5 +30,54 @@ describe("formatDuration", () => {
     expect(formatDuration(undefined)).toBe("--");
     expect(formatDuration(Number.NaN)).toBe("--");
     expect(formatDuration(-1)).toBe("--");
+  });
+});
+
+describe("compactCwd (M7.6)", () => {
+  it("substitutes home with ~ when cwd is under it", () => {
+    expect(compactCwd("/Users/ada/dev/shax", "/Users/ada")).toBe("~/dev/shax");
+  });
+
+  it("renders bare home as ~", () => {
+    expect(compactCwd("/Users/ada", "/Users/ada")).toBe("~");
+  });
+
+  it("tolerates a trailing slash on home", () => {
+    expect(compactCwd("/Users/ada/dev/shax", "/Users/ada/")).toBe("~/dev/shax");
+  });
+
+  it("leaves paths outside home untouched", () => {
+    expect(compactCwd("/tmp/scratch", "/Users/ada")).toBe("/tmp/scratch");
+  });
+
+  it("does NOT match a home prefix that isn't a full segment", () => {
+    // `/Users/adaptive` starts with `/Users/ada` byte-wise but is a
+    // different user — must not collapse.
+    expect(compactCwd("/Users/adaptive/repo", "/Users/ada")).toBe("/Users/adaptive/repo");
+  });
+
+  it("shortens long paths under home to ~/…/<lastseg>", () => {
+    const cwd = "/Users/ada/dev/very/long/nested/path/to/project";
+    expect(compactCwd(cwd, "/Users/ada", 20)).toBe("~/…/project");
+  });
+
+  it("shortens long absolute paths that don't share a home to …/<lastseg>", () => {
+    expect(compactCwd("/opt/vendor/tools/some/deeply/nested/binary", null, 20)).toBe("…/binary");
+  });
+
+  it("preserves paths within the cap even when a home is provided", () => {
+    expect(compactCwd("/tmp/x", "/Users/ada", 20)).toBe("/tmp/x");
+  });
+
+  it("renders null or empty cwd as an em-dash", () => {
+    expect(compactCwd(null, "/Users/ada")).toBe("—");
+    expect(compactCwd("", "/Users/ada")).toBe("—");
+  });
+
+  it("falls back to the atomic segment when the tail alone exceeds the cap", () => {
+    // No parent to collapse — return the input as-is; the caller's
+    // CSS ellipsis handles the visual overflow.
+    const single = "/thisisareallylongsegmentwithnoslashes";
+    expect(compactCwd(single, null, 10)).toBe(single);
   });
 });

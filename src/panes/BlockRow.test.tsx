@@ -289,3 +289,72 @@ describe("BlockRow / interactive sessions", () => {
     expect(screen.queryByTestId("block-interactive-label")).toBeNull();
   });
 });
+
+describe("BlockRow / Ask Shax on failure (M7.6)", () => {
+  it("shows the labeled Ask-Shax button on a failed, open block", () => {
+    // A block is "naturally open" when it has liveOutput or is
+    // running. Provide a live buffer so the row opens on mount.
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: 1, command: "cargo build" })}
+        liveOutput={new TextEncoder().encode("error")}
+      />,
+    );
+    const btn = screen.getByTestId("block-ask-shax");
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent(/Ask Shax why this failed/i);
+    expect(btn).toHaveTextContent(/⌘↩/);
+  });
+
+  it("does not show the button on a successful block", () => {
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: 0 })}
+        liveOutput={new TextEncoder().encode("hello")}
+      />,
+    );
+    expect(screen.queryByTestId("block-ask-shax")).toBeNull();
+  });
+
+  it("does not show the button on an aborted block (design gates on exit_code + !aborted)", () => {
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ aborted: true, exit_code: -1 })}
+        liveOutput={new TextEncoder().encode("partial")}
+      />,
+    );
+    expect(screen.queryByTestId("block-ask-shax")).toBeNull();
+  });
+
+  it("does not show the button on a still-running block", () => {
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: null, ended_at_ms: null, duration_ms: null })}
+      />,
+    );
+    expect(screen.queryByTestId("block-ask-shax")).toBeNull();
+  });
+
+  it("clicking the button dispatches shax:assistant-ask with a well-formed prompt", () => {
+    const listener = vi.fn();
+    window.addEventListener("shax:assistant-ask", listener);
+    render(
+      <BlockRow
+        pty="pty-1"
+        block={makeBlock({ exit_code: 101, command: "cargo build --release" })}
+        liveOutput={new TextEncoder().encode("error[E0432]: unresolved import\n")}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("block-ask-shax"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const detail = (listener.mock.calls[0]?.[0] as CustomEvent<{ prompt: string }>).detail;
+    expect(detail.prompt).toMatch(/exit code 101/);
+    expect(detail.prompt).toContain("cargo build --release");
+    expect(detail.prompt).toContain("error[E0432]");
+    window.removeEventListener("shax:assistant-ask", listener);
+  });
+});

@@ -95,6 +95,9 @@ vi.mock("./lib/ipc", () => ({
   semanticSearch: (): Promise<unknown[]> => Promise.resolve([]),
   embeddingProgress: (): Promise<unknown> =>
     Promise.resolve({ indexed: 0, total: 0, model_id: "unknown" }),
+  // M7.6 — cwd compaction reads home once at boot. Tests don't need
+  // real values, and null is a legitimate "not resolved yet" state.
+  homeDir: (): Promise<string | null> => Promise.resolve(null),
 }));
 
 class StubResizeObserver {

@@ -108,7 +108,14 @@ export type BlockKeyAction =
   | { kind: "widget-primary" }
   | { kind: "yank" }
   | { kind: "collapse" }
-  | { kind: "expand" };
+  | { kind: "expand" }
+  /**
+   * ⌘↩ on a selected failed block — trigger the explain-on-error flow
+   * (M7.6). Wired to the same "Ask Shax why this failed" event the
+   * inline button dispatches, so keyboard and click land in the same
+   * assistant handler.
+   */
+  | { kind: "ask-shax" };
 
 export interface KeyState {
   /** Whether the previous keypress was `g`. Used for the `g g` chord. */
@@ -184,6 +191,12 @@ export function dispatchBlockKey(
   }
   if (key === "b") {
     return { action: { kind: "page-up" }, state: INITIAL_KEY_STATE };
+  }
+  // ⌘↩ / Ctrl-↩ on a failed block → explain-on-error flow. Must be
+  // checked BEFORE the plain `Enter` → open-modal case below, or the
+  // modifier'd combo would fall through to open the viewer instead.
+  if (key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    return { action: { kind: "ask-shax" }, state: INITIAL_KEY_STATE };
   }
   if (key === "Enter" || key === "o") {
     return { action: { kind: "open-modal" }, state: INITIAL_KEY_STATE };

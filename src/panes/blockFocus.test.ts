@@ -209,4 +209,21 @@ describe("dispatchBlockKey", () => {
       kind: "noop",
     });
   });
+
+  it("⌘↩ → ask-shax; plain ↩ still opens the modal (M7.6)", () => {
+    // ⌘Enter and Ctrl-Enter both route to ask-shax (macOS + Linux
+    // muscle memory) — the terminal-pane handler then gates on the
+    // focused block's exit code before firing the assistant.
+    expect(dispatchBlockKey(ev({ key: "Enter", metaKey: true }), INITIAL_KEY_STATE).action).toEqual(
+      { kind: "ask-shax" },
+    );
+    expect(dispatchBlockKey(ev({ key: "Enter", ctrlKey: true }), INITIAL_KEY_STATE).action).toEqual(
+      { kind: "ask-shax" },
+    );
+    // Modifier-less Enter must keep its existing meaning — open the
+    // block viewer.
+    expect(dispatchBlockKey(ev({ key: "Enter" }), INITIAL_KEY_STATE).action).toEqual({
+      kind: "open-modal",
+    });
+  });
 });
