@@ -391,6 +391,35 @@ describe("GitStatusWidget", () => {
     expect(screen.getByTestId("widget-git-status-historical")).toBeInTheDocument();
   });
 
+  it("does NOT freeze when the widget's own block finishes streaming", () => {
+    // Regression alongside the LsWidget fix: every `git status` used
+    // to render frozen because the widget received its own
+    // block-complete event (source: 'user') and treated it as
+    // "some later command finished — freeze". Skip when detail.blockId
+    // matches the widget's own data-block-id.
+    render(
+      withBlock("b-own")(
+        <GitStatusWidget
+          status={mkStatus({
+            unstaged: [mkEntry("src/foo.ts", { index: ".", worktree: "M" })],
+          })}
+          paneId="pty-42"
+          cwd="/repo-a"
+        />,
+      ),
+    );
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "true");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-complete", {
+          detail: { paneId: "pty-42", blockId: "b-own", source: "user" },
+        }),
+      );
+    });
+    expect(screen.getByTestId("widget-git-status")).toHaveAttribute("data-is-live", "true");
+    expect(screen.queryByTestId("widget-git-status-historical")).toBeNull();
+  });
+
   it("historical (non-latest) widgets refuse to act on Space", () => {
     const spy = vi.fn();
     window.addEventListener("shax:emit-command", spy);

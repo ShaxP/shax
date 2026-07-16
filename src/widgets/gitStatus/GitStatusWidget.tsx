@@ -187,6 +187,13 @@ export function GitStatusWidget({
     // widget is interactive. A separate effect keeps this in
     // sync when `isLive` flips.
     blockEl.setAttribute("data-widget-live", "true");
+    // Capture the widget's own block id so we can distinguish "our
+    // block finished streaming" (no-op) from "the user typed a
+    // fresh command after us, freeze" (setIsLive(false)). Without
+    // this the widget freezes itself the moment its own OSC 133 D
+    // fires — the block-complete event fires for every block, not
+    // just subsequent ones.
+    const ownBlockId = blockEl.getAttribute("data-block-id");
     const onBlockComplete = (e: Event): void => {
       const detail = (
         e as CustomEvent<{
@@ -212,6 +219,10 @@ export function GitStatusWidget({
         );
         return;
       }
+      // Our own block's completion is not a "user typed a new
+      // command" signal — skip it. Only *subsequent* user-typed
+      // blocks should freeze this widget.
+      if (detail.blockId === ownBlockId) return;
       // User-typed command completed → freeze this widget.
       // The scrollback still has the honest history of what
       // ran; we just stop being interactive.
