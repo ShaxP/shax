@@ -64,42 +64,74 @@ const PANEL: CSSProperties = {
 const HEADER: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
+  gap: 8,
   padding: "10px 12px",
   borderBottom: "1px solid var(--border)",
   background: "var(--pane2)",
 };
 
-const HEADER_TITLE: CSSProperties = {
-  flex: 1,
-  fontSize: 12,
+// M7.7b: title row is "+ Shax" (sparkle-plus glyph + wordmark), a
+// provider pill (claude / ollama), then the actions cluster (New +
+// close) on the right. The old provider · model string moves into
+// a tooltip on the provider pill so hover reveals the specific
+// model without cluttering the header.
+const HEADER_MARK: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 12.5,
   fontWeight: 600,
+  color: "var(--fg)",
 };
 
-const HEADER_META: CSSProperties = {
-  fontSize: 10,
-  color: "var(--fg-faint)",
-  fontFamily: "var(--font-mono)",
+const HEADER_MARK_GLYPH: CSSProperties = {
+  color: "var(--accent)",
+  fontSize: 13,
+  fontWeight: 600,
+  lineHeight: 1,
 };
 
-const POSTURE_BADGE: CSSProperties = {
-  fontSize: 10,
+const PROVIDER_BADGE: CSSProperties = {
+  fontSize: 10.5,
   fontFamily: "var(--font-mono)",
-  padding: "1px 6px",
-  borderRadius: 3,
+  padding: "2px 8px",
+  borderRadius: 999,
   border: "1px solid var(--border-strong)",
-  color: "var(--fg-faint)",
+  color: "var(--fg-dim)",
+  textTransform: "lowercase",
+  letterSpacing: 0.2,
+};
+
+const HEADER_SPACER: CSSProperties = { flex: 1 };
+
+const NEW_BUTTON: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "3px 9px",
+  border: "1px solid var(--border-strong)",
+  background: "transparent",
+  borderRadius: 4,
+  color: "var(--fg-dim)",
+  cursor: "pointer",
+  fontFamily: "var(--font-ui)",
+  fontSize: 11.5,
 };
 
 const CLOSE_BUTTON: CSSProperties = {
-  padding: "2px 6px",
-  border: "1px solid var(--border)",
-  background: "var(--pane)",
-  borderRadius: 3,
-  color: "var(--fg)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 22,
+  height: 22,
+  border: "none",
+  background: "transparent",
+  borderRadius: 4,
+  color: "var(--fg-faint)",
   cursor: "pointer",
   fontFamily: "var(--font-ui)",
-  fontSize: 11,
+  fontSize: 13,
+  lineHeight: 1,
 };
 
 const MESSAGES: CSSProperties = {
@@ -125,8 +157,13 @@ const BUBBLE_BASE: CSSProperties = {
 const BUBBLE_USER: CSSProperties = {
   ...BUBBLE_BASE,
   alignSelf: "flex-end",
-  background: "var(--accent)",
-  color: "#fff",
+  // M7.7b: accent-outlined pill on the right instead of a solid
+  // accent fill. Matches the design's chat-app treatment where
+  // the user's replies read as active-voice chips.
+  background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+  border: "1px solid var(--accent)",
+  color: "var(--fg)",
+  borderRadius: 16,
 };
 
 const BUBBLE_ASSISTANT: CSSProperties = {
@@ -146,6 +183,9 @@ const INPUT_AREA: CSSProperties = {
   padding: 10,
   borderTop: "1px solid var(--border)",
   background: "var(--pane2)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
 };
 
 const TEXTAREA: CSSProperties = {
@@ -162,6 +202,65 @@ const TEXTAREA: CSSProperties = {
   resize: "vertical",
   outline: "none",
   boxSizing: "border-box",
+};
+
+// M7.7b: hint row below the textarea. Left cluster is action hints
+// (send + goal mode placeholder), right cluster is the provider's
+// privacy posture written as a single sentence — the reassurance
+// the design surfaces at the bottom of the input.
+const INPUT_HINT_ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  fontSize: 10.5,
+  color: "var(--fg-faint)",
+};
+
+const INPUT_HINT_LEFT: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 12,
+};
+
+const KBD_INLINE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  padding: "0 5px",
+  border: "1px solid var(--border)",
+  borderRadius: 3,
+  color: "var(--fg-dim)",
+  marginRight: 3,
+};
+
+const GOAL_MODE_BUTTON: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "1px 6px",
+  border: "1px solid var(--border)",
+  borderRadius: 3,
+  background: "transparent",
+  color: "var(--fg-faint)",
+  fontFamily: "var(--font-ui)",
+  fontSize: 10.5,
+  cursor: "not-allowed",
+  opacity: 0.7,
+};
+
+const PRIVACY_STRIP: CSSProperties = {
+  marginLeft: "auto",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 10.5,
+  color: "var(--fg-dim)",
+};
+
+const PRIVACY_DOT: CSSProperties = {
+  display: "inline-block",
+  width: 5,
+  height: 5,
+  borderRadius: "50%",
 };
 
 const CAPABILITY_STRIP: CSSProperties = {
@@ -681,39 +780,32 @@ export function AssistantOverlay({
       }}
     >
       <div style={HEADER}>
-        <div style={HEADER_TITLE}>
-          {providerLabel}
-          {modelLabel.length > 0 && (
-            <span style={{ ...HEADER_META, marginLeft: 6 }}>· {modelLabel}</span>
-          )}
-        </div>
+        <span data-testid="assistant-overlay-mark" style={HEADER_MARK}>
+          <span aria-hidden="true" style={HEADER_MARK_GLYPH}>
+            +
+          </span>
+          <span>Shax</span>
+        </span>
         {provider !== null && (
           <span
-            data-testid="assistant-overlay-posture"
-            style={{
-              ...POSTURE_BADGE,
-              color: provider.privacyPosture === "local" ? "var(--green)" : "var(--fg-faint)",
-              borderColor:
-                provider.privacyPosture === "local" ? "var(--green)" : "var(--border-strong)",
-            }}
-            title={
-              provider.privacyPosture === "local"
-                ? "Nothing leaves your machine."
-                : "Requests go to a cloud API."
-            }
+            data-testid="assistant-overlay-provider"
+            style={PROVIDER_BADGE}
+            title={modelLabel.length > 0 ? `${providerLabel} · ${modelLabel}` : providerLabel}
           >
-            {provider.privacyPosture === "local" ? "⌂ local" : "☁ cloud"}
+            {providerLabel}
           </span>
         )}
+        <span style={HEADER_SPACER} />
         {turns.length > 0 && (
           <button
             data-testid="assistant-overlay-new"
-            style={CLOSE_BUTTON}
+            style={NEW_BUTTON}
             onClick={startNewConversation}
             disabled={streaming}
             type="button"
             title="Start a new conversation (clears history)"
           >
+            <span aria-hidden="true">+</span>
             New
           </button>
         )}
@@ -723,6 +815,7 @@ export function AssistantOverlay({
           onClick={onClose}
           type="button"
           title="Close (Esc)"
+          aria-label="Close assistant"
         >
           ✕
         </button>
@@ -760,13 +853,30 @@ export function AssistantOverlay({
             <textarea
               ref={textareaRef}
               data-testid="assistant-overlay-input"
-              placeholder="Type a message… (Enter to send, Shift+Enter for a newline)"
+              placeholder="Ask Shax, or describe a command…"
               value={input}
               disabled={streaming}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleTextareaKey}
               style={TEXTAREA}
             />
+            <div style={INPUT_HINT_ROW}>
+              <span style={INPUT_HINT_LEFT}>
+                <span>
+                  <kbd style={KBD_INLINE}>⏎</kbd>send
+                </span>
+                <button
+                  data-testid="assistant-overlay-goal-mode"
+                  type="button"
+                  disabled
+                  title="Goal mode — the assistant plans and runs a sequence of commands to reach a goal you describe. Coming soon."
+                  style={GOAL_MODE_BUTTON}
+                >
+                  <kbd style={{ ...KBD_INLINE, marginRight: 3 }}>⌘G</kbd>goal mode
+                </button>
+              </span>
+              <PrivacyStrip provider={provider} />
+            </div>
           </div>
 
           <CapabilityStrip provider={provider} />
@@ -795,29 +905,61 @@ function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
   );
 }
 
+// M7.7b: solid amber card matching the design's APPROVAL REQUIRED
+// treatment. Retrospective by architecture — the safety-gate modal
+// still owns the actual approve/decline; this card is the chat's
+// record of what was proposed + why. Inline approve/decline buttons
+// are a deferred follow-up (needs the safety-gate refactor).
 const TOOL_PROPOSAL_BUBBLE: CSSProperties = {
-  ...BUBBLE_ASSISTANT,
-  borderColor: "var(--amber, #d09030)",
-  borderStyle: "dashed",
+  ...BUBBLE_BASE,
+  alignSelf: "flex-start",
+  maxWidth: "95%",
+  background: "color-mix(in srgb, var(--amber) 10%, transparent)",
+  border: "1px solid var(--amber)",
+  borderRadius: 8,
   fontSize: 12,
+  padding: "10px 12px",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+const TOOL_PROPOSAL_HEADER: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 10.5,
+  letterSpacing: 0.5,
+  textTransform: "uppercase",
+  color: "var(--amber)",
+  fontWeight: 600,
+};
+
+const TOOL_PROPOSAL_HEADER_META: CSSProperties = {
+  marginLeft: "auto",
+  fontSize: 10.5,
+  fontWeight: 400,
+  color: "var(--fg-faint)",
+  textTransform: "none",
+  letterSpacing: 0,
 };
 
 const TOOL_COMMAND: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 12,
-  padding: "4px 6px",
-  background: "rgba(0, 0, 0, 0.35)",
+  padding: "8px 10px",
+  background: "var(--pane2)",
+  border: "1px solid var(--border)",
   borderRadius: 4,
-  marginTop: 4,
   overflowX: "auto",
   whiteSpace: "pre-wrap",
   wordBreak: "break-all",
+  color: "var(--fg)",
 };
 
 const TOOL_META: CSSProperties = {
-  color: "var(--fg-faint)",
+  color: "var(--fg-dim)",
   fontSize: 11,
-  marginTop: 4,
 };
 
 const TOOL_OUTPUT: CSSProperties = {
@@ -826,16 +968,52 @@ const TOOL_OUTPUT: CSSProperties = {
   overflow: "auto",
 };
 
+/**
+ * Cheap heuristic for the "writes N files · staged" hint in the
+ * APPROVAL card header (M7.7b). Not a security check — the safety
+ * gate is the actual chokepoint — just a UI label to help the user
+ * understand at a glance what the proposal is about to do.
+ */
+function commandEffectSummary(command: string): string {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) return "no-op";
+  // Multi-command joined by && / ; — count them as sub-effects.
+  const parts = trimmed
+    .split(/&&|;/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  const writes = parts.some((p) =>
+    /^(sed\s+-i|rm\s|mv\s|cp\s|touch\s|mkdir\s|chmod\s|chown\s|tee\s|npm\s+install|pnpm\s+install|yarn\s+install|cargo\s+add|apt\s+install|brew\s+install|git\s+(commit|reset|checkout|merge|rebase|push|apply))/.test(
+      p,
+    ),
+  );
+  const stages = parts.some((p) => /^git\s+add/.test(p));
+  const labels: string[] = [];
+  if (writes) labels.push(`writes ${parts.length === 1 ? "1 file" : `${parts.length} files`}`);
+  if (stages) labels.push("staged");
+  if (labels.length === 0) return "side effect";
+  return labels.join(" · ");
+}
+
 function ToolProposalBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+  const command = turn.toolCall?.command ?? "";
+  const summary = commandEffectSummary(command);
   return (
     <div data-testid="assistant-overlay-turn-tool_proposal" style={TOOL_PROPOSAL_BUBBLE}>
-      <div style={{ fontSize: 11, color: "var(--amber, #d09030)", letterSpacing: 0.4 }}>
-        PROPOSED · run_command
+      <div style={TOOL_PROPOSAL_HEADER}>
+        <span aria-hidden="true">⚠</span>
+        <span>Approval required</span>
+        <span
+          data-testid="assistant-overlay-turn-tool_proposal-summary"
+          style={TOOL_PROPOSAL_HEADER_META}
+        >
+          {summary}
+        </span>
       </div>
       {turn.toolCall?.reason !== undefined && turn.toolCall.reason.length > 0 && (
-        <div style={TOOL_META}>Why: {turn.toolCall.reason}</div>
+        <div style={TOOL_META}>{turn.toolCall.reason}</div>
       )}
-      <div style={TOOL_COMMAND}>{turn.toolCall?.command ?? ""}</div>
+      <div style={TOOL_COMMAND}>{command}</div>
     </div>
   );
 }
@@ -861,6 +1039,34 @@ function ToolResultBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
       </div>
       <div style={TOOL_OUTPUT}>{result.output.length === 0 ? "(no output)" : result.output}</div>
     </div>
+  );
+}
+
+/**
+ * Provider-appropriate privacy reassurance shown below the textarea
+ * (M7.7b). Local providers get the design's "local · nothing leaves
+ * this machine" line; cloud providers get a matching cloud sentence
+ * so the user always knows where their prompt is about to travel.
+ */
+function PrivacyStrip({ provider }: { provider: AssistantProvider }): React.ReactElement {
+  const local = provider.privacyPosture === "local";
+  return (
+    <span
+      data-testid="assistant-overlay-privacy"
+      data-posture={local ? "local" : "cloud"}
+      style={PRIVACY_STRIP}
+      title={
+        local
+          ? "Nothing you type is sent off this machine."
+          : "Prompts go to a cloud API — see Settings for the exact provider."
+      }
+    >
+      <span
+        aria-hidden="true"
+        style={{ ...PRIVACY_DOT, background: local ? "var(--green)" : "var(--accent)" }}
+      />
+      {local ? "local · nothing leaves this machine" : "cloud · prompts leave your machine"}
+    </span>
   );
 }
 

@@ -28,6 +28,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   Ref,
 } from "react";
+import { useAssistantDocked } from "../lib/AssistantDockContext";
 import { useHomeDir } from "../lib/HomeDirContext";
 import { compactCwd } from "./blockFormat";
 import type { PromptLine } from "./promptRenderer";
@@ -54,6 +55,13 @@ export interface PromptStripProps {
    * its own internal styling (e.g., the focus ring).
    */
   altScreen?: boolean;
+  /**
+   * True when the assistant dock is open (M7.7b). Swaps the placeholder
+   * hint from "type a command, or ? to ask Shax" to "assistant is
+   * working beside you" — the ? shortcut isn't useful when the
+   * assistant is already visible.
+   */
+  assistantDocked?: boolean;
 }
 
 const ROW: CSSProperties = {
@@ -161,11 +169,15 @@ function styledRuns(text: string, styled: boolean[]): StyledRun[] {
 }
 
 function PromptStripInner(
-  { cwd, branch, line, onInput }: PromptStripProps,
+  { cwd, branch, line, onInput, assistantDocked: assistantDockedProp }: PromptStripProps,
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
   const hasTyping = line.text.length > 0;
   const home = useHomeDir();
+  const contextDocked = useAssistantDocked();
+  // Prop wins over context for tests that render the strip in
+  // isolation; App-level rendering always relies on context.
+  const assistantDocked = assistantDockedProp ?? contextDocked;
   const displayCwd = compactCwd(cwd, home);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -173,13 +185,18 @@ function PromptStripInner(
     // placeholder hint (M7.6). Only fires when the user hasn't typed
     // anything yet AND no modifier is held — otherwise `?` is just a
     // character (or part of a shortcut like Shift-/ for search).
+    // When the assistant dock is already open (M7.7b), the shortcut
+    // is disabled — the placeholder swaps to "assistant is working
+    // beside you" and no longer mentions `?`, so intercepting it
+    // would surprise the user.
     const isBareQuestion =
       event.key === "?" &&
       !event.metaKey &&
       !event.ctrlKey &&
       !event.altKey &&
       !hasTyping &&
-      line.cursor === 0;
+      line.cursor === 0 &&
+      !assistantDocked;
     if (isBareQuestion) {
       event.preventDefault();
       event.stopPropagation();
@@ -271,7 +288,14 @@ function PromptStripInner(
         ) : (
           <span style={LINE_TEXT_PLACEHOLDER}>
             {" "}
-            type a command, or <span style={{ fontFamily: "var(--font-mono)" }}>?</span> to ask Shax
+            {assistantDocked ? (
+              "assistant is working beside you"
+            ) : (
+              <>
+                type a command, or <span style={{ fontFamily: "var(--font-mono)" }}>?</span> to ask
+                Shax
+              </>
+            )}
           </span>
         )}
       </span>
