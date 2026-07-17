@@ -159,24 +159,54 @@ const BUBBLE_USER: CSSProperties = {
   alignSelf: "flex-end",
   // M7.7b: accent-outlined pill on the right instead of a solid
   // accent fill. Matches the design's chat-app treatment where
-  // the user's replies read as active-voice chips.
+  // the user's replies read as active-voice chips. The bubble's
+  // bottom-right corner is squared — the corner nearest the
+  // sender — so the shape reads as a speech bubble with a tail.
   background: "color-mix(in srgb, var(--accent) 12%, transparent)",
   border: "1px solid var(--accent)",
   color: "var(--fg)",
-  borderRadius: 16,
+  borderRadius: "16px 16px 4px 16px",
 };
 
+// M7.7b (design pass 2): assistant replies are plain prose — no
+// border, no background bubble. The `✦ Shax` label above each
+// assistant turn (rendered by `TurnBubble` below) does the visual
+// separation the border used to. Matches the design's "one-sided"
+// chat layout where the assistant reads like inline documentation.
 const BUBBLE_ASSISTANT: CSSProperties = {
   ...BUBBLE_BASE,
-  alignSelf: "flex-start",
-  background: "var(--pane2)",
-  border: "1px solid var(--border)",
+  alignSelf: "stretch",
+  maxWidth: "100%",
+  background: "transparent",
+  border: "none",
+  padding: "0 2px",
 };
 
 const BUBBLE_ERROR: CSSProperties = {
-  ...BUBBLE_ASSISTANT,
+  ...BUBBLE_BASE,
+  alignSelf: "flex-start",
+  background: "transparent",
+  border: "1px solid var(--red)",
   color: "var(--red)",
-  borderColor: "var(--red)",
+  padding: "8px 10px",
+};
+
+// Small "author" label rendered above every assistant + error turn so
+// the reader can tell who's speaking without a bubble border.
+const ASSISTANT_LABEL: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: "var(--fg-dim)",
+  marginBottom: 4,
+};
+
+const ASSISTANT_LABEL_STAR: CSSProperties = {
+  color: "var(--accent)",
+  fontSize: 12,
+  lineHeight: 1,
 };
 
 const INPUT_AREA: CSSProperties = {
@@ -898,8 +928,21 @@ function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
   // don't need a Markdown parser and treating them as
   // Markdown would surprise-format their own input.
   const rendersMarkdown = turn.role !== "user";
+  // Assistant + error turns get a "✦ Shax" author label above the
+  // content — the visual separation the removed border used to do.
+  // User turns don't get a label; the bubble alignment + shape are
+  // enough to signal authorship.
+  const showLabel = turn.role === "assistant" || turn.role === "error";
   return (
     <div data-testid={`assistant-overlay-turn-${turn.role}`} style={style}>
+      {showLabel && (
+        <div data-testid="assistant-overlay-author" style={ASSISTANT_LABEL}>
+          <span aria-hidden="true" style={ASSISTANT_LABEL_STAR}>
+            ✦
+          </span>
+          <span>Shax</span>
+        </div>
+      )}
       {showEllipsis ? "…" : rendersMarkdown ? <ChatMarkdown text={turn.content} /> : turn.content}
     </div>
   );

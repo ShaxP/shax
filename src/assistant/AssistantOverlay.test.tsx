@@ -505,6 +505,41 @@ describe("AssistantOverlay / M7.7b header + footer", () => {
     );
   });
 
+  it("assistant replies get a '✦ Shax' author label; user replies do not (M7.7b design pass 2)", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([
+        { kind: "text", delta: "Hello from Shax." },
+        { kind: "done", stopReason: "end_turn" },
+      ]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    // Send a user turn to trigger an assistant reply.
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "hey" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Assistant turn arrives → its bubble carries the author label.
+    await waitFor(() => {
+      const author = screen.getByTestId("assistant-overlay-author");
+      expect(author).toHaveTextContent(/shax/i);
+      // The star glyph is a `<span aria-hidden>` child; check that
+      // the ✦ character is present in the label.
+      expect(author.textContent).toContain("✦");
+    });
+    // The user turn does NOT get an author label — there's exactly
+    // one label element (on the assistant turn only).
+    expect(screen.getAllByTestId("assistant-overlay-author")).toHaveLength(1);
+  });
+
   it("privacy strip surfaces cloud posture for API-key Claude", async () => {
     vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
     vi.mocked(providerFromConfig).mockReturnValue({
