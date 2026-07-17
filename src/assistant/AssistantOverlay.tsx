@@ -29,6 +29,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL } from "./providers/claude/apiKey";
 import { DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL } from "./providers/ollama/ollama";
+import "./AssistantOverlay.css";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FEATURES, featureAvailable } from "./features";
 import { clearChatHistory, loadChatHistory, saveChatHistory } from "./history";
@@ -225,17 +226,40 @@ const INPUT_AREA: CSSProperties = {
   gap: 6,
 };
 
-const TEXTAREA: CSSProperties = {
-  width: "100%",
-  minHeight: 40,
-  maxHeight: 160,
-  padding: 8,
+// M7.7b design pass 3: the input reads as one visual field with the
+// ✦ sparks icon flush left, the textarea filling the rest. The
+// wrapper carries the border + background so the icon appears
+// inside the same box the user is typing into.
+const INPUT_FIELD: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  padding: "8px 10px",
   background: "var(--pane)",
   border: "1px solid var(--border)",
-  borderRadius: 4,
+  borderRadius: 6,
+};
+
+const INPUT_ICON: CSSProperties = {
+  color: "var(--accent)",
+  fontSize: 13,
+  lineHeight: 1.4,
+  paddingTop: 2,
+  flexShrink: 0,
+};
+
+const TEXTAREA: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 24,
+  maxHeight: 160,
+  padding: 0,
+  background: "transparent",
+  border: "none",
   color: "var(--fg)",
   fontFamily: "var(--font-ui)",
   fontSize: 13,
+  lineHeight: 1.4,
   resize: "vertical",
   outline: "none",
   boxSizing: "border-box",
@@ -887,16 +911,22 @@ export function AssistantOverlay({
           </div>
 
           <div style={INPUT_AREA}>
-            <textarea
-              ref={textareaRef}
-              data-testid="assistant-overlay-input"
-              placeholder="Ask Shax, or describe a command…"
-              value={input}
-              disabled={streaming}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleTextareaKey}
-              style={TEXTAREA}
-            />
+            <div style={INPUT_FIELD}>
+              <span aria-hidden="true" style={INPUT_ICON}>
+                ✦
+              </span>
+              <textarea
+                ref={textareaRef}
+                data-testid="assistant-overlay-input"
+                className="assistant-overlay-textarea"
+                placeholder="Ask Shax, or describe a command…"
+                value={input}
+                disabled={streaming}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleTextareaKey}
+                style={TEXTAREA}
+              />
+            </div>
             <div style={INPUT_HINT_ROW}>
               <span style={INPUT_HINT_LEFT}>
                 <span>
