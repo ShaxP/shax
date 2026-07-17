@@ -108,10 +108,13 @@ const NEW_BUTTON: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
-  padding: "3px 9px",
+  padding: "3px 10px",
   border: "1px solid var(--border-strong)",
   background: "transparent",
-  borderRadius: 4,
+  // Full pill — matches the design's rounded "+ New" affordance
+  // next to the close ✕. The provider pill and the New button now
+  // share the same corner radius.
+  borderRadius: 999,
   color: "var(--fg-dim)",
   cursor: "pointer",
   fontFamily: "var(--font-ui)",
@@ -162,8 +165,12 @@ const BUBBLE_USER: CSSProperties = {
   // the user's replies read as active-voice chips. The bubble's
   // bottom-right corner is squared — the corner nearest the
   // sender — so the shape reads as a speech bubble with a tail.
+  //
+  // 1.5px border reads a touch more present than 1px against the
+  // dark panel background — the accent gets a fair share of the
+  // pixel without shouting.
   background: "color-mix(in srgb, var(--accent) 12%, transparent)",
-  border: "1px solid var(--accent)",
+  border: "1.5px solid var(--accent)",
   color: "var(--fg)",
   borderRadius: "16px 16px 4px 16px",
 };
@@ -812,7 +819,7 @@ export function AssistantOverlay({
       <div style={HEADER}>
         <span data-testid="assistant-overlay-mark" style={HEADER_MARK}>
           <span aria-hidden="true" style={HEADER_MARK_GLYPH}>
-            +
+            ✦
           </span>
           <span>Shax</span>
         </span>
