@@ -1,0 +1,11 @@
+/*
+ * Assistant overlay styles that can't be expressed inline (M7.7b
+ * design pass 3). Right now that's just the input's placeholder
+ * colour — CSS pseudo-elements aren't reachable from React's style
+ * prop.
+ */
+
+.assistant-overlay-textarea::placeholder {
+  color: var(--fg-faint);
+  opacity: 1;
+}

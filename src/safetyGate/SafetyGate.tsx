@@ -187,6 +187,19 @@ export function SafetyGate(): React.ReactElement | null {
     panelRef.current?.focus();
   }, [pending]);
 
+  // Broadcast pending count to the App (statusline uses it for the
+  // "⚠ N approval pending" chip). Fires on every open + close so
+  // the chip appears with the modal and disappears with it. Count
+  // is 0 or 1 today — the gate only tracks a single pending — but
+  // the event carries a number for forward-compat.
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("shax:approvals-pending", {
+        detail: { count: pending === null ? 0 : 1 },
+      }),
+    );
+  }, [pending]);
+
   // Keyboard: Enter approves, Esc declines. Listener attached
   // globally so it fires regardless of what has focus.
   useEffect(() => {

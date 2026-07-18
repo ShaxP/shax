@@ -248,3 +248,41 @@ describe("PromptStrip / M7.6 additions", () => {
     expect(screen.getByTestId("prompt-cwd")).toHaveTextContent("~/dev/shax");
   });
 });
+
+describe("PromptStrip / M7.7b assistant-dock integration", () => {
+  it("swaps the placeholder when the assistant is docked", () => {
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={noop}
+        assistantDocked
+      />,
+    );
+    const line = screen.getByTestId("prompt-line");
+    expect(line).toHaveTextContent(/assistant is working beside you/i);
+    expect(line).not.toHaveTextContent(/type a command/i);
+  });
+
+  it("does NOT intercept ? when the assistant is docked", () => {
+    // The placeholder no longer mentions ? once the dock is open,
+    // so intercepting it would surprise the user. ? types normally.
+    const onInput = vi.fn();
+    const listener = vi.fn();
+    window.addEventListener("shax:assistant-open", listener);
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        onInput={onInput}
+        assistantDocked
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("prompt-strip"), { key: "?" });
+    expect(listener).not.toHaveBeenCalled();
+    expect(onInput).toHaveBeenCalledTimes(1);
+    window.removeEventListener("shax:assistant-open", listener);
+  });
+});

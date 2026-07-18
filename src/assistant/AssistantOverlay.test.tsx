@@ -237,7 +237,7 @@ describe("AssistantOverlay", () => {
     );
   });
 
-  it("shows the ⌂ local posture badge for local providers", async () => {
+  it("shows the local privacy strip for local providers (M7.7b)", async () => {
     vi.mocked(getAssistantConfig).mockResolvedValue({
       ...BASE_CONFIG,
       provider: "ollama",
@@ -256,8 +256,13 @@ describe("AssistantOverlay", () => {
         targetPtyId={null}
       />,
     );
-    const badge = await screen.findByTestId("assistant-overlay-posture");
-    expect(badge).toHaveTextContent("local");
+    // Header pill carries the provider name (ollama / claude); the
+    // posture line moved to the bottom-of-input privacy strip.
+    const provider = await screen.findByTestId("assistant-overlay-provider");
+    expect(provider).toHaveTextContent(/ollama/i);
+    const privacy = await screen.findByTestId("assistant-overlay-privacy");
+    expect(privacy).toHaveAttribute("data-posture", "local");
+    expect(privacy).toHaveTextContent(/nothing leaves this machine/i);
   });
 
   it("Escape closes via onClose", async () => {
@@ -430,5 +435,128 @@ describe("AssistantOverlay", () => {
       const bubbles = screen.getAllByTestId("assistant-overlay-turn-assistant");
       expect(bubbles[bubbles.length - 1]).toHaveTextContent("All clean.");
     });
+  });
+});
+
+describe("AssistantOverlay / M7.7b header + footer", () => {
+  it("renders the Shax mark, the provider pill, and the close button", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    // Mark visible; provider pill carries the display name; close
+    // button exposes an aria-label so it's tappable.
+    expect(await screen.findByTestId("assistant-overlay-mark")).toHaveTextContent(/shax/i);
+    expect(await screen.findByTestId("assistant-overlay-provider")).toHaveTextContent(/claude/i);
+    expect(await screen.findByTestId("assistant-overlay-close")).toHaveAttribute(
+      "aria-label",
+      "Close assistant",
+    );
+  });
+
+  it("shows the goal-mode stub button (disabled) in the input footer", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const goal = await screen.findByTestId("assistant-overlay-goal-mode");
+    expect(goal).toBeDisabled();
+    expect(goal).toHaveTextContent(/goal mode/i);
+  });
+
+  it("input placeholder matches the design copy", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    expect(await screen.findByTestId("assistant-overlay-input")).toHaveAttribute(
+      "placeholder",
+      "Ask Shax, or describe a command…",
+    );
+  });
+
+  it("assistant replies get a '✦ Shax' author label; user replies do not (M7.7b design pass 2)", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([
+        { kind: "text", delta: "Hello from Shax." },
+        { kind: "done", stopReason: "end_turn" },
+      ]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    // Send a user turn to trigger an assistant reply.
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "hey" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Assistant turn arrives → its bubble carries the author label.
+    await waitFor(() => {
+      const author = screen.getByTestId("assistant-overlay-author");
+      expect(author).toHaveTextContent(/shax/i);
+      // The star glyph is a `<span aria-hidden>` child; check that
+      // the ✦ character is present in the label.
+      expect(author.textContent).toContain("✦");
+    });
+    // The user turn does NOT get an author label — there's exactly
+    // one label element (on the assistant turn only).
+    expect(screen.getAllByTestId("assistant-overlay-author")).toHaveLength(1);
+  });
+
+  it("privacy strip surfaces cloud posture for API-key Claude", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const privacy = await screen.findByTestId("assistant-overlay-privacy");
+    expect(privacy).toHaveAttribute("data-posture", "cloud");
+    expect(privacy).toHaveTextContent(/prompts leave your machine/i);
   });
 });

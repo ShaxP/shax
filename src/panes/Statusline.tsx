@@ -19,6 +19,20 @@ import type { CSSProperties } from "react";
 export interface StatuslineProps {
   cwd: string | null;
   branch: string | null;
+  /**
+   * True when the assistant dock is open (M7.7b). Adds a small "+
+   * assistant active" indicator on the right so users know the
+   * dock is engaged even when the panel is scrolled or the pane
+   * is fullscreen-y.
+   */
+  assistantActive?: boolean;
+  /**
+   * Number of assistant tool calls waiting for user approval
+   * (M7.7b). Rendered as an amber "⚠ N approval pending" chip
+   * on the right so the user can find the pending modal from any
+   * pane. `0` hides the chip.
+   */
+  approvalsPending?: number;
 }
 
 const ROW: CSSProperties = {
@@ -69,7 +83,12 @@ const RIGHT_CELL: CSSProperties = {
   borderLeft: "1px solid var(--border)",
 };
 
-export function Statusline({ cwd, branch }: StatuslineProps): React.ReactElement {
+export function Statusline({
+  cwd,
+  branch,
+  assistantActive = false,
+  approvalsPending = 0,
+}: StatuslineProps): React.ReactElement {
   return (
     <div data-testid="statusline" style={ROW}>
       <span style={MODE_PILL} data-testid="statusline-mode">
@@ -87,6 +106,29 @@ export function Statusline({ cwd, branch }: StatuslineProps): React.ReactElement
       <span style={RIGHT_CELL}>
         <span style={{ color: "var(--accent)" }}>✦</span> ⌘K Ask Shax
       </span>
+      {approvalsPending > 0 && (
+        <span
+          data-testid="statusline-approvals-pending"
+          style={{ ...RIGHT_CELL, color: "var(--amber)" }}
+          title={
+            approvalsPending === 1
+              ? "One assistant command is waiting for your approval."
+              : `${approvalsPending} assistant commands are waiting for your approval.`
+          }
+        >
+          <span aria-hidden="true">⚠</span> {approvalsPending} approval
+          {approvalsPending === 1 ? "" : "s"} pending
+        </span>
+      )}
+      {assistantActive && (
+        <span
+          data-testid="statusline-assistant-active"
+          style={{ ...RIGHT_CELL, color: "var(--accent)" }}
+          title="The assistant dock is open."
+        >
+          <span aria-hidden="true">+</span> assistant active
+        </span>
+      )}
       <span style={RIGHT_CELL}>
         shax{" "}
         <span
