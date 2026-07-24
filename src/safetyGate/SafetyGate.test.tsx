@@ -114,6 +114,58 @@ describe("SafetyGate", () => {
     window.removeEventListener("shax:emit-command-approved", approvedSpy);
   });
 
+  // M7.7c — focus routing after the gate closes.
+  it("routes focus to the assistant textarea after approving an AI-sourced command", () => {
+    render(<SafetyGate />);
+    const focusInput = vi.fn();
+    const focusPane = vi.fn();
+    window.addEventListener("shax:assistant-focus-input", focusInput);
+    window.addEventListener("shax:refocus-pane", focusPane);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: { paneId: "pty-1", command: "ls", source: "ai", reason: "list files" },
+          }),
+        );
+      });
+      act(() => {
+        fireEvent.click(screen.getByTestId("safety-gate-approve"));
+      });
+      expect(focusInput).toHaveBeenCalledTimes(1);
+      expect(focusPane).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:assistant-focus-input", focusInput);
+      window.removeEventListener("shax:refocus-pane", focusPane);
+    }
+  });
+
+  it("routes focus back to the terminal pane after approving a widget-sourced command", () => {
+    render(<SafetyGate />);
+    const focusInput = vi.fn();
+    const focusPane = vi.fn();
+    window.addEventListener("shax:assistant-focus-input", focusInput);
+    window.addEventListener("shax:refocus-pane", focusPane);
+    try {
+      // Destructive so a modal opens for widget approval.
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: { paneId: "pty-1", command: "rm -rf /tmp/x", source: "widget" },
+          }),
+        );
+      });
+      act(() => {
+        fireEvent.click(screen.getByTestId("safety-gate-approve"));
+      });
+      expect(focusPane).toHaveBeenCalledTimes(1);
+      expect(focusInput).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:assistant-focus-input", focusInput);
+      window.removeEventListener("shax:refocus-pane", focusPane);
+    }
+  });
+
   it("shows a modal for AI-sourced commands even when non-destructive", () => {
     render(<SafetyGate />);
     act(() => {

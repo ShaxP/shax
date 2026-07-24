@@ -217,6 +217,10 @@ export function SafetyGate(): React.ReactElement | null {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
+    // approve/decline read pendingRef.current so the stale closure
+    // captured here is safe; only re-arm when the pending state
+    // transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending]);
 
   function approve(): void {
@@ -225,12 +229,27 @@ export function SafetyGate(): React.ReactElement | null {
     const source: EmitSource = p.detail.source ?? "widget";
     dispatchApproved(p.detail, source);
     setPending(null);
-    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+    restoreFocus(source);
   }
 
   function decline(): void {
+    const p = pendingRef.current;
+    const source: EmitSource = p?.detail.source ?? "widget";
     setPending(null);
-    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+    restoreFocus(source);
+  }
+
+  // Where focus should land once the gate closes. AI-sourced
+  // approvals stay in the conversation so the follow-up reply can
+  // be typed against without a stray click; widget / palette
+  // approvals return the user to the terminal's prompt strip
+  // (M7.7c).
+  function restoreFocus(source: EmitSource): void {
+    if (source === "ai") {
+      window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
+    } else {
+      window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+    }
   }
 
   if (pending === null) return null;
