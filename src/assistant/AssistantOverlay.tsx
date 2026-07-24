@@ -43,7 +43,11 @@ import {
 } from "./tools";
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
 import { getBlockOutput } from "../lib/ipc";
-import type { ApprovalPendingDetail, ApprovalResolveDetail } from "../safetyGate/SafetyGate";
+import type {
+  ApprovalPendingDetail,
+  ApprovalRejectedDetail,
+  ApprovalResolveDetail,
+} from "../safetyGate/SafetyGate";
 
 // M7.7a: no longer `position: fixed`. The parent (App's `<main>`) lays
 // out `[tab-area | divider | assistant-panel]` as a flex row; this
@@ -387,9 +391,9 @@ interface ChatTurn {
   content: string;
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
-  /** For tool-proposal turns: the model's `run_command` call
-   *  the user is being asked to approve (or the executed
-   *  result if approval already happened). */
+  /** For tool-proposal turns: the model's tool call the user is
+   *  being asked to approve (or the executed result if approval
+   *  already happened). */
   toolCall?: {
     id: string;
     name: string;
@@ -405,6 +409,12 @@ interface ChatTurn {
     /** Only set when kind === "destructive" — surfaces the same
      *  reason the modal used to show in its headline. */
     destructiveReason?: string | null;
+    /** Which card treatment to render (M7.7e):
+     *   - `run`   — APPROVAL REQUIRED (amber, Approve / Decline).
+     *   - `probe` — SUGGESTED — READ ONLY (green, single Run).
+     *  Defaults to `run` for backward compat with restored
+     *  history turns. */
+    kind?: "run" | "probe";
   };
   /** For tool-result turns: the structured result fed back
    *  to the model. Rendered as a small preview under the
@@ -732,6 +742,7 @@ export function AssistantOverlay({
       // command runs (or is dropped) → result card appears.
       for (const call of collectedToolCalls) {
         const proposalTurnId = nextId();
+        const kind: "run" | "probe" = call.name === "probe" ? "probe" : "run";
         workingTurns = [
           ...workingTurns,
           {
@@ -744,6 +755,7 @@ export function AssistantOverlay({
               command: extractCommand(call),
               reason: extractReason(call),
               status: "pending",
+              kind,
             },
           },
         ];
@@ -810,7 +822,7 @@ export function AssistantOverlay({
         destructiveReason: null,
       };
     }
-    if (call.name !== "run_command" || command.length === 0) {
+    if ((call.name !== "run_command" && call.name !== "probe") || command.length === 0) {
       return {
         result: {
           exit_code: null,
@@ -822,6 +834,7 @@ export function AssistantOverlay({
         destructiveReason: null,
       };
     }
+    const isProbe = call.name === "probe";
 
     const paneId = targetPtyId;
     const start = performance.now();
@@ -846,20 +859,46 @@ export function AssistantOverlay({
     };
     window.addEventListener("shax:approval-pending", onPending);
 
-    // Race: block-complete (approved happy path) vs
-    // approval-resolve{decline} (early decline) vs 5-min timeout.
-    // On approve we don't return early — we still need the block
-    // output — but we flip the card's status right away so the
-    // buttons disappear.
+    // Race: block-complete (happy path) vs approval-resolve{decline}
+    // (early decline) vs approval-rejected (probe with a destructive
+    // command — M7.7e) vs 5-min timeout. Emit timing depends on kind:
+    //   - run_command → emit upfront, wait for the user's Approve
+    //     click via approval-resolve; keep waiting for block-complete.
+    //   - probe → wait for the user's Run click (approval-resolve
+    //     {approve}), THEN emit with `readonly: true`. Gate silent-
+    //     forwards non-destructive; rejects destructive outright.
     const settled = await new Promise<
       | { kind: "settled"; blockId: string; duration_ms: number }
       | { kind: "declined" }
+      | { kind: "rejected"; reason: string }
       | { kind: "timeout" }
     >((resolve) => {
       let done = false;
+      let emitted = false;
       const cleanup = (): void => {
         window.removeEventListener("shax:block-complete", onBlock);
         window.removeEventListener("shax:approval-resolve", onResolve);
+        window.removeEventListener("shax:approval-rejected", onRejected);
+      };
+      const emit = (): void => {
+        if (emitted) return;
+        emitted = true;
+        const emitDetail: {
+          paneId: string;
+          command: string;
+          source: "ai";
+          reason: string;
+          toolCallId: string;
+          readonly?: boolean;
+        } = {
+          paneId,
+          command,
+          source: "ai",
+          reason,
+          toolCallId: call.id,
+        };
+        if (isProbe) emitDetail.readonly = true;
+        window.dispatchEvent(new CustomEvent("shax:emit-command", { detail: emitDetail }));
       };
       const onBlock = (e: Event): void => {
         const detail = (
@@ -892,29 +931,27 @@ export function AssistantOverlay({
                 : t,
             ),
           );
+          // For probe the emit was deferred until this click.
+          if (isProbe) emit();
           return;
         }
         done = true;
         cleanup();
         resolve({ kind: "declined" });
       };
+      const onRejected = (e: Event): void => {
+        const detail = (e as CustomEvent<ApprovalRejectedDetail>).detail;
+        if (detail.id !== call.id) return;
+        done = true;
+        cleanup();
+        resolve({ kind: "rejected", reason: detail.reason });
+      };
       window.addEventListener("shax:block-complete", onBlock);
       window.addEventListener("shax:approval-resolve", onResolve);
-      // Dispatch AFTER listeners are attached so the gate's
-      // synchronous `shax:approval-pending` broadcast (via
-      // onPending, above) is guaranteed to be caught. Do NOT
-      // await between attach and dispatch.
-      window.dispatchEvent(
-        new CustomEvent("shax:emit-command", {
-          detail: {
-            paneId,
-            command,
-            source: "ai",
-            reason,
-            toolCallId: call.id,
-          },
-        }),
-      );
+      window.addEventListener("shax:approval-rejected", onRejected);
+      // run_command emits upfront so the APPROVAL card can show the
+      // gate's classification; probe waits for the user's Run click.
+      if (!isProbe) emit();
       setTimeout(
         () => {
           if (done) return;
@@ -933,6 +970,18 @@ export function AssistantOverlay({
           exit_code: null,
           duration_ms: null,
           output: "Declined by user.",
+          truncated: false,
+        },
+        status: "declined",
+        destructiveReason,
+      };
+    }
+    if (settled.kind === "rejected") {
+      return {
+        result: {
+          exit_code: null,
+          duration_ms: null,
+          output: `Refused: ${settled.reason}. Try run_command if the user should approve.`,
           truncated: false,
         },
         status: "declined",
@@ -1235,6 +1284,15 @@ const TOOL_PROPOSAL_BUBBLE_DESTRUCTIVE: CSSProperties = {
   border: "1px solid var(--red)",
 };
 
+// M7.7e — SUGGESTED — READ ONLY card. Green border + tint,
+// single Run button, `✓ no side effects` chip. Renders when the
+// model calls the `probe` tool.
+const TOOL_PROPOSAL_BUBBLE_PROBE: CSSProperties = {
+  ...TOOL_PROPOSAL_BUBBLE,
+  background: "color-mix(in srgb, var(--green) 10%, transparent)",
+  border: "1px solid var(--green)",
+};
+
 const TOOL_PROPOSAL_BUBBLE_SETTLED: CSSProperties = {
   ...TOOL_PROPOSAL_BUBBLE,
   background: "var(--pane2)",
@@ -1275,6 +1333,29 @@ const TOOL_PROPOSAL_BUTTON_APPROVE_DESTRUCTIVE: CSSProperties = {
   borderColor: "var(--red)",
   color: "#fff",
   fontWeight: 600,
+};
+
+// Green Run button for the SUGGESTED — READ ONLY card (M7.7e).
+const TOOL_PROPOSAL_BUTTON_RUN_PROBE: CSSProperties = {
+  ...TOOL_PROPOSAL_BUTTON,
+  background: "var(--green)",
+  borderColor: "var(--green)",
+  color: "#fff",
+  fontWeight: 600,
+};
+
+// Small `✓ no side effects` chip on the SUGGESTED card header.
+const PROBE_CHIP: CSSProperties = {
+  marginLeft: "auto",
+  padding: "1px 8px",
+  borderRadius: 999,
+  fontSize: 10.5,
+  fontFamily: "var(--font-ui)",
+  fontWeight: 500,
+  color: "var(--green)",
+  border: "1px solid var(--green)",
+  textTransform: "none",
+  letterSpacing: 0,
 };
 
 // Small chord glyph shown on the right of the Approve button when
@@ -1391,11 +1472,18 @@ function ToolProposalBubble({
   const destructiveReason = turn.toolCall?.destructiveReason ?? null;
   const isDestructive = destructiveReason !== null;
   const isPending = status === "pending";
+  const isProbe = turn.toolCall?.kind === "probe" && !isDestructive;
 
+  // Bubble treatment. SUGGESTED (green) wins over APPROVAL
+  // (amber) while pending; destructive still overrides everything
+  // (a probe that turns out destructive gets refused; its card
+  // stays in the SUGGESTED style but transitions to `declined`).
   const bubbleStyle = isPending
-    ? isDestructive
-      ? TOOL_PROPOSAL_BUBBLE_DESTRUCTIVE
-      : TOOL_PROPOSAL_BUBBLE
+    ? isProbe
+      ? TOOL_PROPOSAL_BUBBLE_PROBE
+      : isDestructive
+        ? TOOL_PROPOSAL_BUBBLE_DESTRUCTIVE
+        : TOOL_PROPOSAL_BUBBLE
     : TOOL_PROPOSAL_BUBBLE_SETTLED;
 
   let headerColor: string;
@@ -1403,8 +1491,8 @@ function ToolProposalBubble({
   let headerText: string;
   if (status === "approved") {
     headerColor = "var(--fg-faint)";
-    headerIcon = "✓";
-    headerText = "Approved";
+    headerIcon = isProbe ? "✓" : "✓";
+    headerText = isProbe ? "Ran" : "Approved";
   } else if (status === "declined") {
     headerColor = "var(--fg-faint)";
     headerIcon = "✕";
@@ -1413,6 +1501,10 @@ function ToolProposalBubble({
     headerColor = "var(--red)";
     headerIcon = "⚠";
     headerText = `Destructive: ${destructiveReason}`;
+  } else if (isProbe) {
+    headerColor = "var(--green)";
+    headerIcon = "✓";
+    headerText = "Suggested — read only";
   } else {
     headerColor = "var(--amber)";
     headerIcon = "⚠";
@@ -1432,12 +1524,18 @@ function ToolProposalBubble({
       data-testid="assistant-overlay-turn-tool_proposal"
       data-status={status}
       data-destructive={isDestructive ? "true" : "false"}
+      data-kind={turn.toolCall?.kind ?? "run"}
       style={bubbleStyle}
     >
       <div style={{ ...TOOL_PROPOSAL_HEADER, color: headerColor }}>
         <span aria-hidden="true">{headerIcon}</span>
         <span>{headerText}</span>
-        {isPending && (
+        {isPending && isProbe && (
+          <span data-testid="assistant-overlay-turn-tool_proposal-probe-chip" style={PROBE_CHIP}>
+            ✓ no side effects
+          </span>
+        )}
+        {isPending && !isProbe && (
           <span
             data-testid="assistant-overlay-turn-tool_proposal-summary"
             style={TOOL_PROPOSAL_HEADER_META}
@@ -1450,7 +1548,29 @@ function ToolProposalBubble({
         <div style={TOOL_META}>{turn.toolCall.reason}</div>
       )}
       <div style={TOOL_COMMAND}>{command}</div>
-      {isPending && (
+      {isPending && isProbe && (
+        <div style={TOOL_PROPOSAL_ACTIONS}>
+          <button
+            data-testid="assistant-overlay-turn-tool_proposal-run"
+            type="button"
+            style={TOOL_PROPOSAL_BUTTON_RUN_PROBE}
+            onClick={() => emitResolve("approve")}
+          >
+            <span>Run</span>
+            {isActivePending && (
+              <span
+                data-testid="assistant-overlay-turn-tool_proposal-run-mnemonic"
+                aria-hidden="true"
+                style={APPROVE_MNEMONIC}
+                title="Alt+Enter to run"
+              >
+                ⌥⏎
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+      {isPending && !isProbe && (
         <div style={TOOL_PROPOSAL_ACTIONS}>
           <button
             data-testid="assistant-overlay-turn-tool_proposal-decline"

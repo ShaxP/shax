@@ -42,6 +42,14 @@ export interface EmitCommandDetail {
    *  to the tool-call id so its APPROVAL card can drive the
    *  approve / decline exit inline (M7.7d). */
   toolCallId?: string;
+  /** True when the source claims the command has no side
+   *  effects (M7.7e — the `probe` tool). The user's Run click
+   *  IS the confirmation for pure reads (spec §10), so the
+   *  gate silent-forwards non-destructive readonly emits.
+   *  Destructive commands marked readonly are refused via
+   *  `shax:approval-rejected` — the model must retry with
+   *  `run_command`, whose card has a real Approve gate. */
+  readonly?: boolean;
 }
 
 /** Detail for `shax:approval-pending` — fired by the gate when
@@ -65,6 +73,15 @@ export interface ApprovalPendingDetail {
 export interface ApprovalResolveDetail {
   id: string;
   decision: "approve" | "decline";
+}
+
+/** Detail for `shax:approval-rejected` — fired by the gate when
+ *  it refuses a proposal outright (M7.7e — destructive commands
+ *  marked readonly). The assistant surfaces this as a synthetic
+ *  error tool_result so the model can retry via `run_command`. */
+export interface ApprovalRejectedDetail {
+  id: string;
+  reason: string;
 }
 
 /** Wire-format for the approved event that TerminalPane
@@ -195,6 +212,25 @@ export function SafetyGate(): React.ReactElement | null {
       }
       const source: EmitSource = detail.source ?? "widget";
       const classification = classifyCommand(detail.command, source);
+      // M7.7e — read-only fast path. The assistant's `probe`
+      // tool sets `readonly: true` after the user's Run click,
+      // which IS the confirmation for pure reads (spec §10).
+      // Non-destructive readonly emits forward silently through
+      // the chokepoint. Destructive readonly emits are refused
+      // outright so the model must retry with `run_command`,
+      // whose card has a real Approve gate.
+      if (detail.readonly === true) {
+        if (classification === "destructive") {
+          const rejected: ApprovalRejectedDetail = {
+            id: detail.toolCallId ?? "",
+            reason: destructiveReason(detail.command) ?? "destructive command marked read-only",
+          };
+          window.dispatchEvent(new CustomEvent("shax:approval-rejected", { detail: rejected }));
+          return;
+        }
+        dispatchApproved(detail, source);
+        return;
+      }
       if (classification === "routine") {
         // Silent-forward. Every routine emit still passes
         // through here — this is the chokepoint. It just
