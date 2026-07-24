@@ -51,7 +51,7 @@ function colorVar(color: SandboxColor | undefined): string {
     case "cyan":
       return "var(--cyan)";
     case "magenta":
-      return "var(--magenta, #d090d0)";
+      return "var(--magenta)";
   }
 }
 

@@ -79,7 +79,7 @@ function valueStyle(kind: JsonNodeKind): CSSProperties {
     case "number":
       return { color: "var(--amber)" };
     case "boolean":
-      return { color: "var(--magenta, #d090d0)" };
+      return { color: "var(--magenta)" };
     case "null":
       return { color: "var(--fg-faint)", fontStyle: "italic" };
     case "object":
