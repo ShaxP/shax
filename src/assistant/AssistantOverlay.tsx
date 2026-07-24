@@ -470,11 +470,13 @@ export function AssistantOverlay({
     const refresh = (): void => {
       void getAssistantConfig().then(setConfig);
     };
-    // The settings modal doesn't emit a dedicated
-    // "config-changed" event yet; re-read on focus-pane
-    // signals + on window focus as a low-cost heuristic.
-    window.addEventListener("shax:refocus-pane", refresh);
-    return () => window.removeEventListener("shax:refocus-pane", refresh);
+    // Re-read config when the settings modal saves. Previously
+    // piggy-backed on `shax:refocus-pane`, but that fired for
+    // unrelated reasons (assistant Esc bounce) and re-minted the
+    // provider object, which triggered the auto-focus effect and
+    // yanked focus straight back onto the textarea (M7.7c fix).
+    window.addEventListener("shax:preference-changed", refresh);
+    return () => window.removeEventListener("shax:preference-changed", refresh);
   }, []);
 
   const resolution = useMemo(() => {
@@ -495,18 +497,30 @@ export function AssistantOverlay({
     return "";
   }, [config, provider]);
 
-  // Focus the panel on mount as a fallback; close via
-  // Escape. When a provider is available the textarea takes
-  // focus instead (see the effect below) so the user can
-  // start typing without an extra click.
+  // Focus the panel on mount as a fallback. When a provider
+  // is available the textarea takes focus instead (see the
+  // effect below) so the user can start typing without an
+  // extra click. Split from the Escape handler so a parent
+  // re-render — which changes the `onClose` reference — does
+  // NOT re-focus the panel and steal focus back from whatever
+  // child currently owns it (e.g. the textarea).
   useEffect(() => {
     panelRef.current?.focus();
+  }, []);
+
+  // Escape from anywhere in the dock EXCEPT the textarea closes the
+  // panel (M7.7c). The textarea handles its own Escape via React's
+  // onKeyDown — see `handleTextareaKey` — where it bounces focus back
+  // to the active pane instead of closing. Fully closing still uses
+  // ⌘K / ? / the ✕ button.
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      const target = e.target;
+      if (target instanceof Element && target === textareaRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -520,6 +534,32 @@ export function AssistantOverlay({
     if (provider === null) return;
     textareaRef.current?.focus();
   }, [provider]);
+
+  // ⌘K from the terminal bounces focus back into the assistant
+  // textarea (M7.7c). App fires this event when the dock is
+  // already open but the input doesn't have focus.
+  useEffect(() => {
+    const onFocusInput = (): void => {
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("shax:assistant-focus-input", onFocusInput);
+    return () => window.removeEventListener("shax:assistant-focus-input", onFocusInput);
+  }, []);
+
+  // The textarea is `disabled={streaming}` so it can't be typed into
+  // mid-response. Browsers blur a focused element when it becomes
+  // disabled — without this effect focus lands nowhere and xterm's
+  // own focus behaviour tends to grab it, dropping the user into
+  // the terminal after every reply (M7.7c). Only reclaim focus when
+  // the disable orphaned it (activeElement is body / null); if the
+  // user has meanwhile clicked or Esc'd elsewhere, respect that.
+  useEffect(() => {
+    if (streaming) return;
+    if (provider === null) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    textareaRef.current?.focus();
+  }, [streaming, provider]);
 
   // Auto-scroll to bottom as messages / streaming deltas
   // arrive.
@@ -822,6 +862,16 @@ export function AssistantOverlay({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void sendPrompt(input);
+      return;
+    }
+    // Escape from the textarea bounces focus to the active pane's
+    // prompt strip; the dock stays open (M7.7c). Bound here on the
+    // element rather than the window listener so no capture-order
+    // race between overlays can swallow it.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
     }
   };
 
@@ -924,6 +974,20 @@ export function AssistantOverlay({
                 disabled={streaming}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleTextareaKey}
+                onFocus={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:assistant-input-focus", {
+                      detail: { focused: true },
+                    }),
+                  );
+                }}
+                onBlur={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:assistant-input-focus", {
+                      detail: { focused: false },
+                    }),
+                  );
+                }}
                 style={TEXTAREA}
               />
             </div>
@@ -931,6 +995,12 @@ export function AssistantOverlay({
               <span style={INPUT_HINT_LEFT}>
                 <span>
                   <kbd style={KBD_INLINE}>⏎</kbd>send
+                </span>
+                <span
+                  data-testid="assistant-overlay-esc-hint"
+                  title="Return focus to the terminal without closing the assistant."
+                >
+                  <kbd style={KBD_INLINE}>esc</kbd>terminal
                 </span>
                 <button
                   data-testid="assistant-overlay-goal-mode"

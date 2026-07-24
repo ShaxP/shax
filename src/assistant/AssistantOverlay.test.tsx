@@ -265,7 +265,37 @@ describe("AssistantOverlay", () => {
     expect(privacy).toHaveTextContent(/nothing leaves this machine/i);
   });
 
-  it("Escape closes via onClose", async () => {
+  // M7.7c — Escape from the textarea bounces focus to the pane rather
+  // than closing the dock (vim-style exit-INSERT). Handled directly on
+  // the textarea via React's onKeyDown so no capture-order race with
+  // other overlays can eat it.
+  it("Escape from the textarea fires shax:refocus-pane and keeps the dock open", async () => {
+    const onClose = vi.fn();
+    mockClaudeProvider([]);
+    const refocuses = vi.fn();
+    window.addEventListener("shax:refocus-pane", refocuses);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={onClose}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId={null}
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      await waitFor(() => expect(document.activeElement).toBe(input));
+      // Dispatch on the textarea so React's onKeyDown fires directly.
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(refocuses).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:refocus-pane", refocuses);
+    }
+  });
+
+  it("Escape closes via onClose when focus is off the textarea", async () => {
     const onClose = vi.fn();
     mockClaudeProvider([]);
     render(
@@ -277,7 +307,10 @@ describe("AssistantOverlay", () => {
         targetPtyId={null}
       />,
     );
-    await screen.findByTestId("assistant-overlay-input");
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // Move focus away from the textarea before pressing Escape.
+    act(() => input.blur());
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
@@ -558,5 +591,96 @@ describe("AssistantOverlay / M7.7b header + footer", () => {
     const privacy = await screen.findByTestId("assistant-overlay-privacy");
     expect(privacy).toHaveAttribute("data-posture", "cloud");
     expect(privacy).toHaveTextContent(/prompts leave your machine/i);
+  });
+
+  // M7.7c — regression: a parent re-render (which changes `onClose`'s
+  // reference every time) must NOT steal focus back from the textarea.
+  it("keeps textarea focus across parent re-renders that change onClose", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    const { rerender } = render(
+      <AssistantOverlay
+        onClose={() => {}}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // Fresh onClose reference — mimics App re-rendering on unrelated state.
+    rerender(
+      <AssistantOverlay
+        onClose={() => {}}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    expect(document.activeElement).toBe(input);
+  });
+
+  // M7.7c — INSERT/NORMAL mode indicator
+  it("emits shax:assistant-input-focus on textarea focus and blur", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    const events: boolean[] = [];
+    const onFocus = (e: Event): void => {
+      const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
+      if (typeof detail?.focused === "boolean") events.push(detail.focused);
+    };
+    window.addEventListener("shax:assistant-input-focus", onFocus);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId={null}
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      // The overlay auto-focuses on mount once the provider resolves,
+      // so at least one focus event should already have landed.
+      await waitFor(() => expect(events).toContain(true));
+      fireEvent.blur(input);
+      await waitFor(() => expect(events[events.length - 1]).toBe(false));
+      fireEvent.focus(input);
+      await waitFor(() => expect(events[events.length - 1]).toBe(true));
+    } finally {
+      window.removeEventListener("shax:assistant-input-focus", onFocus);
+    }
+  });
+
+  // M7.7c — ⌘K from the terminal fires shax:assistant-focus-input to
+  // bounce focus back into the textarea (symmetric with Escape).
+  it("shax:assistant-focus-input event moves focus to the textarea", async () => {
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    act(() => input.blur());
+    expect(document.activeElement).not.toBe(input);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
+    });
+    expect(document.activeElement).toBe(input);
   });
 });

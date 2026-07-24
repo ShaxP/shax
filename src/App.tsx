@@ -478,6 +478,24 @@ export default function App(): React.ReactElement {
     window.addEventListener("shax:approvals-pending", onPending);
     return () => window.removeEventListener("shax:approvals-pending", onPending);
   }, []);
+  // M7.7c: statusline modal indicator. INSERT while the assistant
+  // input owns focus, NORMAL otherwise. AssistantOverlay's textarea
+  // publishes `shax:assistant-input-focus` on focus / blur.
+  const [assistantInputFocused, setAssistantInputFocused] = useState(false);
+  useEffect(() => {
+    const onFocus = (e: Event): void => {
+      const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
+      setAssistantInputFocused(detail?.focused === true);
+    };
+    window.addEventListener("shax:assistant-input-focus", onFocus);
+    return () => window.removeEventListener("shax:assistant-input-focus", onFocus);
+  }, []);
+  // Closing the dock unmounts the textarea; the browser usually
+  // fires blur on unmount but we clamp here so a race can't leave
+  // the pill stuck on INSERT after the panel is gone.
+  useEffect(() => {
+    if (!assistantOpen) setAssistantInputFocused(false);
+  }, [assistantOpen]);
   // Guard so the persistence effect doesn't overwrite stored prefs with
   // the default state during App's first render (before loadPreferences
   // resolves). Flipped inside the boot loader below.
@@ -574,6 +592,13 @@ export default function App(): React.ReactElement {
   // in-buffer search keymap (from @codemirror/search) handles it.
   const viewerOpenRef = useRef(false);
   viewerOpenRef.current = viewerTarget !== null;
+  // Mirror assistant open + input-focus state so the capture-phase
+  // ⌘K handler (registered with [] deps for stability) can read the
+  // latest values (M7.7c).
+  const assistantOpenRef = useRef(assistantOpen);
+  assistantOpenRef.current = assistantOpen;
+  const assistantInputFocusedRef = useRef(assistantInputFocused);
+  assistantInputFocusedRef.current = assistantInputFocused;
 
   const handleNew = useCallback((): void => {
     dispatch({ type: "add_tab" });
@@ -676,11 +701,20 @@ export default function App(): React.ReactElement {
         return;
       }
       if (e.key === "k" || e.key === "K") {
-        // Cmd/Ctrl+K toggles the assistant overlay. Spec
-        // §09 explicitly reserves this shortcut for the
-        // assistant.
+        // Cmd/Ctrl+K bounces focus toward the assistant. Spec §09
+        // reserves this shortcut for the assistant. Behaviour:
+        //   - closed → open (mount effect auto-focuses the textarea)
+        //   - open + textarea NOT focused → focus the textarea
+        //   - open + textarea IS focused → close
+        // Symmetric to Escape, which bounces the other way.
         e.preventDefault();
-        setAssistantOpen((prev) => !prev);
+        if (!assistantOpenRef.current) {
+          setAssistantOpen(true);
+        } else if (assistantInputFocusedRef.current) {
+          setAssistantOpen(false);
+        } else {
+          window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
+        }
         return;
       }
       if (e.key === "f" || e.key === "F") {
@@ -891,6 +925,7 @@ export default function App(): React.ReactElement {
                 : (activeFocused?.cwd ?? null)
             }
             branch={activeFocused?.branch ?? null}
+            mode={assistantInputFocused ? "INSERT" : "NORMAL"}
             assistantActive={assistantOpen}
             approvalsPending={approvalsPending}
           />
