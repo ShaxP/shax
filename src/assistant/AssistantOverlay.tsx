@@ -546,6 +546,21 @@ export function AssistantOverlay({
     return () => window.removeEventListener("shax:assistant-focus-input", onFocusInput);
   }, []);
 
+  // The textarea is `disabled={streaming}` so it can't be typed into
+  // mid-response. Browsers blur a focused element when it becomes
+  // disabled — without this effect focus lands nowhere and xterm's
+  // own focus behaviour tends to grab it, dropping the user into
+  // the terminal after every reply (M7.7c). Only reclaim focus when
+  // the disable orphaned it (activeElement is body / null); if the
+  // user has meanwhile clicked or Esc'd elsewhere, respect that.
+  useEffect(() => {
+    if (streaming) return;
+    if (provider === null) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    textareaRef.current?.focus();
+  }, [streaming, provider]);
+
   // Auto-scroll to bottom as messages / streaming deltas
   // arrive.
   useEffect(() => {
