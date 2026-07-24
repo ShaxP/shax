@@ -464,6 +464,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
     setStatus(null);
     try {
       await setAssistantConfig(next);
+      // Let the assistant overlay refresh its provider so the new
+      // config takes effect without a reload.
+      window.dispatchEvent(
+        new CustomEvent("shax:preference-changed", { detail: { assistant: true } }),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus(`Failed to save settings: ${message}`);

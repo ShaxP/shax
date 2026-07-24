@@ -470,11 +470,13 @@ export function AssistantOverlay({
     const refresh = (): void => {
       void getAssistantConfig().then(setConfig);
     };
-    // The settings modal doesn't emit a dedicated
-    // "config-changed" event yet; re-read on focus-pane
-    // signals + on window focus as a low-cost heuristic.
-    window.addEventListener("shax:refocus-pane", refresh);
-    return () => window.removeEventListener("shax:refocus-pane", refresh);
+    // Re-read config when the settings modal saves. Previously
+    // piggy-backed on `shax:refocus-pane`, but that fired for
+    // unrelated reasons (assistant Esc bounce) and re-minted the
+    // provider object, which triggered the auto-focus effect and
+    // yanked focus straight back onto the textarea (M7.7c fix).
+    window.addEventListener("shax:preference-changed", refresh);
+    return () => window.removeEventListener("shax:preference-changed", refresh);
   }, []);
 
   const resolution = useMemo(() => {
@@ -843,13 +845,7 @@ export function AssistantOverlay({
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      // Blur explicitly so focus leaves the textarea even if the
-      // pane's refocus-pane handler is somehow not registered — the
-      // user will at least see the modal indicator flip to NORMAL.
-      textareaRef.current?.blur();
       window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
-      // eslint-disable-next-line no-console
-      console.log("[shax] assistant esc → refocus-pane");
     }
   };
 
