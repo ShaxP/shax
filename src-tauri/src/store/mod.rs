@@ -1530,7 +1530,10 @@ impl Store {
     /// embeddings under `model_id`. Scans every row and
     /// scores by cosine similarity — fast enough for the
     /// 100k-block scale we care about. `sqlite-vec`
-    /// integration is a follow-up when we outgrow this.
+    /// integration is a follow-up when we outgrow this;
+    /// this function emits a `tracing::warn!` when a query
+    /// crosses `NN_SLOW_MS` so we know when that day arrives
+    /// instead of guessing.
     ///
     /// Returns `(block_id, similarity)` pairs sorted by
     /// similarity descending. Similarity is in `[-1.0, 1.0]`.
@@ -1540,6 +1543,7 @@ impl Store {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<(BlockId, f32)>, StoreError> {
+        let start = std::time::Instant::now();
         let conn = self.conn.lock().expect("store mutex poisoned");
         let dim = query.len();
         let mut stmt = conn.prepare(
@@ -1556,8 +1560,10 @@ impl Store {
             let blob: Vec<u8> = row.get(1)?;
             Ok((id, blob))
         })?;
+        let mut scanned = 0usize;
         for row in rows {
             let (id_str, blob) = row?;
+            scanned += 1;
             let Some(vec) = crate::search::embedding::vector_from_blob(&blob, dim) else {
                 continue;
             };
@@ -1580,9 +1586,29 @@ impl Store {
             .into_iter()
             .map(|std::cmp::Reverse(h)| (h.id, h.similarity))
             .collect();
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() as u64 > NN_SLOW_MS {
+            tracing::warn!(
+                elapsed_ms = elapsed.as_millis() as u64,
+                scanned,
+                k,
+                model_id,
+                "nearest_neighbours brute-force scan crossed {NN_SLOW_MS} ms — \
+                 consider promoting block_embeddings to a sqlite-vec vec0 table",
+            );
+        }
         Ok(out)
     }
 }
+
+/// Threshold above which `nearest_neighbours` starts logging a
+/// warning per query (M7 loose-end pass — the self-alerting
+/// alternative to preemptively vendoring `sqlite-vec`). Chosen
+/// so a user typing in the search overlay never waits long
+/// enough to feel it: with a full round trip (FTS + semantic +
+/// render) budgeted at ~100 ms for interactive response, the
+/// scan alone earning >50 ms is a real regression signal.
+const NN_SLOW_MS: u64 = 50;
 
 /// Scored-hit wrapper so we can push into a min-heap and
 /// keep only the top-k. Ordering is by similarity ascending
