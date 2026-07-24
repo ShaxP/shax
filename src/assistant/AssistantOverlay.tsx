@@ -974,6 +974,21 @@ export function AssistantOverlay({
   }, [seededPrompt, provider]);
 
   const handleTextareaKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Alt+Enter approves the first pending APPROVAL card (M7.7d).
+    // Only intercepts when a pending exists; otherwise plain Enter
+    // semantics apply below so users don't lose the chord to submit.
+    if (e.key === "Enter" && e.altKey) {
+      const pendingId = firstPendingToolCallId(turnsRef.current);
+      if (pendingId !== null) {
+        e.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: pendingId, decision: "approve" },
+          }),
+        );
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void sendPrompt(input);
@@ -1070,9 +1085,16 @@ export function AssistantOverlay({
                 Type a message. The assistant is reached for, never intrusive.
               </div>
             )}
-            {turns.map((t) => (
-              <TurnBubble key={t.id} turn={t} />
-            ))}
+            {(() => {
+              const activePendingId = firstPendingToolCallId(turns);
+              return turns.map((t) => (
+                <TurnBubble
+                  key={t.id}
+                  turn={t}
+                  isActivePending={t.role === "tool_proposal" && t.toolCall?.id === activePendingId}
+                />
+              ));
+            })()}
           </div>
 
           <div style={INPUT_AREA}>
@@ -1138,8 +1160,15 @@ export function AssistantOverlay({
   );
 }
 
-function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
-  if (turn.role === "tool_proposal") return <ToolProposalBubble turn={turn} />;
+function TurnBubble({
+  turn,
+  isActivePending = false,
+}: {
+  turn: ChatTurn;
+  isActivePending?: boolean;
+}): React.ReactElement {
+  if (turn.role === "tool_proposal")
+    return <ToolProposalBubble turn={turn} isActivePending={isActivePending} />;
   if (turn.role === "tool_result") return <ToolResultBubble turn={turn} />;
   const style =
     turn.role === "user" ? BUBBLE_USER : turn.role === "error" ? BUBBLE_ERROR : BUBBLE_ASSISTANT;
@@ -1212,6 +1241,8 @@ const TOOL_PROPOSAL_ACTIONS: CSSProperties = {
 };
 
 const TOOL_PROPOSAL_BUTTON: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
   padding: "5px 10px",
   borderRadius: 4,
   border: "1px solid var(--border-strong)",
@@ -1236,6 +1267,22 @@ const TOOL_PROPOSAL_BUTTON_APPROVE_DESTRUCTIVE: CSSProperties = {
   borderColor: "var(--red)",
   color: "#fff",
   fontWeight: 600,
+};
+
+// Small chord glyph shown on the right of the Approve button when
+// its card is the active pending. Reads as a chip embedded in the
+// button so the shortcut is discoverable next to the action —
+// matching the old modal's "(Enter)" hint (M7.7d).
+const APPROVE_MNEMONIC: CSSProperties = {
+  marginLeft: 8,
+  padding: "1px 6px",
+  borderRadius: 4,
+  fontSize: 10.5,
+  fontFamily: "var(--font-mono)",
+  fontWeight: 500,
+  background: "rgba(255, 255, 255, 0.18)",
+  color: "inherit",
+  lineHeight: 1.3,
 };
 
 const TOOL_PROPOSAL_HEADER: CSSProperties = {
@@ -1283,6 +1330,20 @@ const TOOL_OUTPUT: CSSProperties = {
 };
 
 /**
+ * First tool-call id waiting on inline approval. Powers the
+ * Alt+Enter shortcut and the `⌥⏎` mnemonic on the Approve button.
+ * Returns `null` when nothing is pending.
+ */
+function firstPendingToolCallId(turns: ChatTurn[]): string | null {
+  for (const t of turns) {
+    if (t.role !== "tool_proposal") continue;
+    if (t.toolCall?.status !== "pending") continue;
+    return t.toolCall.id;
+  }
+  return null;
+}
+
+/**
  * Cheap heuristic for the "writes N files · staged" hint in the
  * APPROVAL card header (M7.7b). Not a security check — the safety
  * gate is the actual chokepoint — just a UI label to help the user
@@ -1309,7 +1370,13 @@ function commandEffectSummary(command: string): string {
   return labels.join(" · ");
 }
 
-function ToolProposalBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+function ToolProposalBubble({
+  turn,
+  isActivePending = false,
+}: {
+  turn: ChatTurn;
+  isActivePending?: boolean;
+}): React.ReactElement {
   const command = turn.toolCall?.command ?? "";
   const summary = commandEffectSummary(command);
   const status = turn.toolCall?.status ?? "approved";
@@ -1395,7 +1462,17 @@ function ToolProposalBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
             }
             onClick={() => emitResolve("approve")}
           >
-            {isDestructive ? "Run anyway" : "Approve"}
+            <span>{isDestructive ? "Run anyway" : "Approve"}</span>
+            {isActivePending && (
+              <span
+                data-testid="assistant-overlay-turn-tool_proposal-approve-mnemonic"
+                aria-hidden="true"
+                style={APPROVE_MNEMONIC}
+                title="Alt+Enter to approve"
+              >
+                ⌥⏎
+              </span>
+            )}
           </button>
         </div>
       )}

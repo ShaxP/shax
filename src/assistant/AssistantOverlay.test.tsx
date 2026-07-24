@@ -447,6 +447,86 @@ describe("AssistantOverlay", () => {
     expect(proposal).toHaveAttribute("data-status", "pending");
     expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-approve")).toBeInTheDocument();
     expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-decline")).toBeInTheDocument();
+    // The active pending shows the ⌥⏎ mnemonic on Approve.
+    expect(
+      screen.getByTestId("assistant-overlay-turn-tool_proposal-approve-mnemonic"),
+    ).toHaveTextContent("⌥⏎");
+  });
+
+  // M7.7d — Alt+Enter approves the active pending proposal.
+  it("Alt+Enter on the textarea approves the active pending proposal", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_altenter",
+            name: "run_command",
+            input: { command: "ls", reason: "list files" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    const resolves: ApprovalResolveDetail[] = [];
+    const onResolve = (e: Event): void => {
+      resolves.push((e as CustomEvent<ApprovalResolveDetail>).detail);
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "list this dir" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByTestId("assistant-overlay-turn-tool_proposal");
+      // Alt+Enter → approve; the textarea's Enter-to-send is
+      // suppressed by preventDefault.
+      fireEvent.keyDown(input, { key: "Enter", altKey: true });
+      expect(resolves).toContainEqual({ id: "toolu_altenter", decision: "approve" });
+    } finally {
+      window.removeEventListener("shax:approval-resolve", onResolve);
+    }
+  });
+
+  // M7.7d — Alt+Enter is a no-op when nothing is pending; plain
+  // Enter still submits new prompts.
+  it("Alt+Enter is a no-op when no proposal is pending", async () => {
+    mockClaudeProvider([
+      [
+        { kind: "text", delta: "Hi." },
+        { kind: "done", stopReason: "end_turn" },
+      ],
+    ]);
+    const resolves: ApprovalResolveDetail[] = [];
+    const onResolve = (e: Event): void => {
+      resolves.push((e as CustomEvent<ApprovalResolveDetail>).detail);
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "hi" } });
+      fireEvent.keyDown(input, { key: "Enter", altKey: true });
+      expect(resolves).toHaveLength(0);
+    } finally {
+      window.removeEventListener("shax:approval-resolve", onResolve);
+    }
   });
 
   it("clicking Decline fires shax:approval-resolve{decline} and yields a synthetic result", async () => {
