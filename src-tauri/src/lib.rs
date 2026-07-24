@@ -221,10 +221,17 @@ pub fn run() {
     // search embedder task, which runs in the Tauri setup
     // callback (below) once the async runtime is ready.
     let store_for_embedder = store.clone();
-    let manager = Arc::new(match store {
-        Some(s) => PtyManager::with_store(s),
-        None => PtyManager::new(),
-    });
+    // Eager-wake channel between the PTY reader (sender) and the
+    // embedder task (receiver). Freshly-persisted blocks poke the
+    // sweep straight away instead of waiting for the 30 s tick.
+    let (wake_tx, wake_rx) = search::backfill::wake_channel();
+    let manager = Arc::new(
+        match store {
+            Some(s) => PtyManager::with_store(s),
+            None => PtyManager::new(),
+        }
+        .with_indexer_notifier(wake_tx),
+    );
 
     // The reader thread runs outside Tauri State and reaches the manager via
     // a process-global Arc.
@@ -256,7 +263,7 @@ pub fn run() {
             // Kick off the background sweep. Skip when there's
             // no store (memory-only fallback).
             if let Some(store) = store_for_embedder.clone() {
-                std::mem::drop(search::backfill::spawn(store, embedder));
+                std::mem::drop(search::backfill::spawn(store, embedder, wake_rx));
             }
             Ok(())
         })

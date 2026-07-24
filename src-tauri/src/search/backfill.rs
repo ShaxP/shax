@@ -1,10 +1,18 @@
-//! Background embedding task (M7 slice 2).
+//! Background embedding task (M7 slice 2, eager wake-up
+//! wired in M7 loose-end pass).
 //!
-//! Owns a long-running task that periodically drains the
-//! embedding backlog — every block that doesn't yet have an
-//! embedding under the current model. Between sweeps the
-//! task sleeps for `SWEEP_INTERVAL`, so new blocks get
-//! embedded within that window of arrival.
+//! Owns a long-running task that drains the embedding backlog
+//! — every block that doesn't yet have an embedding under the
+//! current model. It wakes on either signal:
+//!
+//! - An eager `mpsc::Receiver<()>` fed by the PTY reader
+//!   after every newly-persisted block. Latency for a
+//!   freshly-completed block drops from up to `SWEEP_INTERVAL`
+//!   to whatever the tokio wake-up costs (single-digit ms in
+//!   practice).
+//! - A periodic `SWEEP_INTERVAL` tick, as a safety net that
+//!   catches anything the eager path misses (app restarted
+//!   with a backlog, sender dropped, etc.).
 //!
 //! Runs on `tauri::async_runtime` (Tauri's tokio wrapper).
 //! We can't use `tokio::spawn` directly from the `.setup`
@@ -12,19 +20,29 @@
 //! to the current thread; Tauri's wrapper hides that
 //! detail — a spawn from any thread lands on the shared
 //! runtime.
-//!
-//! Eager-notification via an `mpsc` channel is a natural
-//! follow-up but not needed for slice 2's data-flow
-//! validation.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::async_runtime::{self, JoinHandle};
+use tokio::sync::mpsc;
 
 use crate::blocks::BlockId;
 use crate::search::embedding::Embedder;
 use crate::store::Store;
+
+/// Capacity for the eager-wake channel. Tiny — one signal is
+/// enough to wake a sweep that then drains the whole backlog.
+/// Bigger buffers just waste memory on a mostly-empty channel.
+pub const WAKE_CHANNEL_CAPACITY: usize = 8;
+
+/// Create the eager-wake channel used to poke the embedder
+/// after every newly-persisted block. Returned in
+/// `(Sender, Receiver)` order so `lib.rs` can hand the sender
+/// to the PTY manager and the receiver to `spawn`.
+pub fn wake_channel() -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
+    mpsc::channel(WAKE_CHANNEL_CAPACITY)
+}
 
 /// How often the background task wakes up to drain the
 /// backlog. Bounds worst-case indexing latency for a
@@ -48,7 +66,11 @@ pub const BATCH_SIZE: usize = 32;
 /// Errors from individual block embeds are logged but never
 /// propagated — the sweep must keep making progress even
 /// if one block's output turns out to be malformed.
-pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> JoinHandle<()> {
+pub fn spawn(
+    store: Arc<Store>,
+    embedder: Arc<dyn Embedder>,
+    mut wake: mpsc::Receiver<()>,
+) -> JoinHandle<()> {
     async_runtime::spawn(async move {
         loop {
             match sweep_once(&store, &embedder).await {
@@ -63,7 +85,16 @@ pub fn spawn(store: Arc<Store>, embedder: Arc<dyn Embedder>) -> JoinHandle<()> {
                 }
                 Err(e) => tracing::warn!("embedder sweep failed: {e:?}"),
             }
-            tokio::time::sleep(SWEEP_INTERVAL).await;
+            // Wait for either an eager wake from the PTY
+            // reader (a new block just landed) or the safety-net
+            // periodic tick. Whichever fires first, we loop back
+            // to `sweep_once`, which drains the whole backlog —
+            // so we deliberately don't try to drain queued wake
+            // signals here; the next sweep will pick them up.
+            tokio::select! {
+                _ = wake.recv() => {},
+                _ = tokio::time::sleep(SWEEP_INTERVAL) => {},
+            }
         }
     })
 }
