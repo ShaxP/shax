@@ -179,6 +179,12 @@ pub struct PtyManager {
     /// Persistent store for completed blocks. When `None` (rare — bare
     /// `cargo test`), persistence and boot-time seeding are skipped.
     store: Option<Arc<Store>>,
+    /// Wake signal for the semantic-index backfill task. Fires
+    /// `try_send(())` after each newly-inserted block so the
+    /// embedder picks it up immediately instead of waiting for
+    /// the next 30 s sweep (M7 eager-indexing). `None` when
+    /// indexing is disabled (memory-only fallback / tests).
+    indexer_wake: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl PtyManager {
@@ -189,6 +195,7 @@ impl PtyManager {
             inner: Mutex::new(HashMap::new()),
             blocks: Mutex::new(HashMap::new()),
             store: None,
+            indexer_wake: None,
         }
     }
 
@@ -201,7 +208,17 @@ impl PtyManager {
             inner: Mutex::new(HashMap::new()),
             blocks: Mutex::new(HashMap::new()),
             store: Some(store),
+            indexer_wake: None,
         }
+    }
+
+    /// Attach an eager-notification channel the embedder task listens
+    /// on. Every newly-persisted block wakes the sweep — no waiting
+    /// for the periodic tick. Send failures are ignored (channel full
+    /// means the sweep already has work queued).
+    pub fn with_indexer_notifier(mut self, tx: tokio::sync::mpsc::Sender<()>) -> Self {
+        self.indexer_wake = Some(tx);
+        self
     }
 
     /// Expose the underlying store to IPC commands that need it for non-PTY
@@ -287,6 +304,7 @@ impl PtyManager {
             on_event,
             block_shared,
             self.store.clone(),
+            self.indexer_wake.clone(),
         );
 
         tracing::info!(%id, rows = opts.rows, cols = opts.cols, "PTY spawned");
@@ -448,6 +466,7 @@ fn spawn_reader_task(
     on_event: Channel<PtyEvent>,
     block_shared: Arc<Mutex<BlockShared>>,
     store: Option<Arc<Store>>,
+    indexer_wake: Option<tokio::sync::mpsc::Sender<()>>,
 ) {
     let rt = tokio::runtime::Handle::current();
 
@@ -547,6 +566,7 @@ fn spawn_reader_task(
                             &shared.outputs,
                             &mut persisted,
                             store.as_deref(),
+                            indexer_wake.as_ref(),
                         );
                         merge_live_summaries_into_shared(&mut shared.summaries, live_summaries);
                     });
@@ -582,6 +602,7 @@ fn spawn_reader_task(
                 &shared.outputs,
                 &mut persisted,
                 store.as_deref(),
+                indexer_wake.as_ref(),
             );
             merge_live_summaries_into_shared(&mut shared.summaries, live_summaries);
         });
@@ -638,8 +659,10 @@ fn persist_new_blocks(
     outputs: &HashMap<BlockId, Vec<u8>>,
     persisted: &mut std::collections::HashSet<BlockId>,
     store: Option<&Store>,
+    indexer_wake: Option<&tokio::sync::mpsc::Sender<()>>,
 ) {
     let Some(store) = store else { return };
+    let mut inserted = 0usize;
     for summary in live {
         if summary.ended_at_ms.is_none() {
             continue;
@@ -666,6 +689,17 @@ fn persist_new_blocks(
             continue;
         }
         persisted.insert(summary.id);
+        inserted += 1;
+    }
+    // Wake the embedder if we actually inserted anything. One
+    // signal per persist pass is enough — `sweep_once` drains
+    // the whole backlog, and the channel is bounded so we drop
+    // the signal (via `try_send`) when the sweep is already
+    // queued.
+    if inserted > 0 {
+        if let Some(tx) = indexer_wake {
+            let _ = tx.try_send(());
+        }
     }
 }
 
@@ -1844,5 +1878,80 @@ mod tests {
             .await
             .expect("write");
         manager.kill(id).await.expect("kill");
+    }
+
+    /// M7 eager-indexing. When a block is persisted through
+    /// `persist_new_blocks`, the indexer-wake channel should
+    /// receive exactly one signal per persist pass — enough to
+    /// kick the sweep, no matter how many blocks landed.
+    #[tokio::test]
+    async fn persist_fires_the_indexer_wake_channel() {
+        let store = Store::open_in_memory().expect("open in-memory store");
+        let (wake_tx, mut wake_rx) = tokio::sync::mpsc::channel::<()>(4);
+        let pane_id = PtyId::new();
+        let mut persisted: std::collections::HashSet<BlockId> = Default::default();
+        let block_id = BlockId(Uuid::new_v4());
+        let summary = BlockSummary {
+            id: block_id,
+            command: Some("ls".into()),
+            cwd: Some("/tmp".into()),
+            git_branch: None,
+            started_at_ms: 1000,
+            ended_at_ms: Some(1005),
+            exit_code: Some(0),
+            duration_ms: Some(5),
+            aborted: false,
+            interactive: false,
+        };
+        let mut outputs = HashMap::new();
+        outputs.insert(block_id, b"a b c".to_vec());
+        persist_new_blocks(
+            pane_id,
+            &[summary],
+            &outputs,
+            &mut persisted,
+            Some(&store),
+            Some(&wake_tx),
+        );
+        assert!(persisted.contains(&block_id), "block was persisted");
+        wake_rx.try_recv().expect("wake signal fired");
+        assert!(
+            wake_rx.try_recv().is_err(),
+            "exactly one wake per persist pass"
+        );
+    }
+
+    /// A persist pass with nothing new to insert (all summaries
+    /// already in `persisted`) must not fire a wake — otherwise we
+    /// churn the embedder on empty callbacks.
+    #[tokio::test]
+    async fn persist_skips_wake_when_no_new_blocks() {
+        let store = Store::open_in_memory().expect("open in-memory store");
+        let (wake_tx, mut wake_rx) = tokio::sync::mpsc::channel::<()>(4);
+        let pane_id = PtyId::new();
+        let block_id = BlockId(Uuid::new_v4());
+        let mut persisted: std::collections::HashSet<BlockId> = Default::default();
+        persisted.insert(block_id);
+        let summary = BlockSummary {
+            id: block_id,
+            command: Some("ls".into()),
+            cwd: None,
+            git_branch: None,
+            started_at_ms: 1000,
+            ended_at_ms: Some(1005),
+            exit_code: Some(0),
+            duration_ms: Some(5),
+            aborted: false,
+            interactive: false,
+        };
+        persist_new_blocks(
+            pane_id,
+            &[summary],
+            &HashMap::new(),
+            &mut persisted,
+            Some(&store),
+            Some(&wake_tx),
+        );
+        assert!(wake_rx.try_recv().is_err(), "no wake fired");
     }
 }
