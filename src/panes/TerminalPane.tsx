@@ -29,6 +29,7 @@ import { memo, useCallback, useEffect, useReducer, useRef, useState } from "reac
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { readXtermTheme } from "./xtermTheme";
 import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
 import type { BlockId, PtyId, PtyEvent } from "../lib/ipc";
 import type { UiBlock } from "./blockReducer";
@@ -753,10 +754,15 @@ function TerminalPaneInner({
       typeof window !== "undefined"
         ? getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim()
         : "";
+    const derivedTheme = readXtermTheme();
     const terminal = new Terminal({
       // Let xterm fill the container; FitAddon will set the actual dimensions.
       allowProposedApi: true,
       fontFamily: fontMono !== "" ? fontMono : "ui-monospace, monospace",
+      // Derived from the app's design tokens so the terminal
+      // colours track light/dark theme switches. `null` means the
+      // DOM isn't ready — fall through to xterm's own defaults.
+      ...(derivedTheme !== null ? { theme: derivedTheme } : {}),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -1008,6 +1014,21 @@ function TerminalPaneInner({
     window.addEventListener("shax:refocus-pane", handler);
     return () => window.removeEventListener("shax:refocus-pane", handler);
   }, [active, altScreen, exitedCode]);
+
+  // Re-derive xterm's theme when the app theme changes so the
+  // terminal colours actually follow the light/dark switch. Reads
+  // the same `--fg` / `--bg` / `--ansi-*` tokens as the rest of
+  // the UI (M7 loose-end cleanup).
+  useEffect(() => {
+    const reapply = (): void => {
+      const t = terminalRef.current;
+      const theme = readXtermTheme();
+      if (t === null || theme === null) return;
+      t.options.theme = theme;
+    };
+    window.addEventListener("shax:preference-changed", reapply);
+    return () => window.removeEventListener("shax:preference-changed", reapply);
+  }, []);
 
   // Widgets that trigger side effects (git status widget's
   // stage / unstage, ls widget's cd) emit `shax:emit-command`
