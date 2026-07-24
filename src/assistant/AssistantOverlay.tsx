@@ -506,15 +506,23 @@ export function AssistantOverlay({
     panelRef.current?.focus();
   }, []);
 
-  // Escape closes. Kept in its own effect because it legitimately
-  // depends on the current `onClose` reference.
+  // Escape has two behaviours depending on where focus lives (M7.7c):
+  //   - Textarea focused → bounce focus back to the active pane via
+  //     `shax:refocus-pane`. Dock stays open. This is the vim-style
+  //     "exit INSERT" gesture — reaching for the terminal without
+  //     losing the assistant conversation.
+  //   - Focus elsewhere in the dock (panel div, buttons) → close.
+  //     Fully closing still uses ⌘K / ? / the ✕ button.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (document.activeElement === textareaRef.current) {
+        window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+        return;
       }
+      onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -953,6 +961,12 @@ export function AssistantOverlay({
               <span style={INPUT_HINT_LEFT}>
                 <span>
                   <kbd style={KBD_INLINE}>⏎</kbd>send
+                </span>
+                <span
+                  data-testid="assistant-overlay-esc-hint"
+                  title="Return focus to the terminal without closing the assistant."
+                >
+                  <kbd style={KBD_INLINE}>esc</kbd>terminal
                 </span>
                 <button
                   data-testid="assistant-overlay-goal-mode"

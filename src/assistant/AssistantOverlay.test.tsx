@@ -265,7 +265,37 @@ describe("AssistantOverlay", () => {
     expect(privacy).toHaveTextContent(/nothing leaves this machine/i);
   });
 
-  it("Escape closes via onClose", async () => {
+  // M7.7c — Escape from the textarea bounces focus to the pane rather
+  // than closing the dock (vim-style exit-INSERT). onClose is only
+  // reached when focus is elsewhere in the panel.
+  it("Escape from the textarea fires shax:refocus-pane and keeps the dock open", async () => {
+    const onClose = vi.fn();
+    mockClaudeProvider([]);
+    const refocuses = vi.fn();
+    window.addEventListener("shax:refocus-pane", refocuses);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={onClose}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId={null}
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      await waitFor(() => expect(document.activeElement).toBe(input));
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(refocuses).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:refocus-pane", refocuses);
+    }
+  });
+
+  it("Escape closes via onClose when focus is off the textarea", async () => {
     const onClose = vi.fn();
     mockClaudeProvider([]);
     render(
@@ -277,7 +307,10 @@ describe("AssistantOverlay", () => {
         targetPtyId={null}
       />,
     );
-    await screen.findByTestId("assistant-overlay-input");
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // Move focus away from the textarea before pressing Escape.
+    act(() => input.blur());
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
