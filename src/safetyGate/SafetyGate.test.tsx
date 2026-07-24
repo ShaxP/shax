@@ -318,6 +318,74 @@ describe("SafetyGate", () => {
     }
   });
 
+  // M7.7e — read-only fast path.
+  it("silent-forwards a non-destructive readonly emit; no pending, no modal", () => {
+    render(<SafetyGate />);
+    const approvedSpy = vi.fn();
+    const pendingSpy = vi.fn();
+    const rejectedSpy = vi.fn();
+    window.addEventListener("shax:emit-command-approved", approvedSpy);
+    window.addEventListener("shax:approval-pending", pendingSpy);
+    window.addEventListener("shax:approval-rejected", rejectedSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "ls",
+              source: "ai",
+              readonly: true,
+              toolCallId: "probe-1",
+            },
+          }),
+        );
+      });
+      expect(approvedSpy).toHaveBeenCalledTimes(1);
+      expect(pendingSpy).not.toHaveBeenCalled();
+      expect(rejectedSpy).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("safety-gate")).toBeNull();
+    } finally {
+      window.removeEventListener("shax:emit-command-approved", approvedSpy);
+      window.removeEventListener("shax:approval-pending", pendingSpy);
+      window.removeEventListener("shax:approval-rejected", rejectedSpy);
+    }
+  });
+
+  it("refuses a destructive readonly emit via shax:approval-rejected; no -approved fires", () => {
+    render(<SafetyGate />);
+    const approvedSpy = vi.fn();
+    const rejectedSpy = vi.fn();
+    window.addEventListener("shax:emit-command-approved", approvedSpy);
+    window.addEventListener("shax:approval-rejected", rejectedSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "rm -rf /tmp/x",
+              source: "ai",
+              readonly: true,
+              toolCallId: "probe-bad",
+            },
+          }),
+        );
+      });
+      expect(approvedSpy).not.toHaveBeenCalled();
+      expect(rejectedSpy).toHaveBeenCalledTimes(1);
+      const detail = (rejectedSpy.mock.calls[0]?.[0] as CustomEvent).detail as {
+        id: string;
+        reason: string;
+      };
+      expect(detail.id).toBe("probe-bad");
+      expect(detail.reason.length).toBeGreaterThan(0);
+    } finally {
+      window.removeEventListener("shax:emit-command-approved", approvedSpy);
+      window.removeEventListener("shax:approval-rejected", rejectedSpy);
+    }
+  });
+
   it("drops proposals that arrive while a modal is already pending", () => {
     render(<SafetyGate />);
     const approvedSpy = vi.fn();

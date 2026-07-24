@@ -639,6 +639,165 @@ describe("AssistantOverlay", () => {
     });
   });
 
+  // M7.7e — SUGGESTED — READ ONLY cards.
+  it("renders a SUGGESTED — READ ONLY card when the model calls the `probe` tool", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_probe",
+            name: "probe",
+            input: { command: "ls", reason: "list files" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId="pty-1"
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "what's here" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const proposal = await screen.findByTestId("assistant-overlay-turn-tool_proposal");
+    expect(proposal).toHaveAttribute("data-kind", "probe");
+    expect(proposal).toHaveAttribute("data-status", "pending");
+    expect(proposal).toHaveTextContent(/Suggested — read only/i);
+    expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-probe-chip")).toHaveTextContent(
+      /no side effects/i,
+    );
+    expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-run")).toBeInTheDocument();
+    // No Approve / Decline buttons on a probe.
+    expect(
+      screen.queryByTestId("assistant-overlay-turn-tool_proposal-approve"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("assistant-overlay-turn-tool_proposal-decline"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Run on a probe emits shax:emit-command with readonly:true", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_probe_run",
+            name: "probe",
+            input: { command: "git status", reason: "check tree" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    const emits: Array<{
+      command: string;
+      readonly?: boolean;
+      toolCallId?: string;
+    }> = [];
+    const onEmit = (e: Event): void => {
+      const detail = (
+        e as CustomEvent<{ command: string; readonly?: boolean; toolCallId?: string }>
+      ).detail;
+      emits.push(detail);
+    };
+    window.addEventListener("shax:emit-command", onEmit);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "status" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      const runBtn = await screen.findByTestId("assistant-overlay-turn-tool_proposal-run");
+      // No emit yet — probe defers until the user clicks Run.
+      expect(emits).toHaveLength(0);
+      fireEvent.click(runBtn);
+      expect(emits.length).toBeGreaterThanOrEqual(1);
+      const last = emits[emits.length - 1];
+      expect(last?.command).toBe("git status");
+      expect(last?.readonly).toBe(true);
+      expect(last?.toolCallId).toBe("toolu_probe_run");
+    } finally {
+      window.removeEventListener("shax:emit-command", onEmit);
+    }
+  });
+
+  it("a rejected probe yields a `Refused:` tool_result and flips the card to declined", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_probe_bad",
+            name: "probe",
+            input: { command: "rm -rf /tmp/x", reason: "cleanup" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+      [
+        { kind: "text", delta: "OK, need approval." },
+        { kind: "done", stopReason: "end_turn" },
+      ],
+    ]);
+    // SafetyGate isn't rendered in this unit test — simulate its
+    // rejected signal directly when the emit fires. Mirrors the
+    // real gate's readonly + destructive → shax:approval-rejected
+    // exit.
+    const onEmit = (e: Event): void => {
+      const detail = (e as CustomEvent<{ toolCallId?: string; readonly?: boolean }>).detail;
+      if (detail.readonly !== true) return;
+      window.dispatchEvent(
+        new CustomEvent("shax:approval-rejected", {
+          detail: { id: detail.toolCallId ?? "", reason: "recursive force delete" },
+        }),
+      );
+    };
+    window.addEventListener("shax:emit-command", onEmit);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "cleanup" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      const runBtn = await screen.findByTestId("assistant-overlay-turn-tool_proposal-run");
+      fireEvent.click(runBtn);
+      await waitFor(() => {
+        const result = screen.getByTestId("assistant-overlay-turn-tool_result");
+        expect(result).toHaveTextContent(/Refused/i);
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("assistant-overlay-turn-tool_proposal")).toHaveAttribute(
+          "data-status",
+          "declined",
+        );
+      });
+    } finally {
+      window.removeEventListener("shax:emit-command", onEmit);
+    }
+  });
+
   it("renders a tool_proposal bubble when the provider emits a tool_call", async () => {
     // Provider streams a tool_call then done — with no
     // targetPtyId, `executeToolCall` short-circuits to a

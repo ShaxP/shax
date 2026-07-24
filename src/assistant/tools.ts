@@ -34,12 +34,14 @@ import type { Tool } from "./provider";
 export const RUN_COMMAND: Tool = {
   name: "run_command",
   description:
-    "Execute a shell command in the user's active terminal pane. " +
-    "The user MUST approve the exact command via a modal dialog before it runs. " +
-    "Returns the command's exit code, wall-clock duration in milliseconds, " +
-    "and combined stdout+stderr output (truncated if very long). " +
-    "Use this to inspect the system, check state, or perform actions the user asked about. " +
-    "Prefer a single well-scoped command over chained pipelines when possible.",
+    "Execute a shell command in the user's active terminal pane that has side effects — " +
+    "writes, deletes, moves, `git add`/`checkout`/`push`, package installs, `cd`, or anything " +
+    "that mutates state. The user sees an APPROVAL REQUIRED card in the assistant with Approve / " +
+    "Decline buttons and MUST approve before it runs. Returns the command's exit code, " +
+    "wall-clock duration in milliseconds, and combined stdout+stderr output (truncated if " +
+    "very long). Prefer a single well-scoped command over chained pipelines when possible. " +
+    "For read-only probes (`ls`, `git status`, `git diff`, `pwd`, …), use `probe` instead — " +
+    "it renders a lighter SUGGESTED — READ ONLY card with a single Run button.",
   input_schema: {
     type: "object",
     properties: {
@@ -53,15 +55,51 @@ export const RUN_COMMAND: Tool = {
         type: "string",
         description:
           "One short sentence explaining why running this command answers the user's question. " +
-          "Shown to the user in the approval modal so they know what you're doing.",
+          "Shown to the user on the approval card so they know what you're doing.",
       },
     },
     required: ["command", "reason"],
   },
 };
 
-/** Full toolset for the M6 architectural loop-close. */
-export const DEFAULT_TOOLS: Tool[] = [RUN_COMMAND];
+/** Read-only probe tool (M7.7e). The user still sees the command
+ *  visibly and clicks Run — the single-click confirmation IS the
+ *  approval for pure reads per spec §10. If the model calls this
+ *  with a destructive command, the safety gate refuses and returns
+ *  a structured error so the model can retry with `run_command`. */
+export const PROBE_COMMAND: Tool = {
+  name: "probe",
+  description:
+    "Run a read-only shell probe to inspect the user's system. Use for pure reads: `ls`, " +
+    "`pwd`, `cat`, `git status`, `git diff`, `git log`, `env`, `ps`, `df`, `du`, `stat`, `wc`, " +
+    "`head`, `tail`, `grep`, `find` (without `-delete`), and similar. NO side effects — no " +
+    "writes, no deletes, no network mutations, no `cd`. The user sees a SUGGESTED — READ ONLY " +
+    "card with a single Run button and no approval modal. If the command would modify state in " +
+    "ANY way, use `run_command` instead. If you probe with a destructive command by accident, " +
+    "the tool returns a `Refused:` error and you should retry with `run_command`.",
+  input_schema: {
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description:
+          "The read-only shell command. Single line, no side effects. " +
+          "Anything that mutates state belongs in `run_command`.",
+      },
+      reason: {
+        type: "string",
+        description:
+          "One short sentence explaining what you're checking and why. " +
+          "Shown on the SUGGESTED card so the user knows why to click Run.",
+      },
+    },
+    required: ["command", "reason"],
+  },
+};
+
+/** Full toolset for the M6 architectural loop-close, extended
+ *  with the M7.7e read-only probe. */
+export const DEFAULT_TOOLS: Tool[] = [RUN_COMMAND, PROBE_COMMAND];
 
 /**
  * System prompt prepended to the conversation whenever tools
@@ -78,9 +116,14 @@ export const SYSTEM_PROMPT_WITH_TOOLS = `You are the AI assistant embedded in Sh
 
 Respond in the same language the user writes in. If the user's language is unclear, default to English. Do not switch languages mid-conversation.
 
-You have the \`run_command\` tool which executes shell commands in the user's active terminal pane. Every command you propose is shown to the user in an approval modal before it runs — nothing runs without their explicit approval.
+You have two tools for executing shell commands in the user's active terminal pane:
 
-Prefer \`run_command\` over asking the user to run commands themselves. When the user asks something about their system — the current directory, files, git state, environment, running processes, etc. — use the tool to find out, then answer with the result. In the \`reason\` argument, briefly explain what you're checking and why.
+- \`probe\` — read-only probes (\`ls\`, \`pwd\`, \`cat\`, \`git status\`, \`git diff\`, \`git log\`, \`env\`, \`ps\`, \`grep\`, \`find\` without \`-delete\`, etc.). The user sees a lightweight SUGGESTED — READ ONLY card with a single Run button. Prefer this for factual queries about the user's system.
+- \`run_command\` — anything that mutates state (writes, deletes, moves, \`git add\`/\`checkout\`/\`push\`, package installs, \`cd\`, network mutations). The user sees an APPROVAL REQUIRED card with Approve / Decline buttons and must explicitly approve.
+
+Prefer tool use over asking the user to run commands themselves. When the user asks about their system, use the appropriate tool to find out, then answer with the result. In the \`reason\` argument, briefly explain what you're checking and why.
+
+Choose \`probe\` whenever the command is a pure read — if unsure, prefer \`probe\` when the command's only effect is stdout; prefer \`run_command\` if it could change any file, ref, or process. If you accidentally probe a destructive command, the tool will refuse; retry with \`run_command\`.
 
 Do not propose destructive commands (\`rm -rf\` on important paths, force push, history rewrites) unless the user explicitly asked for them.`;
 

@@ -22,6 +22,10 @@ The gate is source-aware — the *policy* is one, the *rendering surface* is cho
 
 The single-chokepoint property still holds: every command flows through the same classification and the same approve / decline exit, regardless of where the buttons are drawn.
 
+### Read-only fast path
+
+Pure reads (an `ls` probe, a `git status` probe, a `git diff`) do not need approval. When the assistant proposes a read-only probe (a dedicated tool separate from `run_command`), the card renders as **SUGGESTED — READ ONLY** with a single `Run` button and no Approve / Decline flow. The user's Run click is the confirmation. The command still emits visibly into the pane's scrollback — the log stays an honest audit trail — and the gate still classifies: if the model marks something read-only that the classifier flags as destructive, the gate refuses the emit outright rather than quietly running it, and the model must retry via `run_command` where the user gets a real Approve gate.
+
 ## What counts as side-effectful
 
 Anything that changes state outside reading: writes, deletes, moves, `git add` and `git checkout` and `git push`, package installs, `cd` (state change, low risk, but still a visible command), network mutations, and anything the assistant proposes in goal mode. Pure reads (an `ls` probe, a `git status` probe, a `git diff`) do not need approval.
