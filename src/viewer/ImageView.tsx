@@ -48,11 +48,13 @@ const IMAGE_STYLE: CSSProperties = {
   maxHeight: "100%",
   // Render images on a transparent checkerboard so the user can
   // see PNG alpha; defaulting to the surface colour would hide it.
+  // Uses `--checkerboard` so the tile stays visible on both dark
+  // and light themes.
   background:
-    "linear-gradient(45deg, #1c1e25 25%, transparent 25%), " +
-    "linear-gradient(-45deg, #1c1e25 25%, transparent 25%), " +
-    "linear-gradient(45deg, transparent 75%, #1c1e25 75%), " +
-    "linear-gradient(-45deg, transparent 75%, #1c1e25 75%)",
+    "linear-gradient(45deg, var(--checkerboard) 25%, transparent 25%), " +
+    "linear-gradient(-45deg, var(--checkerboard) 25%, transparent 25%), " +
+    "linear-gradient(45deg, transparent 75%, var(--checkerboard) 75%), " +
+    "linear-gradient(-45deg, transparent 75%, var(--checkerboard) 75%)",
   backgroundSize: "16px 16px",
   backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
   boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",

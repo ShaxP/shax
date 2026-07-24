@@ -200,7 +200,7 @@ function entryColor(entry: DirEntry): string {
   const dot = entry.name.lastIndexOf(".");
   if (dot > 0 && dot < entry.name.length - 1) {
     const ext = entry.name.slice(dot + 1).toLowerCase();
-    if (IMAGE_EXTS.has(ext)) return "var(--magenta, #d090d0)";
+    if (IMAGE_EXTS.has(ext)) return "var(--magenta)";
     if (ARCHIVE_EXTS.has(ext)) return "var(--red)";
   }
   return "var(--fg)";

@@ -69,6 +69,11 @@
   --red: oklch(0.69 0.16 25);
   --amber: oklch(0.8 0.11 80);
   --cyan: oklch(0.78 0.09 205);
+  --magenta: #d090d0;
+
+  /* Utility — checkerboard tile behind transparent images so
+   * PNG alpha stays visible against the pane background. */
+  --checkerboard: #1c1e25;
 
   /*
    * ANSI SGR palette (M4.5 slice 3).
@@ -129,6 +134,11 @@
   --red: oklch(0.55 0.17 25);
   --amber: oklch(0.62 0.15 80);
   --cyan: oklch(0.55 0.11 205);
+  --magenta: #a760a7;
+
+  /* Utility — light checkerboard tile so PNG alpha stays visible
+   * against the pane's near-white background. */
+  --checkerboard: #ececee;
 
   /*
    * ANSI palette — tuned for light. Same 16 roles, colours
