@@ -34,8 +34,37 @@ export interface EmitCommandDetail {
   source?: EmitSource;
   cwd?: string | null;
   /** Human-readable rationale — set by the assistant when it
-   *  proposes a tool call, so the modal can show *why*. */
+   *  proposes a tool call, so the modal or inline card can show
+   *  *why*. */
   reason?: string;
+  /** Correlation id used by the source to match an approval
+   *  resolution back to its proposal. The assistant sets this
+   *  to the tool-call id so its APPROVAL card can drive the
+   *  approve / decline exit inline (M7.7d). */
+  toolCallId?: string;
+}
+
+/** Detail for `shax:approval-pending` — fired by the gate when
+ *  an AI-sourced proposal is accepted and awaiting the user's
+ *  inline decision. The assistant renders its APPROVAL card
+ *  against this and returns `shax:approval-resolve`. */
+export interface ApprovalPendingDetail {
+  id: string;
+  paneId: string;
+  command: string;
+  /** Assistant's rationale — why it wants to run the command. */
+  reason?: string;
+  kind: "ai" | "destructive";
+  /** Human-readable description of what makes the command
+   *  dangerous. Only populated when `kind === "destructive"`. */
+  destructiveReason?: string | null;
+}
+
+/** Detail for `shax:approval-resolve` — fired by the assistant
+ *  when the user clicks Approve / Decline on the inline card. */
+export interface ApprovalResolveDetail {
+  id: string;
+  decision: "approve" | "decline";
 }
 
 /** Wire-format for the approved event that TerminalPane
@@ -51,6 +80,10 @@ interface Pending {
   detail: EmitCommandDetail;
   kind: "ai" | "destructive";
   reason: string | null;
+  /** True when the source is the assistant — the gate skips its
+   *  modal render and waits for `shax:approval-resolve` from the
+   *  APPROVAL card inline in the chat (M7.7d). */
+  inline: boolean;
 }
 
 const BACKDROP: CSSProperties = {
@@ -169,21 +202,63 @@ export function SafetyGate(): React.ReactElement | null {
         dispatchApproved(detail, source);
         return;
       }
+      const reason = destructiveReason(detail.command);
+      const inline = source === "ai";
       setPending({
         detail,
         kind: classification,
-        reason: destructiveReason(detail.command),
+        reason,
+        inline,
       });
+      if (inline) {
+        // AI-sourced proposals render as the APPROVAL card in the
+        // assistant, not a modal. Publish the pending detail and
+        // wait for `shax:approval-resolve` (M7.7d).
+        const pendingDetail: ApprovalPendingDetail = {
+          id: detail.toolCallId ?? "",
+          paneId: detail.paneId,
+          command: detail.command,
+          kind: classification,
+          destructiveReason: reason,
+        };
+        if (detail.reason !== undefined) pendingDetail.reason = detail.reason;
+        window.dispatchEvent(new CustomEvent("shax:approval-pending", { detail: pendingDetail }));
+      }
     };
     window.addEventListener("shax:emit-command", onProposal);
     return () => window.removeEventListener("shax:emit-command", onProposal);
   }, []);
 
+  // Inline-approval resolution (M7.7d). AssistantOverlay fires
+  // this when the user clicks Approve / Decline on the APPROVAL
+  // card. Correlated by the tool-call id we passed on the
+  // pending event.
+  useEffect(() => {
+    const onResolve = (e: Event): void => {
+      const detail = (e as CustomEvent<ApprovalResolveDetail>).detail;
+      if (detail === null || detail === undefined) return;
+      const p = pendingRef.current;
+      if (p === null || !p.inline) return;
+      if ((p.detail.toolCallId ?? "") !== detail.id) return;
+      if (detail.decision === "approve") {
+        approve();
+      } else {
+        decline();
+      }
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    return () => window.removeEventListener("shax:approval-resolve", onResolve);
+    // approve/decline read pendingRef.current so the stale closure
+    // is safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Steal keyboard focus when a modal opens, restore it on
   // close via the App-level refocus-pane signal (handled by
-  // the caller — see App.tsx).
+  // the caller — see App.tsx). Inline pendings never show a
+  // modal so we don't touch focus for them (M7.7d).
   useEffect(() => {
-    if (pending === null) return;
+    if (pending === null || pending.inline) return;
     panelRef.current?.focus();
   }, [pending]);
 
@@ -201,9 +276,12 @@ export function SafetyGate(): React.ReactElement | null {
   }, [pending]);
 
   // Keyboard: Enter approves, Esc declines. Listener attached
-  // globally so it fires regardless of what has focus.
+  // globally so it fires regardless of what has focus. Inline
+  // pendings don't own the keyboard — Enter must still send the
+  // user's next assistant message, Esc must still bounce focus
+  // back to the pane (M7.7c) — so we skip binding for them.
   useEffect(() => {
-    if (pending === null) return;
+    if (pending === null || pending.inline) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -253,6 +331,10 @@ export function SafetyGate(): React.ReactElement | null {
   }
 
   if (pending === null) return null;
+  // AI-sourced pendings render inline in the assistant chat.
+  // The gate still holds the pending state (so `-approved` fires
+  // through the same chokepoint) but stays visually silent.
+  if (pending.inline) return null;
 
   const isDestructive = pending.kind === "destructive";
   const headline = isDestructive
