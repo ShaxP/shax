@@ -843,7 +843,13 @@ export function AssistantOverlay({
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
+      // Blur explicitly so focus leaves the textarea even if the
+      // pane's refocus-pane handler is somehow not registered — the
+      // user will at least see the modal indicator flip to NORMAL.
+      textareaRef.current?.blur();
       window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+      // eslint-disable-next-line no-console
+      console.log("[shax] assistant esc → refocus-pane");
     }
   };
 
