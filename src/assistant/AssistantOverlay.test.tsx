@@ -266,8 +266,9 @@ describe("AssistantOverlay", () => {
   });
 
   // M7.7c — Escape from the textarea bounces focus to the pane rather
-  // than closing the dock (vim-style exit-INSERT). onClose is only
-  // reached when focus is elsewhere in the panel.
+  // than closing the dock (vim-style exit-INSERT). Handled directly on
+  // the textarea via React's onKeyDown so no capture-order race with
+  // other overlays can eat it.
   it("Escape from the textarea fires shax:refocus-pane and keeps the dock open", async () => {
     const onClose = vi.fn();
     mockClaudeProvider([]);
@@ -285,9 +286,8 @@ describe("AssistantOverlay", () => {
       );
       const input = await screen.findByTestId("assistant-overlay-input");
       await waitFor(() => expect(document.activeElement).toBe(input));
-      act(() => {
-        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      });
+      // Dispatch on the textarea so React's onKeyDown fires directly.
+      fireEvent.keyDown(input, { key: "Escape" });
       expect(refocuses).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
     } finally {

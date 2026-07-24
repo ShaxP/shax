@@ -506,22 +506,18 @@ export function AssistantOverlay({
     panelRef.current?.focus();
   }, []);
 
-  // Escape has two behaviours depending on where focus lives (M7.7c):
-  //   - Textarea focused → bounce focus back to the active pane via
-  //     `shax:refocus-pane`. Dock stays open. This is the vim-style
-  //     "exit INSERT" gesture — reaching for the terminal without
-  //     losing the assistant conversation.
-  //   - Focus elsewhere in the dock (panel div, buttons) → close.
-  //     Fully closing still uses ⌘K / ? / the ✕ button.
+  // Escape from anywhere in the dock EXCEPT the textarea closes the
+  // panel (M7.7c). The textarea handles its own Escape via React's
+  // onKeyDown — see `handleTextareaKey` — where it bounces focus back
+  // to the active pane instead of closing. Fully closing still uses
+  // ⌘K / ? / the ✕ button.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
+      const target = e.target;
+      if (target instanceof Element && target === textareaRef.current) return;
       e.preventDefault();
       e.stopPropagation();
-      if (document.activeElement === textareaRef.current) {
-        window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
-        return;
-      }
       onClose();
     };
     window.addEventListener("keydown", onKey, true);
@@ -838,6 +834,16 @@ export function AssistantOverlay({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void sendPrompt(input);
+      return;
+    }
+    // Escape from the textarea bounces focus to the active pane's
+    // prompt strip; the dock stays open (M7.7c). Bound here on the
+    // element rather than the window listener so no capture-order
+    // race between overlays can swallow it.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
     }
   };
 
