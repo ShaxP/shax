@@ -535,6 +535,17 @@ export function AssistantOverlay({
     textareaRef.current?.focus();
   }, [provider]);
 
+  // ⌘K from the terminal bounces focus back into the assistant
+  // textarea (M7.7c). App fires this event when the dock is
+  // already open but the input doesn't have focus.
+  useEffect(() => {
+    const onFocusInput = (): void => {
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("shax:assistant-focus-input", onFocusInput);
+    return () => window.removeEventListener("shax:assistant-focus-input", onFocusInput);
+  }, []);
+
   // Auto-scroll to bottom as messages / streaming deltas
   // arrive.
   useEffect(() => {

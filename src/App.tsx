@@ -592,6 +592,13 @@ export default function App(): React.ReactElement {
   // in-buffer search keymap (from @codemirror/search) handles it.
   const viewerOpenRef = useRef(false);
   viewerOpenRef.current = viewerTarget !== null;
+  // Mirror assistant open + input-focus state so the capture-phase
+  // ⌘K handler (registered with [] deps for stability) can read the
+  // latest values (M7.7c).
+  const assistantOpenRef = useRef(assistantOpen);
+  assistantOpenRef.current = assistantOpen;
+  const assistantInputFocusedRef = useRef(assistantInputFocused);
+  assistantInputFocusedRef.current = assistantInputFocused;
 
   const handleNew = useCallback((): void => {
     dispatch({ type: "add_tab" });
@@ -694,11 +701,20 @@ export default function App(): React.ReactElement {
         return;
       }
       if (e.key === "k" || e.key === "K") {
-        // Cmd/Ctrl+K toggles the assistant overlay. Spec
-        // §09 explicitly reserves this shortcut for the
-        // assistant.
+        // Cmd/Ctrl+K bounces focus toward the assistant. Spec §09
+        // reserves this shortcut for the assistant. Behaviour:
+        //   - closed → open (mount effect auto-focuses the textarea)
+        //   - open + textarea NOT focused → focus the textarea
+        //   - open + textarea IS focused → close
+        // Symmetric to Escape, which bounces the other way.
         e.preventDefault();
-        setAssistantOpen((prev) => !prev);
+        if (!assistantOpenRef.current) {
+          setAssistantOpen(true);
+        } else if (assistantInputFocusedRef.current) {
+          setAssistantOpen(false);
+        } else {
+          window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
+        }
         return;
       }
       if (e.key === "f" || e.key === "F") {

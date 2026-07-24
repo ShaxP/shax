@@ -660,4 +660,27 @@ describe("AssistantOverlay / M7.7b header + footer", () => {
       window.removeEventListener("shax:assistant-input-focus", onFocus);
     }
   });
+
+  // M7.7c — ⌘K from the terminal fires shax:assistant-focus-input to
+  // bounce focus back into the textarea (symmetric with Escape).
+  it("shax:assistant-focus-input event moves focus to the textarea", async () => {
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    act(() => input.blur());
+    expect(document.activeElement).not.toBe(input);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
+    });
+    expect(document.activeElement).toBe(input);
+  });
 });
