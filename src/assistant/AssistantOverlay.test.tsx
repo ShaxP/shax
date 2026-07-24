@@ -487,9 +487,13 @@ describe("AssistantOverlay", () => {
       fireEvent.change(input, { target: { value: "list this dir" } });
       fireEvent.keyDown(input, { key: "Enter" });
       await screen.findByTestId("assistant-overlay-turn-tool_proposal");
-      // Alt+Enter → approve; the textarea's Enter-to-send is
-      // suppressed by preventDefault.
-      fireEvent.keyDown(input, { key: "Enter", altKey: true });
+      // Alt+Enter → approve. Bound at window level (textarea is
+      // disabled during streaming), so dispatch there.
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true }),
+        );
+      });
       expect(resolves).toContainEqual({ id: "toolu_altenter", decision: "approve" });
     } finally {
       window.removeEventListener("shax:approval-resolve", onResolve);
@@ -520,9 +524,12 @@ describe("AssistantOverlay", () => {
           targetPtyId="pty-1"
         />,
       );
-      const input = await screen.findByTestId("assistant-overlay-input");
-      fireEvent.change(input, { target: { value: "hi" } });
-      fireEvent.keyDown(input, { key: "Enter", altKey: true });
+      await screen.findByTestId("assistant-overlay-input");
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true }),
+        );
+      });
       expect(resolves).toHaveLength(0);
     } finally {
       window.removeEventListener("shax:approval-resolve", onResolve);

@@ -557,6 +557,29 @@ export function AssistantOverlay({
     return () => window.removeEventListener("shax:assistant-focus-input", onFocusInput);
   }, []);
 
+  // Alt+Enter approves the active pending APPROVAL card (M7.7d).
+  // Bound at window level rather than the textarea because the
+  // textarea is `disabled={streaming}` for the whole tool loop,
+  // so it can't receive keydown while a proposal is pending.
+  // Reads the latest turns via `turnsRef` so the effect doesn't
+  // need to re-register on every turn update.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Enter" || !e.altKey) return;
+      const pendingId = firstPendingToolCallId(turnsRef.current);
+      if (pendingId === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("shax:approval-resolve", {
+          detail: { id: pendingId, decision: "approve" },
+        }),
+      );
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // The textarea is `disabled={streaming}` so it can't be typed into
   // mid-response. Browsers blur a focused element when it becomes
   // disabled — without this effect focus lands nowhere and xterm's
@@ -974,21 +997,6 @@ export function AssistantOverlay({
   }, [seededPrompt, provider]);
 
   const handleTextareaKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Alt+Enter approves the first pending APPROVAL card (M7.7d).
-    // Only intercepts when a pending exists; otherwise plain Enter
-    // semantics apply below so users don't lose the chord to submit.
-    if (e.key === "Enter" && e.altKey) {
-      const pendingId = firstPendingToolCallId(turnsRef.current);
-      if (pendingId !== null) {
-        e.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("shax:approval-resolve", {
-            detail: { id: pendingId, decision: "approve" },
-          }),
-        );
-        return;
-      }
-    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void sendPrompt(input);
