@@ -13,6 +13,15 @@ Every side-effectful command, whether initiated by an interactive widget (`08`),
 
 This is wired through the Agent SDK `canUseTool` callback for assistant actions and through the same policy for widget actions, so there is a single chokepoint.
 
+### Where the gate renders
+
+The gate is source-aware — the *policy* is one, the *rendering surface* is chosen to match the source:
+
+- **Widget or palette** proposals render a modal. Those surfaces have no in-flow home for an approval control, and their user is looking at the terminal, not a chat.
+- **Assistant** proposals render inline as the APPROVAL REQUIRED card in the conversation. Approve and Decline live on the card. The safety policy and chokepoint are unchanged — only the rendering surface differs.
+
+The single-chokepoint property still holds: every command flows through the same classification and the same approve / decline exit, regardless of where the buttons are drawn.
+
 ## What counts as side-effectful
 
 Anything that changes state outside reading: writes, deletes, moves, `git add` and `git checkout` and `git push`, package installs, `cd` (state change, low risk, but still a visible command), network mutations, and anything the assistant proposes in goal mode. Pure reads (an `ls` probe, a `git status` probe, a `git diff`) do not need approval.

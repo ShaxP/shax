@@ -43,6 +43,7 @@ import {
 } from "./tools";
 import { getAssistantConfig, type AssistantConfig } from "../settings/config";
 import { getBlockOutput } from "../lib/ipc";
+import type { ApprovalPendingDetail, ApprovalResolveDetail } from "../safetyGate/SafetyGate";
 
 // M7.7a: no longer `position: fixed`. The parent (App's `<main>`) lays
 // out `[tab-area | divider | assistant-panel]` as a flex row; this
@@ -394,6 +395,16 @@ interface ChatTurn {
     name: string;
     command: string;
     reason: string;
+    /** Inline approval lifecycle (M7.7d):
+     *   - `pending`  — waiting for the user's click on the card.
+     *   - `approved` — command approved; running or done.
+     *   - `declined` — command dropped by the user.
+     *  Retrospective turns restored from history default to
+     *  `approved` since we only persist settled ones. */
+    status?: "pending" | "approved" | "declined";
+    /** Only set when kind === "destructive" — surfaces the same
+     *  reason the modal used to show in its headline. */
+    destructiveReason?: string | null;
   };
   /** For tool-result turns: the structured result fed back
    *  to the model. Rendered as a small preview under the
@@ -546,6 +557,29 @@ export function AssistantOverlay({
     return () => window.removeEventListener("shax:assistant-focus-input", onFocusInput);
   }, []);
 
+  // Alt+Enter approves the active pending APPROVAL card (M7.7d).
+  // Bound at window level rather than the textarea because the
+  // textarea is `disabled={streaming}` for the whole tool loop,
+  // so it can't receive keydown while a proposal is pending.
+  // Reads the latest turns via `turnsRef` so the effect doesn't
+  // need to re-register on every turn update.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Enter" || !e.altKey) return;
+      const pendingId = firstPendingToolCallId(turnsRef.current);
+      if (pendingId === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent("shax:approval-resolve", {
+          detail: { id: pendingId, decision: "approve" },
+        }),
+      );
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // The textarea is `disabled={streaming}` so it can't be typed into
   // mid-response. Browsers blur a focused element when it becomes
   // disabled — without this effect focus lands nowhere and xterm's
@@ -692,13 +726,16 @@ export function AssistantOverlay({
 
       // Execute each proposed tool call. Runs sequentially so
       // the user sees one command approved and completed
-      // before the next appears.
+      // before the next appears. The APPROVAL card appears
+      // immediately with Approve / Decline buttons (M7.7d) —
+      // the flow now looks like: card visible → user clicks →
+      // command runs (or is dropped) → result card appears.
       for (const call of collectedToolCalls) {
-        const result = await executeToolCall(call);
+        const proposalTurnId = nextId();
         workingTurns = [
           ...workingTurns,
           {
-            id: nextId(),
+            id: proposalTurnId,
             role: "tool_proposal",
             content: "",
             toolCall: {
@@ -706,8 +743,26 @@ export function AssistantOverlay({
               name: call.name,
               command: extractCommand(call),
               reason: extractReason(call),
+              status: "pending",
             },
           },
+        ];
+        setTurns(workingTurns);
+
+        const { result, status, destructiveReason } = await executeToolCall(call, proposalTurnId);
+        workingTurns = workingTurns.map((t) => {
+          if (t.id !== proposalTurnId || t.toolCall === undefined) return t;
+          return {
+            ...t,
+            toolCall: {
+              ...t.toolCall,
+              status,
+              destructiveReason: destructiveReason ?? null,
+            },
+          };
+        });
+        workingTurns = [
+          ...workingTurns,
           {
             id: nextId(),
             role: "tool_result",
@@ -721,49 +776,92 @@ export function AssistantOverlay({
             toolResult: result,
           },
         ];
+        setTurns(workingTurns);
       }
-      setTurns(workingTurns);
     }
   };
 
   /** Route a tool call through the safety gate + PTY + block
    *  capture. Returns the structured result to feed back to
-   *  the model. When the user declines the gate, we return a
-   *  synthetic "declined" result so the model knows and can
-   *  respond gracefully. */
-  const executeToolCall = async (call: ToolCall): Promise<CommandToolResult> => {
+   *  the model, the final proposal-turn status, and (if
+   *  destructive) the reason the gate flagged. When the user
+   *  declines the gate, we return a synthetic "declined"
+   *  result so the model knows and can respond gracefully. */
+  const executeToolCall = async (
+    call: ToolCall,
+    proposalTurnId: string,
+  ): Promise<{
+    result: CommandToolResult;
+    status: "approved" | "declined";
+    destructiveReason: string | null;
+  }> => {
     const command = extractCommand(call);
     const reason = extractReason(call);
     if (targetPtyId === null) {
       return {
-        exit_code: null,
-        duration_ms: null,
-        output:
-          "No active terminal pane. Ask the user to focus a pane first, then re-ask your question.",
-        truncated: false,
+        result: {
+          exit_code: null,
+          duration_ms: null,
+          output:
+            "No active terminal pane. Ask the user to focus a pane first, then re-ask your question.",
+          truncated: false,
+        },
+        status: "declined",
+        destructiveReason: null,
       };
     }
     if (call.name !== "run_command" || command.length === 0) {
       return {
-        exit_code: null,
-        duration_ms: null,
-        output: `Unsupported tool: ${call.name}`,
-        truncated: false,
+        result: {
+          exit_code: null,
+          duration_ms: null,
+          output: `Unsupported tool: ${call.name}`,
+          truncated: false,
+        },
+        status: "declined",
+        destructiveReason: null,
       };
     }
 
-    // Await the block-complete event correlated with this
-    // emit. TerminalPane tags AI emits with source: "ai" via
-    // the FIFO source queue.
     const paneId = targetPtyId;
     const start = performance.now();
-    const blockComplete = new Promise<{
-      blockId: string;
-      exit_code: number | null;
-      duration_ms: number | null;
-    } | null>((resolve) => {
-      let settled = false;
-      const listener = (e: Event): void => {
+    let destructiveReason: string | null = null;
+
+    // The gate publishes `shax:approval-pending` for AI-sourced
+    // proposals so the assistant can style the card as
+    // destructive when needed. Latch the reason on the matching
+    // proposal turn so the header can read "Destructive: …".
+    const onPending = (e: Event): void => {
+      const detail = (e as CustomEvent<ApprovalPendingDetail>).detail;
+      if (detail.id !== call.id) return;
+      if (detail.kind !== "destructive") return;
+      destructiveReason = detail.destructiveReason ?? "flagged as dangerous";
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === proposalTurnId && t.toolCall !== undefined
+            ? { ...t, toolCall: { ...t.toolCall, destructiveReason } }
+            : t,
+        ),
+      );
+    };
+    window.addEventListener("shax:approval-pending", onPending);
+
+    // Race: block-complete (approved happy path) vs
+    // approval-resolve{decline} (early decline) vs 5-min timeout.
+    // On approve we don't return early — we still need the block
+    // output — but we flip the card's status right away so the
+    // buttons disappear.
+    const settled = await new Promise<
+      | { kind: "settled"; blockId: string; duration_ms: number }
+      | { kind: "declined" }
+      | { kind: "timeout" }
+    >((resolve) => {
+      let done = false;
+      const cleanup = (): void => {
+        window.removeEventListener("shax:block-complete", onBlock);
+        window.removeEventListener("shax:approval-resolve", onResolve);
+      };
+      const onBlock = (e: Event): void => {
         const detail = (
           e as CustomEvent<{
             paneId: string;
@@ -773,48 +871,84 @@ export function AssistantOverlay({
         ).detail;
         if (detail.paneId !== paneId) return;
         if (detail.source !== "ai") return;
-        settled = true;
-        window.removeEventListener("shax:block-complete", listener);
+        done = true;
+        cleanup();
         resolve({
+          kind: "settled",
           blockId: detail.blockId,
-          exit_code: null,
           duration_ms: Math.round(performance.now() - start),
         });
       };
-      window.addEventListener("shax:block-complete", listener);
-      // Bail if nothing arrives within a generous window —
-      // gate declined, or the shell hung. 5 minutes.
+      const onResolve = (e: Event): void => {
+        const detail = (e as CustomEvent<ApprovalResolveDetail>).detail;
+        if (detail.id !== call.id) return;
+        if (detail.decision === "approve") {
+          // Flip the card state now — buttons vanish, header
+          // morphs. Keep waiting for block-complete.
+          setTurns((prev) =>
+            prev.map((t) =>
+              t.id === proposalTurnId && t.toolCall !== undefined
+                ? { ...t, toolCall: { ...t.toolCall, status: "approved" } }
+                : t,
+            ),
+          );
+          return;
+        }
+        done = true;
+        cleanup();
+        resolve({ kind: "declined" });
+      };
+      window.addEventListener("shax:block-complete", onBlock);
+      window.addEventListener("shax:approval-resolve", onResolve);
+      // Dispatch AFTER listeners are attached so the gate's
+      // synchronous `shax:approval-pending` broadcast (via
+      // onPending, above) is guaranteed to be caught. Do NOT
+      // await between attach and dispatch.
+      window.dispatchEvent(
+        new CustomEvent("shax:emit-command", {
+          detail: {
+            paneId,
+            command,
+            source: "ai",
+            reason,
+            toolCallId: call.id,
+          },
+        }),
+      );
       setTimeout(
         () => {
-          if (settled) return;
-          window.removeEventListener("shax:block-complete", listener);
-          resolve(null);
+          if (done) return;
+          cleanup();
+          resolve({ kind: "timeout" });
         },
         5 * 60 * 1000,
       );
     });
 
-    // Dispatch the AI-sourced emit. Safety gate intercepts,
-    // shows the modal, and re-dispatches `-approved` on
-    // approval.
-    window.dispatchEvent(
-      new CustomEvent("shax:emit-command", {
-        detail: {
-          paneId,
-          command,
-          source: "ai",
-          reason,
-        },
-      }),
-    );
+    window.removeEventListener("shax:approval-pending", onPending);
 
-    const settled = await blockComplete;
-    if (settled === null) {
+    if (settled.kind === "declined") {
       return {
-        exit_code: null,
-        duration_ms: null,
-        output: "The command was not approved by the user (or timed out).",
-        truncated: false,
+        result: {
+          exit_code: null,
+          duration_ms: null,
+          output: "Declined by user.",
+          truncated: false,
+        },
+        status: "declined",
+        destructiveReason,
+      };
+    }
+    if (settled.kind === "timeout") {
+      return {
+        result: {
+          exit_code: null,
+          duration_ms: null,
+          output: "The command was not approved by the user (or timed out).",
+          truncated: false,
+        },
+        status: "declined",
+        destructiveReason,
       };
     }
 
@@ -829,10 +963,14 @@ export function AssistantOverlay({
     }
     const { output, truncated } = truncateOutput(outputText);
     return {
-      exit_code: settled.exit_code,
-      duration_ms: settled.duration_ms,
-      output,
-      truncated,
+      result: {
+        exit_code: null,
+        duration_ms: settled.duration_ms,
+        output,
+        truncated,
+      },
+      status: "approved",
+      destructiveReason,
     };
   };
 
@@ -955,9 +1093,16 @@ export function AssistantOverlay({
                 Type a message. The assistant is reached for, never intrusive.
               </div>
             )}
-            {turns.map((t) => (
-              <TurnBubble key={t.id} turn={t} />
-            ))}
+            {(() => {
+              const activePendingId = firstPendingToolCallId(turns);
+              return turns.map((t) => (
+                <TurnBubble
+                  key={t.id}
+                  turn={t}
+                  isActivePending={t.role === "tool_proposal" && t.toolCall?.id === activePendingId}
+                />
+              ));
+            })()}
           </div>
 
           <div style={INPUT_AREA}>
@@ -1023,8 +1168,15 @@ export function AssistantOverlay({
   );
 }
 
-function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
-  if (turn.role === "tool_proposal") return <ToolProposalBubble turn={turn} />;
+function TurnBubble({
+  turn,
+  isActivePending = false,
+}: {
+  turn: ChatTurn;
+  isActivePending?: boolean;
+}): React.ReactElement {
+  if (turn.role === "tool_proposal")
+    return <ToolProposalBubble turn={turn} isActivePending={isActivePending} />;
   if (turn.role === "tool_result") return <ToolResultBubble turn={turn} />;
   const style =
     turn.role === "user" ? BUBBLE_USER : turn.role === "error" ? BUBBLE_ERROR : BUBBLE_ASSISTANT;
@@ -1055,11 +1207,14 @@ function TurnBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
   );
 }
 
-// M7.7b: solid amber card matching the design's APPROVAL REQUIRED
-// treatment. Retrospective by architecture — the safety-gate modal
-// still owns the actual approve/decline; this card is the chat's
-// record of what was proposed + why. Inline approve/decline buttons
-// are a deferred follow-up (needs the safety-gate refactor).
+// M7.7b + M7.7d: solid amber card matching the design's APPROVAL
+// REQUIRED treatment. As of M7.7d the card owns the actual
+// approve / decline — the safety-gate modal no longer renders for
+// AI-sourced commands. Card style shifts by status:
+//   - pending   → amber (default below)
+//   - approved  → muted, no actions
+//   - declined  → muted, no actions
+//   - destructive-pending → red border + red Approve button
 const TOOL_PROPOSAL_BUBBLE: CSSProperties = {
   ...BUBBLE_BASE,
   alignSelf: "flex-start",
@@ -1072,6 +1227,70 @@ const TOOL_PROPOSAL_BUBBLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
+};
+
+const TOOL_PROPOSAL_BUBBLE_DESTRUCTIVE: CSSProperties = {
+  ...TOOL_PROPOSAL_BUBBLE,
+  background: "color-mix(in srgb, var(--red) 10%, transparent)",
+  border: "1px solid var(--red)",
+};
+
+const TOOL_PROPOSAL_BUBBLE_SETTLED: CSSProperties = {
+  ...TOOL_PROPOSAL_BUBBLE,
+  background: "var(--pane2)",
+  border: "1px solid var(--border)",
+};
+
+const TOOL_PROPOSAL_ACTIONS: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+  marginTop: 2,
+};
+
+const TOOL_PROPOSAL_BUTTON: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "5px 10px",
+  borderRadius: 4,
+  border: "1px solid var(--border-strong)",
+  background: "var(--pane2)",
+  color: "var(--fg)",
+  fontFamily: "var(--font-ui)",
+  fontSize: 12,
+  cursor: "pointer",
+};
+
+const TOOL_PROPOSAL_BUTTON_APPROVE: CSSProperties = {
+  ...TOOL_PROPOSAL_BUTTON,
+  background: "var(--accent)",
+  borderColor: "var(--accent)",
+  color: "#fff",
+  fontWeight: 600,
+};
+
+const TOOL_PROPOSAL_BUTTON_APPROVE_DESTRUCTIVE: CSSProperties = {
+  ...TOOL_PROPOSAL_BUTTON,
+  background: "var(--red)",
+  borderColor: "var(--red)",
+  color: "#fff",
+  fontWeight: 600,
+};
+
+// Small chord glyph shown on the right of the Approve button when
+// its card is the active pending. Reads as a chip embedded in the
+// button so the shortcut is discoverable next to the action —
+// matching the old modal's "(Enter)" hint (M7.7d).
+const APPROVE_MNEMONIC: CSSProperties = {
+  marginLeft: 8,
+  padding: "1px 6px",
+  borderRadius: 4,
+  fontSize: 10.5,
+  fontFamily: "var(--font-mono)",
+  fontWeight: 500,
+  background: "rgba(255, 255, 255, 0.18)",
+  color: "inherit",
+  lineHeight: 1.3,
 };
 
 const TOOL_PROPOSAL_HEADER: CSSProperties = {
@@ -1119,6 +1338,20 @@ const TOOL_OUTPUT: CSSProperties = {
 };
 
 /**
+ * First tool-call id waiting on inline approval. Powers the
+ * Alt+Enter shortcut and the `⌥⏎` mnemonic on the Approve button.
+ * Returns `null` when nothing is pending.
+ */
+function firstPendingToolCallId(turns: ChatTurn[]): string | null {
+  for (const t of turns) {
+    if (t.role !== "tool_proposal") continue;
+    if (t.toolCall?.status !== "pending") continue;
+    return t.toolCall.id;
+  }
+  return null;
+}
+
+/**
  * Cheap heuristic for the "writes N files · staged" hint in the
  * APPROVAL card header (M7.7b). Not a security check — the safety
  * gate is the actual chokepoint — just a UI label to help the user
@@ -1145,25 +1378,112 @@ function commandEffectSummary(command: string): string {
   return labels.join(" · ");
 }
 
-function ToolProposalBubble({ turn }: { turn: ChatTurn }): React.ReactElement {
+function ToolProposalBubble({
+  turn,
+  isActivePending = false,
+}: {
+  turn: ChatTurn;
+  isActivePending?: boolean;
+}): React.ReactElement {
   const command = turn.toolCall?.command ?? "";
   const summary = commandEffectSummary(command);
+  const status = turn.toolCall?.status ?? "approved";
+  const destructiveReason = turn.toolCall?.destructiveReason ?? null;
+  const isDestructive = destructiveReason !== null;
+  const isPending = status === "pending";
+
+  const bubbleStyle = isPending
+    ? isDestructive
+      ? TOOL_PROPOSAL_BUBBLE_DESTRUCTIVE
+      : TOOL_PROPOSAL_BUBBLE
+    : TOOL_PROPOSAL_BUBBLE_SETTLED;
+
+  let headerColor: string;
+  let headerIcon: string;
+  let headerText: string;
+  if (status === "approved") {
+    headerColor = "var(--fg-faint)";
+    headerIcon = "✓";
+    headerText = "Approved";
+  } else if (status === "declined") {
+    headerColor = "var(--fg-faint)";
+    headerIcon = "✕";
+    headerText = "Declined";
+  } else if (isDestructive) {
+    headerColor = "var(--red)";
+    headerIcon = "⚠";
+    headerText = `Destructive: ${destructiveReason}`;
+  } else {
+    headerColor = "var(--amber)";
+    headerIcon = "⚠";
+    headerText = "Approval required";
+  }
+
+  const emitResolve = (decision: "approve" | "decline"): void => {
+    const detail: ApprovalResolveDetail = {
+      id: turn.toolCall?.id ?? "",
+      decision,
+    };
+    window.dispatchEvent(new CustomEvent("shax:approval-resolve", { detail }));
+  };
+
   return (
-    <div data-testid="assistant-overlay-turn-tool_proposal" style={TOOL_PROPOSAL_BUBBLE}>
-      <div style={TOOL_PROPOSAL_HEADER}>
-        <span aria-hidden="true">⚠</span>
-        <span>Approval required</span>
-        <span
-          data-testid="assistant-overlay-turn-tool_proposal-summary"
-          style={TOOL_PROPOSAL_HEADER_META}
-        >
-          {summary}
-        </span>
+    <div
+      data-testid="assistant-overlay-turn-tool_proposal"
+      data-status={status}
+      data-destructive={isDestructive ? "true" : "false"}
+      style={bubbleStyle}
+    >
+      <div style={{ ...TOOL_PROPOSAL_HEADER, color: headerColor }}>
+        <span aria-hidden="true">{headerIcon}</span>
+        <span>{headerText}</span>
+        {isPending && (
+          <span
+            data-testid="assistant-overlay-turn-tool_proposal-summary"
+            style={TOOL_PROPOSAL_HEADER_META}
+          >
+            {summary}
+          </span>
+        )}
       </div>
       {turn.toolCall?.reason !== undefined && turn.toolCall.reason.length > 0 && (
         <div style={TOOL_META}>{turn.toolCall.reason}</div>
       )}
       <div style={TOOL_COMMAND}>{command}</div>
+      {isPending && (
+        <div style={TOOL_PROPOSAL_ACTIONS}>
+          <button
+            data-testid="assistant-overlay-turn-tool_proposal-decline"
+            type="button"
+            style={TOOL_PROPOSAL_BUTTON}
+            onClick={() => emitResolve("decline")}
+          >
+            Decline
+          </button>
+          <button
+            data-testid="assistant-overlay-turn-tool_proposal-approve"
+            type="button"
+            style={
+              isDestructive
+                ? TOOL_PROPOSAL_BUTTON_APPROVE_DESTRUCTIVE
+                : TOOL_PROPOSAL_BUTTON_APPROVE
+            }
+            onClick={() => emitResolve("approve")}
+          >
+            <span>{isDestructive ? "Run anyway" : "Approve"}</span>
+            {isActivePending && (
+              <span
+                data-testid="assistant-overlay-turn-tool_proposal-approve-mnemonic"
+                aria-hidden="true"
+                style={APPROVE_MNEMONIC}
+                title="Alt+Enter to approve"
+              >
+                ⌥⏎
+              </span>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

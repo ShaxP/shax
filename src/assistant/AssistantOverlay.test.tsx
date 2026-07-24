@@ -3,6 +3,7 @@ import "@testing-library/jest-dom";
 import { describe, expect, it, vi } from "vitest";
 import { AssistantOverlay } from "./AssistantOverlay";
 import type { StreamEvent } from "./provider";
+import type { ApprovalResolveDetail } from "../safetyGate/SafetyGate";
 
 // Mock the settings config loader — we don't want a real
 // Tauri call in tests.
@@ -412,6 +413,230 @@ describe("AssistantOverlay", () => {
     );
     await screen.findByTestId("assistant-overlay-input");
     expect(screen.queryByTestId("assistant-overlay-new")).not.toBeInTheDocument();
+  });
+
+  // M7.7d — inline safety-gate approval: card owns Approve / Decline.
+  it("renders Approve / Decline buttons on a pending tool_proposal card", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_pending",
+            name: "run_command",
+            input: { command: "ls", reason: "list files" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId="pty-1"
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "list this dir" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Card appears pending with both buttons.
+    const proposal = await screen.findByTestId("assistant-overlay-turn-tool_proposal");
+    expect(proposal).toHaveAttribute("data-status", "pending");
+    expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-approve")).toBeInTheDocument();
+    expect(screen.getByTestId("assistant-overlay-turn-tool_proposal-decline")).toBeInTheDocument();
+    // The active pending shows the ⌥⏎ mnemonic on Approve.
+    expect(
+      screen.getByTestId("assistant-overlay-turn-tool_proposal-approve-mnemonic"),
+    ).toHaveTextContent("⌥⏎");
+  });
+
+  // M7.7d — Alt+Enter approves the active pending proposal.
+  it("Alt+Enter on the textarea approves the active pending proposal", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_altenter",
+            name: "run_command",
+            input: { command: "ls", reason: "list files" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    const resolves: ApprovalResolveDetail[] = [];
+    const onResolve = (e: Event): void => {
+      resolves.push((e as CustomEvent<ApprovalResolveDetail>).detail);
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "list this dir" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByTestId("assistant-overlay-turn-tool_proposal");
+      // Alt+Enter → approve. Bound at window level (textarea is
+      // disabled during streaming), so dispatch there.
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true }),
+        );
+      });
+      expect(resolves).toContainEqual({ id: "toolu_altenter", decision: "approve" });
+    } finally {
+      window.removeEventListener("shax:approval-resolve", onResolve);
+    }
+  });
+
+  // M7.7d — Alt+Enter is a no-op when nothing is pending; plain
+  // Enter still submits new prompts.
+  it("Alt+Enter is a no-op when no proposal is pending", async () => {
+    mockClaudeProvider([
+      [
+        { kind: "text", delta: "Hi." },
+        { kind: "done", stopReason: "end_turn" },
+      ],
+    ]);
+    const resolves: ApprovalResolveDetail[] = [];
+    const onResolve = (e: Event): void => {
+      resolves.push((e as CustomEvent<ApprovalResolveDetail>).detail);
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      await screen.findByTestId("assistant-overlay-input");
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true }),
+        );
+      });
+      expect(resolves).toHaveLength(0);
+    } finally {
+      window.removeEventListener("shax:approval-resolve", onResolve);
+    }
+  });
+
+  it("clicking Decline fires shax:approval-resolve{decline} and yields a synthetic result", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_decline",
+            name: "run_command",
+            input: { command: "rm -rf /tmp/x", reason: "cleanup" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+      [
+        { kind: "text", delta: "OK, skipping." },
+        { kind: "done", stopReason: "end_turn" },
+      ],
+    ]);
+    const resolves: ApprovalResolveDetail[] = [];
+    const onResolve = (e: Event): void => {
+      resolves.push((e as CustomEvent<ApprovalResolveDetail>).detail);
+    };
+    window.addEventListener("shax:approval-resolve", onResolve);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId="pty-1"
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      fireEvent.change(input, { target: { value: "delete temp" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      const declineBtn = await screen.findByTestId("assistant-overlay-turn-tool_proposal-decline");
+      fireEvent.click(declineBtn);
+      expect(resolves).toHaveLength(1);
+      expect(resolves[0]).toEqual({ id: "toolu_decline", decision: "decline" });
+      await waitFor(() => {
+        expect(screen.getByTestId("assistant-overlay-turn-tool_proposal")).toHaveAttribute(
+          "data-status",
+          "declined",
+        );
+      });
+      await waitFor(() => {
+        const result = screen.getByTestId("assistant-overlay-turn-tool_result");
+        expect(result).toHaveTextContent("Declined by user.");
+      });
+    } finally {
+      window.removeEventListener("shax:approval-resolve", onResolve);
+    }
+  });
+
+  it("styles the card as destructive when shax:approval-pending arrives with kind=destructive", async () => {
+    mockClaudeProvider([
+      [
+        {
+          kind: "tool_call",
+          call: {
+            id: "toolu_destr",
+            name: "run_command",
+            input: { command: "rm -rf /tmp/x", reason: "cleanup" },
+          },
+        },
+        { kind: "done", stopReason: "tool_use" },
+      ],
+    ]);
+    render(
+      <AssistantOverlay
+        onClose={NOOP}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId="pty-1"
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    fireEvent.change(input, { target: { value: "cleanup" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Simulate the gate publishing the destructive-pending signal.
+    await screen.findByTestId("assistant-overlay-turn-tool_proposal");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:approval-pending", {
+          detail: {
+            id: "toolu_destr",
+            paneId: "pty-1",
+            command: "rm -rf /tmp/x",
+            kind: "destructive",
+            destructiveReason: "recursive delete",
+          },
+        }),
+      );
+    });
+    await waitFor(() => {
+      const proposal = screen.getByTestId("assistant-overlay-turn-tool_proposal");
+      expect(proposal).toHaveAttribute("data-destructive", "true");
+      expect(proposal).toHaveTextContent("Destructive: recursive delete");
+    });
   });
 
   it("renders a tool_proposal bubble when the provider emits a tool_call", async () => {

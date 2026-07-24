@@ -114,7 +114,9 @@ describe("SafetyGate", () => {
     window.removeEventListener("shax:emit-command-approved", approvedSpy);
   });
 
-  // M7.7c — focus routing after the gate closes.
+  // M7.7c — focus routing after the gate closes. AI-sourced
+  // approvals go inline via `shax:approval-resolve` (M7.7d), so
+  // approve them by dispatching that event instead of clicking.
   it("routes focus to the assistant textarea after approving an AI-sourced command", () => {
     render(<SafetyGate />);
     const focusInput = vi.fn();
@@ -125,12 +127,22 @@ describe("SafetyGate", () => {
       act(() => {
         window.dispatchEvent(
           new CustomEvent("shax:emit-command", {
-            detail: { paneId: "pty-1", command: "ls", source: "ai", reason: "list files" },
+            detail: {
+              paneId: "pty-1",
+              command: "ls",
+              source: "ai",
+              reason: "list files",
+              toolCallId: "call-1",
+            },
           }),
         );
       });
       act(() => {
-        fireEvent.click(screen.getByTestId("safety-gate-approve"));
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: "call-1", decision: "approve" },
+          }),
+        );
       });
       expect(focusInput).toHaveBeenCalledTimes(1);
       expect(focusPane).not.toHaveBeenCalled();
@@ -166,18 +178,144 @@ describe("SafetyGate", () => {
     }
   });
 
-  it("shows a modal for AI-sourced commands even when non-destructive", () => {
+  // M7.7d — AI-sourced commands no longer render a modal. They
+  // publish `shax:approval-pending` for the assistant's APPROVAL
+  // card to drive.
+  it("publishes shax:approval-pending for AI-sourced commands and does not render a modal", () => {
     render(<SafetyGate />);
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("shax:emit-command", {
-          detail: { paneId: "pty-1", command: "ls", source: "ai", reason: "list files" },
-        }),
-      );
-    });
-    const modal = screen.getByTestId("safety-gate");
-    expect(modal).toHaveAttribute("data-kind", "ai");
-    expect(modal).toHaveTextContent("why: list files");
+    const pendingSpy = vi.fn();
+    window.addEventListener("shax:approval-pending", pendingSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "ls",
+              source: "ai",
+              reason: "list files",
+              toolCallId: "call-42",
+            },
+          }),
+        );
+      });
+      expect(screen.queryByTestId("safety-gate")).toBeNull();
+      expect(pendingSpy).toHaveBeenCalledTimes(1);
+      const detail = (pendingSpy.mock.calls[0]?.[0] as CustomEvent).detail as {
+        id: string;
+        kind: string;
+        command: string;
+        reason?: string;
+      };
+      expect(detail.id).toBe("call-42");
+      expect(detail.kind).toBe("ai");
+      expect(detail.command).toBe("ls");
+      expect(detail.reason).toBe("list files");
+    } finally {
+      window.removeEventListener("shax:approval-pending", pendingSpy);
+    }
+  });
+
+  it("routes an AI-sourced approval through shax:approval-resolve → -approved", () => {
+    render(<SafetyGate />);
+    const approvedSpy = vi.fn();
+    window.addEventListener("shax:emit-command-approved", approvedSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "ls",
+              source: "ai",
+              toolCallId: "call-1",
+            },
+          }),
+        );
+      });
+      // No modal, no forwarded event yet.
+      expect(approvedSpy).not.toHaveBeenCalled();
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: "call-1", decision: "approve" },
+          }),
+        );
+      });
+      expect(approvedSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("shax:emit-command-approved", approvedSpy);
+    }
+  });
+
+  it("routes an AI-sourced decline through shax:approval-resolve → drop", () => {
+    render(<SafetyGate />);
+    const approvedSpy = vi.fn();
+    window.addEventListener("shax:emit-command-approved", approvedSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "rm -rf /tmp/x",
+              source: "ai",
+              toolCallId: "call-2",
+            },
+          }),
+        );
+      });
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: "call-2", decision: "decline" },
+          }),
+        );
+      });
+      expect(approvedSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:emit-command-approved", approvedSpy);
+    }
+  });
+
+  it("ignores shax:approval-resolve for a non-matching correlation id", () => {
+    render(<SafetyGate />);
+    const approvedSpy = vi.fn();
+    window.addEventListener("shax:emit-command-approved", approvedSpy);
+    try {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command", {
+            detail: {
+              paneId: "pty-1",
+              command: "ls",
+              source: "ai",
+              toolCallId: "call-a",
+            },
+          }),
+        );
+      });
+      // Wrong id — must not resolve the pending proposal.
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: "call-b", decision: "approve" },
+          }),
+        );
+      });
+      expect(approvedSpy).not.toHaveBeenCalled();
+      // The right id still resolves.
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-resolve", {
+            detail: { id: "call-a", decision: "approve" },
+          }),
+        );
+      });
+      expect(approvedSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("shax:emit-command-approved", approvedSpy);
+    }
   });
 
   it("drops proposals that arrive while a modal is already pending", () => {
