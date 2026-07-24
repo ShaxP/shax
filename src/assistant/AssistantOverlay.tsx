@@ -495,12 +495,20 @@ export function AssistantOverlay({
     return "";
   }, [config, provider]);
 
-  // Focus the panel on mount as a fallback; close via
-  // Escape. When a provider is available the textarea takes
-  // focus instead (see the effect below) so the user can
-  // start typing without an extra click.
+  // Focus the panel on mount as a fallback. When a provider
+  // is available the textarea takes focus instead (see the
+  // effect below) so the user can start typing without an
+  // extra click. Split from the Escape handler so a parent
+  // re-render — which changes the `onClose` reference — does
+  // NOT re-focus the panel and steal focus back from whatever
+  // child currently owns it (e.g. the textarea).
   useEffect(() => {
     panelRef.current?.focus();
+  }, []);
+
+  // Escape closes. Kept in its own effect because it legitimately
+  // depends on the current `onClose` reference.
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         e.preventDefault();

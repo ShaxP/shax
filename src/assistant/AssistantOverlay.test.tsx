@@ -560,6 +560,38 @@ describe("AssistantOverlay / M7.7b header + footer", () => {
     expect(privacy).toHaveTextContent(/prompts leave your machine/i);
   });
 
+  // M7.7c — regression: a parent re-render (which changes `onClose`'s
+  // reference every time) must NOT steal focus back from the textarea.
+  it("keeps textarea focus across parent re-renders that change onClose", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    const { rerender } = render(
+      <AssistantOverlay
+        onClose={() => {}}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // Fresh onClose reference — mimics App re-rendering on unrelated state.
+    rerender(
+      <AssistantOverlay
+        onClose={() => {}}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    expect(document.activeElement).toBe(input);
+  });
+
   // M7.7c — INSERT/NORMAL mode indicator
   it("emits shax:assistant-input-focus on textarea focus and blur", async () => {
     vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
