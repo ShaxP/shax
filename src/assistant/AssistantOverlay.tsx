@@ -924,6 +924,20 @@ export function AssistantOverlay({
                 disabled={streaming}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleTextareaKey}
+                onFocus={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:assistant-input-focus", {
+                      detail: { focused: true },
+                    }),
+                  );
+                }}
+                onBlur={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("shax:assistant-input-focus", {
+                      detail: { focused: false },
+                    }),
+                  );
+                }}
                 style={TEXTAREA}
               />
             </div>

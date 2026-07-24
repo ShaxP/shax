@@ -559,4 +559,40 @@ describe("AssistantOverlay / M7.7b header + footer", () => {
     expect(privacy).toHaveAttribute("data-posture", "cloud");
     expect(privacy).toHaveTextContent(/prompts leave your machine/i);
   });
+
+  // M7.7c — INSERT/NORMAL mode indicator
+  it("emits shax:assistant-input-focus on textarea focus and blur", async () => {
+    vi.mocked(getAssistantConfig).mockResolvedValue(BASE_CONFIG);
+    vi.mocked(providerFromConfig).mockReturnValue({
+      provider: stubProvider([]),
+      reason: null,
+    });
+    const events: boolean[] = [];
+    const onFocus = (e: Event): void => {
+      const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
+      if (typeof detail?.focused === "boolean") events.push(detail.focused);
+    };
+    window.addEventListener("shax:assistant-input-focus", onFocus);
+    try {
+      render(
+        <AssistantOverlay
+          onClose={NOOP}
+          seededPrompt={null}
+          onSeedConsumed={NOOP}
+          onOpenSettings={NOOP}
+          targetPtyId={null}
+        />,
+      );
+      const input = await screen.findByTestId("assistant-overlay-input");
+      // The overlay auto-focuses on mount once the provider resolves,
+      // so at least one focus event should already have landed.
+      await waitFor(() => expect(events).toContain(true));
+      fireEvent.blur(input);
+      await waitFor(() => expect(events[events.length - 1]).toBe(false));
+      fireEvent.focus(input);
+      await waitFor(() => expect(events[events.length - 1]).toBe(true));
+    } finally {
+      window.removeEventListener("shax:assistant-input-focus", onFocus);
+    }
+  });
 });

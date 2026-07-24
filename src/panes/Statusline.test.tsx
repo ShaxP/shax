@@ -21,6 +21,14 @@ describe("Statusline", () => {
     expect(screen.getByTestId("statusline-mode")).toHaveTextContent("NORMAL");
   });
 
+  // M7.7c — modal indicator
+  it("shows INSERT when the mode prop is INSERT", () => {
+    render(<Statusline cwd={null} branch={null} mode="INSERT" />);
+    const pill = screen.getByTestId("statusline-mode");
+    expect(pill).toHaveTextContent("INSERT");
+    expect(pill).toHaveAttribute("data-mode", "INSERT");
+  });
+
   it("shows neutral fallbacks when cwd and branch are null", () => {
     render(<Statusline cwd={null} branch={null} />);
     expect(screen.getByTestId("statusline-cwd")).toHaveTextContent("—");

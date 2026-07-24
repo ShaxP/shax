@@ -16,9 +16,19 @@
 
 import type { CSSProperties } from "react";
 
+export type StatuslineMode = "NORMAL" | "INSERT";
+
 export interface StatuslineProps {
   cwd: string | null;
   branch: string | null;
+  /**
+   * Modal indicator (M7.7c). Flips to `INSERT` when the
+   * assistant input owns focus, `NORMAL` everywhere else. The
+   * assistant input is currently the only INSERT surface; more
+   * modal editors (block-focus vim-style, palette input) may
+   * feed this same slot later.
+   */
+  mode?: StatuslineMode;
   /**
    * True when the assistant dock is open (M7.7b). Adds a small "+
    * assistant active" indicator on the right so users know the
@@ -86,13 +96,14 @@ const RIGHT_CELL: CSSProperties = {
 export function Statusline({
   cwd,
   branch,
+  mode = "NORMAL",
   assistantActive = false,
   approvalsPending = 0,
 }: StatuslineProps): React.ReactElement {
   return (
     <div data-testid="statusline" style={ROW}>
-      <span style={MODE_PILL} data-testid="statusline-mode">
-        NORMAL
+      <span style={MODE_PILL} data-testid="statusline-mode" data-mode={mode}>
+        {mode}
       </span>
       <span style={BRANCH_GROUP} data-testid="statusline-branch">
         <span style={{ color: "var(--accent)" }}>⎇</span>
