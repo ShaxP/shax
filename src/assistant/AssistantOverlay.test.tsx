@@ -318,6 +318,39 @@ describe("AssistantOverlay", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // M8.1 follow-up regression: Escape must NOT close the assistant
+  // dock when a higher-priority overlay (palette, search, viewer,
+  // safety-gate, settings) owns the foreground — those overlays
+  // own the Escape gesture themselves.
+  it("Escape leaves the assistant open when a higher-priority overlay is mounted", async () => {
+    const onClose = vi.fn();
+    mockClaudeProvider([]);
+    render(
+      <AssistantOverlay
+        onClose={onClose}
+        seededPrompt={null}
+        onSeedConsumed={NOOP}
+        onOpenSettings={NOOP}
+        targetPtyId={null}
+      />,
+    );
+    const input = await screen.findByTestId("assistant-overlay-input");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    act(() => input.blur());
+    // Simulate the palette overlay being mounted alongside.
+    const palette = document.createElement("div");
+    palette.setAttribute("data-testid", "palette-overlay");
+    document.body.appendChild(palette);
+    try {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      palette.remove();
+    }
+  });
+
   it("restores persisted turns on mount", async () => {
     vi.mocked(loadChatHistory).mockResolvedValueOnce({
       turns: [
