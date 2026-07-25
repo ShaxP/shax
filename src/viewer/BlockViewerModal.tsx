@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 import {
   blockGetOutput,
   getBlockOutput,
@@ -204,6 +205,7 @@ export function BlockViewerModal({
   pty,
   onClose,
 }: BlockViewerModalProps): React.ReactElement {
+  useModalLayer("block-viewer-modal");
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -242,12 +244,14 @@ export function BlockViewerModal({
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      if (!isTopmostModalLayer("block-viewer-modal")) return;
       if (e.key === "Escape") {
         // Viewer.tsx explicitly does NOT stopPropagation for Esc
         // but does for other keys — Esc anywhere (prompt strip,
         // editor host, backdrop) closes the modal.
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         onClose();
         return;
       }

@@ -319,10 +319,11 @@ describe("AssistantOverlay", () => {
   });
 
   // M8.1 follow-up regression: Escape must NOT close the assistant
-  // dock when a higher-priority overlay (palette, search, viewer,
-  // safety-gate, settings) owns the foreground — those overlays
-  // own the Escape gesture themselves.
-  it("Escape leaves the assistant open when a higher-priority overlay is mounted", async () => {
+  // dock when a modal layer (palette, search, viewer, safety-gate,
+  // settings) is on top — those overlays own the Escape gesture.
+  // Uses the shared modal-layer stack rather than DOM query since
+  // the refactor.
+  it("Escape leaves the assistant open when a modal layer is on top", async () => {
     const onClose = vi.fn();
     mockClaudeProvider([]);
     render(
@@ -337,17 +338,19 @@ describe("AssistantOverlay", () => {
     const input = await screen.findByTestId("assistant-overlay-input");
     await waitFor(() => expect(document.activeElement).toBe(input));
     act(() => input.blur());
-    // Simulate the palette overlay being mounted alongside.
-    const palette = document.createElement("div");
-    palette.setAttribute("data-testid", "palette-overlay");
-    document.body.appendChild(palette);
+    // Simulate the palette mounted on top by pushing its layer id.
+    // Import inline to keep the modal-layer coupling explicit.
+    const { useModalLayer, _resetModalLayersForTests } = await import("../lib/modalLayer");
+    const { renderHook } = await import("@testing-library/react");
+    const layer = renderHook(() => useModalLayer("palette-overlay"));
     try {
       act(() => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       });
       expect(onClose).not.toHaveBeenCalled();
     } finally {
-      palette.remove();
+      layer.unmount();
+      _resetModalLayersForTests();
     }
   });
 
