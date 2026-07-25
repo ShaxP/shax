@@ -239,6 +239,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
       if (!isTopmostModalLayer("palette-overlay")) return;
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       if (view.kind === "list") {
         onClose();
       } else {

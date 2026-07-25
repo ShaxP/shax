@@ -251,6 +251,7 @@ export function BlockViewerModal({
         // editor host, backdrop) closes the modal.
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         onClose();
         return;
       }

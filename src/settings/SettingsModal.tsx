@@ -455,6 +455,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
       if (!isTopmostModalLayer("settings-modal")) return;
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       onClose();
     };
     window.addEventListener("keydown", onKey, true);

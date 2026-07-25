@@ -330,10 +330,12 @@ export function SafetyGate(): React.ReactElement | null {
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         approve();
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         decline();
       }
     };

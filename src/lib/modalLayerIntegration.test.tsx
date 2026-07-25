@@ -7,11 +7,13 @@
  * assistant behind it.
  */
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, expect, it, vi } from "vitest";
 import { AssistantOverlay } from "../assistant/AssistantOverlay";
 import { SafetyGate } from "../safetyGate/SafetyGate";
+import { PaletteOverlay } from "../palette/PaletteOverlay";
+import "../palette/builtins/echoHello";
 import { _resetModalLayersForTests } from "./modalLayer";
 
 // Same mocks the AssistantOverlay tests use.
@@ -127,6 +129,56 @@ describe("modal-layer integration — assistant + safety-gate", () => {
       window.dispatchEvent(evt);
     });
     expect(onCloseAssistant).toHaveBeenCalled();
+  });
+
+  // Reproduces the exact user report: palette → Enter on Echo hello
+  // → safety-gate modal appears (palette-sourced commands classify
+  // as "ai" and hit the modal path) → Escape must close only the
+  // safety-gate, not the assistant behind it.
+  it("palette Enter → safety-gate → Escape leaves the assistant open", async () => {
+    _resetModalLayersForTests();
+    const onCloseAssistant = vi.fn();
+    const onClosePalette = vi.fn();
+    render(
+      <>
+        <AssistantOverlay
+          onClose={onCloseAssistant}
+          seededPrompt={null}
+          onSeedConsumed={() => {}}
+          onOpenSettings={() => {}}
+          targetPtyId="pty-1"
+        />
+        <PaletteOverlay
+          ctx={{ ptyId: "pty-1", cwd: "/tmp", branch: null }}
+          onClose={onClosePalette}
+        />
+        <SafetyGate />
+      </>,
+    );
+
+    await screen.findByTestId("assistant-overlay-input");
+    // Filter to Echo hello, select, preview.
+    const paletteInput = screen.getByTestId("palette-overlay-input");
+    fireEvent.change(paletteInput, { target: { value: "echo" } });
+    fireEvent.keyDown(paletteInput, { key: "Enter" });
+    await screen.findByTestId("palette-overlay-preview");
+
+    // Submit — palette dispatches emit-command with source="palette".
+    // SafetyGate classifies as "ai" (non-inline for palette source),
+    // renders the modal. Palette closes.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await screen.findByTestId("safety-gate");
+    expect(onClosePalette).toHaveBeenCalledTimes(1);
+
+    // Now the exact user gesture: Escape.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+
+    await waitFor(() => expect(screen.queryByTestId("safety-gate")).not.toBeInTheDocument());
+    expect(onCloseAssistant).not.toHaveBeenCalled();
   });
 
   it("Enter with both mounted approves only the safety-gate", async () => {
