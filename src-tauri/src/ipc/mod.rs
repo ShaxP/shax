@@ -526,6 +526,77 @@ pub async fn git_status_porcelain(cwd: String) -> Result<String, String> {
     run_git(&cwd, &["status", "--porcelain=v2", "--branch", "-z"]).await
 }
 
+/// One entry per branch known to the repo — local heads first,
+/// then remote-tracking. Powers the `git checkout` palette
+/// picker (M8.3). Uses the machine-readable `for-each-ref` so
+/// we never scrape `git branch -a` output.
+#[derive(Debug, serde::Serialize)]
+pub struct GitBranch {
+    /// Short ref name — e.g. `main`, `origin/feat/foo`.
+    pub name: String,
+    /// True when this ref is the current HEAD.
+    pub is_current: bool,
+    /// `local` for `refs/heads/*`, `remote` for `refs/remotes/*`.
+    pub kind: GitBranchKind,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitBranchKind {
+    Local,
+    Remote,
+}
+
+/// List every branch known to the repo, local then remote-tracking.
+///
+/// The palette's `git checkout` command drives its picker from this,
+/// so filtering / grouping / current-branch highlighting all happens
+/// on structured data — never by parsing porcelain-1 `git branch` output.
+///
+/// `refs/remotes/*/HEAD` is filtered out (they're symbolic aliases
+/// like `origin/HEAD -> origin/main` and would appear as an extra
+/// `origin/HEAD` row that's not a real checkout target).
+#[tauri::command]
+pub async fn git_branches(cwd: String) -> Result<Vec<GitBranch>, String> {
+    // %(HEAD) prints `*` when the ref is the current HEAD, ` ` otherwise.
+    // %(refname:short) collapses `refs/heads/main` → `main` and
+    // `refs/remotes/origin/main` → `origin/main`.
+    let raw = run_git(
+        &cwd,
+        &[
+            "for-each-ref",
+            "--format=%(HEAD)%(refname:short)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )
+    .await?;
+    let mut branches: Vec<GitBranch> = Vec::new();
+    for line in raw.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let (head_marker, rest) = line.split_at(1);
+        let is_current = head_marker == "*";
+        let name = rest.to_string();
+        // Skip `origin/HEAD` and similar refs/remotes/*/HEAD aliases.
+        if name.ends_with("/HEAD") {
+            continue;
+        }
+        let kind = if name.contains('/') {
+            GitBranchKind::Remote
+        } else {
+            GitBranchKind::Local
+        };
+        branches.push(GitBranch {
+            name,
+            is_current,
+            kind,
+        });
+    }
+    Ok(branches)
+}
+
 /// Return the current user's home directory as a string. The frontend
 /// uses this once, on boot, to compact cwds for display — turning
 /// `/Users/ada/dev/shax` into `~/dev/shax` in the tab, prompt strip,

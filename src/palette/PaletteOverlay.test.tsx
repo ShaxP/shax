@@ -4,7 +4,7 @@ import "@testing-library/jest-dom";
 import { PaletteOverlay } from "./PaletteOverlay";
 import { _resetRegistryForTests, registerPaneCommand, type PaneContext } from "./registry";
 
-const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp", branch: null };
+const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp", branch: null, gitRoot: null };
 
 beforeEach(() => {
   _resetRegistryForTests();

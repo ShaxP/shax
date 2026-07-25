@@ -29,6 +29,11 @@ export interface PaneContext {
   cwd: string | null;
   /** Current git branch, from the most recent prompt hint. */
   branch: string | null;
+  /** Absolute path to the nearest ancestor `.git` — `null` when
+   *  `cwd` is not inside a repo. Resolved lazily by the palette
+   *  on open via the `git_root_for` IPC. Git commands (M8.3+)
+   *  matcher on `ctx.gitRoot !== null`. */
+  gitRoot: string | null;
 }
 
 /** Grouping in the palette list body. Sections read as small

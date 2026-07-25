@@ -7,7 +7,7 @@ import {
   type PaneContext,
 } from "./registry";
 
-const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp", branch: null };
+const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp", branch: null, gitRoot: null };
 
 afterEach(() => {
   _resetRegistryForTests();

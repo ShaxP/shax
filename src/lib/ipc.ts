@@ -507,6 +507,28 @@ export async function gitStatusPorcelain(cwd: string): Promise<string> {
   return invoke<string>("git_status_porcelain", { cwd });
 }
 
+/** A branch known to the repo. Powers the `git checkout` palette
+ *  picker (M8.3). `kind: "local"` for `refs/heads/*` refs, `"remote"`
+ *  for `refs/remotes/*`. `is_current` reflects `%(HEAD)` — true for
+ *  the checked-out branch, false for everything else. */
+export interface GitBranch {
+  name: string;
+  is_current: boolean;
+  kind: "local" | "remote";
+}
+
+/**
+ * List every branch known to the repo (local heads + remote-tracking).
+ * Runs `git for-each-ref` on the backend so we never scrape porcelain
+ * output. Returns an empty array outside Tauri. Rejects with the
+ * backend's error string on not-a-repo / git-not-found / 10s timeout.
+ */
+export async function gitBranches(cwd: string): Promise<GitBranch[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<GitBranch[]>("git_branches", { cwd });
+}
+
 /**
  * Run `git diff <args>` in `cwd` and return stdout. The unified
  * diff format is the machine-readable format already, so we don't
