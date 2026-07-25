@@ -207,6 +207,50 @@ export function GitCheckoutPanel({ ctx, onSubmit }: GitCheckoutPanelProps): Reac
     onSubmit(buildCheckoutCommand(branch));
   }, [selectable, selectedIndex, onSubmit]);
 
+  // Refs so the window keydown listener below always reads the
+  // latest closure state without needing to re-register on every
+  // render. The `[]` dep on that effect avoids a churn of
+  // listener registrations while branches load / filter changes.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const selectableCountRef = useRef(selectable.length);
+  selectableCountRef.current = selectable.length;
+
+  // Backup navigation: bind arrow / Enter at the window layer
+  // while the panel is mounted. Redundant with the filter-input's
+  // onKeyDown handler in the common case, but a safety net if
+  // focus is somewhere else in the DOM (a browser caret-hop, an
+  // event capture race, the palette's own input reclaiming focus).
+  // Skipped when a non-panel text input owns focus so we don't
+  // hijack an unrelated caret.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== filterRef.current) {
+        const tag = active.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable) return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        submitRef.current();
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.min(selectableCountRef.current - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   const handleKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === "Enter") {
       e.preventDefault();

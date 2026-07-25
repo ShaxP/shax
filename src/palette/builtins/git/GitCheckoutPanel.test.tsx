@@ -74,6 +74,42 @@ describe("GitCheckoutPanel", () => {
     expect(rows[1]).toHaveAttribute("data-selected", "true");
   });
 
+  it("ArrowDown / ArrowUp moves the selection cursor across selectable rows", async () => {
+    vi.mocked(gitBranches).mockResolvedValue([
+      branch("main", "local", true),
+      branch("feat/bar", "local"),
+      branch("feat/foo", "local"),
+    ]);
+    // jsdom doesn't ship scrollIntoView; stub it so the effect doesn't throw.
+    const scrollSpy = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      const onSubmit = vi.fn();
+      render(<GitCheckoutPanel ctx={CTX} onSubmit={onSubmit} />);
+      await waitFor(() =>
+        expect(screen.getAllByTestId("palette-git-checkout-row")).toHaveLength(3),
+      );
+      const filter = screen.getByTestId("palette-git-checkout-filter");
+      // Initial selection is the first *selectable* row (feat/bar).
+      let rows = screen.getAllByTestId("palette-git-checkout-row");
+      expect(rows[1]).toHaveAttribute("data-selected", "true");
+      // Down → feat/foo (2nd selectable).
+      fireEvent.keyDown(filter, { key: "ArrowDown" });
+      rows = screen.getAllByTestId("palette-git-checkout-row");
+      expect(rows[2]).toHaveAttribute("data-selected", "true");
+      expect(rows[1]).toHaveAttribute("data-selected", "false");
+      // Up → back to feat/bar.
+      fireEvent.keyDown(filter, { key: "ArrowUp" });
+      rows = screen.getAllByTestId("palette-git-checkout-row");
+      expect(rows[1]).toHaveAttribute("data-selected", "true");
+      // Enter now emits the selected branch.
+      fireEvent.keyDown(filter, { key: "Enter" });
+      expect(onSubmit).toHaveBeenCalledWith("git checkout feat/bar");
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it("typing narrows the list", async () => {
     vi.mocked(gitBranches).mockResolvedValue([
       branch("main", "local"),
