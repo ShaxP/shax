@@ -36,6 +36,8 @@ import type { TabDescriptor } from "./panes/TitleBar";
 import { Statusline } from "./panes/Statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
+import { PaletteOverlay } from "./palette/PaletteOverlay";
+import "./palette/builtins/echoHello";
 import { SafetyGate } from "./safetyGate/SafetyGate";
 import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
@@ -437,6 +439,9 @@ export default function App(): React.ReactElement {
   // Search overlay. Top-level so the keybindings can open it regardless
   // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
+  // Command palette (M8.1). ⌘⇧P toggles. Chrome, not per-pane —
+  // one open at a time, same lifecycle rules as the search overlay.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // Block viewer modal target (M4 slice 4.1). Driven by a window-level
   // `shax:open-viewer` event so BlockRow doesn't need a deep prop chain.
   // `pty` is null when the block originated in a pane that's no longer
@@ -734,6 +739,16 @@ export default function App(): React.ReactElement {
         setSearchOpen(true);
         return;
       }
+      // ⌘⇧P toggles the pane command palette (M8.1, spec §14).
+      // The Shift is deliberate — plain ⌘P is a common browser
+      // shortcut we don't want to hijack, and ⌘⇧P matches VS
+      // Code muscle memory. Key.toLowerCase because `shift`
+      // gives us the uppercase form on macOS.
+      if (e.shiftKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+        return;
+      }
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
         dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
@@ -998,6 +1013,19 @@ export default function App(): React.ReactElement {
               pty={viewerTarget.pty}
               onClose={() => {
                 setViewerTarget(null);
+                refocusActivePane();
+              }}
+            />
+          )}
+          {paletteOpen && activeFocused?.ptyId != null && (
+            <PaletteOverlay
+              ctx={{
+                ptyId: activeFocused.ptyId,
+                cwd: activeFocused.cwd,
+                branch: activeFocused.branch,
+              }}
+              onClose={() => {
+                setPaletteOpen(false);
                 refocusActivePane();
               }}
             />

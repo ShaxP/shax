@@ -588,7 +588,8 @@ function TerminalPaneInner({
     document.querySelector('[data-testid="search-overlay"]') !== null ||
     document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
     document.querySelector('[data-testid="safety-gate"]') !== null ||
-    document.querySelector('[data-testid="settings-modal"]') !== null;
+    document.querySelector('[data-testid="settings-modal"]') !== null ||
+    document.querySelector('[data-testid="palette-overlay"]') !== null;
   // Note: the assistant overlay is deliberately NOT in this
   // list. It's a right-side *panel*, not a blocking modal —
   // the terminal stays visible and interactive on its left.
