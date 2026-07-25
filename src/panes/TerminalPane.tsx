@@ -30,6 +30,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { readXtermTheme } from "./xtermTheme";
+import { anyModalLayerOpen } from "../lib/modalLayer";
 import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
 import type { BlockId, PtyId, PtyEvent } from "../lib/ipc";
 import type { UiBlock } from "./blockReducer";
@@ -577,19 +578,14 @@ function TerminalPaneInner({
     }
   };
 
-  /** True when an app-level overlay (search, block viewer
-   *  modal) is open. The block-focus keymap must not swallow
-   *  keys while the user is interacting with one of those —
-   *  e.g. typing into the search box would otherwise trigger
-   *  `j` → advance-down. We check the DOM rather than thread a
-   *  prop because the overlays are App-level state and
-   *  TerminalPane shouldn't need a wider awareness. */
-  const overlayIsOpen = (): boolean =>
-    document.querySelector('[data-testid="search-overlay"]') !== null ||
-    document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
-    document.querySelector('[data-testid="safety-gate"]') !== null ||
-    document.querySelector('[data-testid="settings-modal"]') !== null ||
-    document.querySelector('[data-testid="palette-overlay"]') !== null;
+  /** True when any App-level modal is currently owning the
+   *  keyboard. The block-focus keymap surrenders while one is
+   *  up — otherwise typing `j` into a search box or the
+   *  palette filter would also trigger "advance block down"
+   *  on the pane behind. Backed by the shared modal-layer
+   *  stack (`src/lib/modalLayer.ts`) so we don't have to
+   *  hand-maintain a list of `data-testid`s per overlay. */
+  const overlayIsOpen = (): boolean => anyModalLayerOpen();
   // Note: the assistant overlay is deliberately NOT in this
   // list. It's a right-side *panel*, not a blocking modal —
   // the terminal stays visible and interactive on its left.

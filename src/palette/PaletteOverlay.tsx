@@ -37,6 +37,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import type { PaneCommand, PaneCommandRender, PaneContext } from "./registry";
 import { availableCommands } from "./registry";
 import { rankCommands, type RankedCommand } from "./filter";
+import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 
 /** Emit source tag for palette-originated commands. Matches
  *  the `EmitSource` union in the Rust safety gate; kept as a
@@ -166,6 +167,7 @@ const PREVIEW_KBD: CSSProperties = {
 };
 
 export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.ReactElement {
+  useModalLayer("palette-overlay");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [view, setView] = useState<OverlayView>({ kind: "list" });
@@ -228,10 +230,13 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
 
   // Global Escape handling — closes whichever view is on top.
   // Preview: Esc backs out to the list. Panel: Esc backs out
-  // to the list too. List: Esc closes the whole overlay.
+  // to the list too. List: Esc closes the whole overlay. The
+  // modal-layer check ensures another overlay opened on top of
+  // us gets its Escape first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
+      if (!isTopmostModalLayer("palette-overlay")) return;
       e.preventDefault();
       e.stopPropagation();
       if (view.kind === "list") {
@@ -249,6 +254,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
     if (view.kind !== "preview") return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Enter") return;
+      if (!isTopmostModalLayer("palette-overlay")) return;
       e.preventDefault();
       e.stopPropagation();
       emitAndClose(view.command);

@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 import {
   deleteClaudeApiKey,
   hasClaudeApiKey,
@@ -396,6 +397,7 @@ const DEFAULT_CONFIG: AssistantConfig = {
 type NavSection = "appearance" | "assistant";
 
 export function SettingsModal({ onClose }: { onClose: () => void }): React.ReactElement {
+  useModalLayer("settings-modal");
   const panelRef = useRef<HTMLDivElement>(null);
 
   const [activeSection, setActiveSection] = useState<NavSection>("appearance");
@@ -449,11 +451,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      if (!isTopmostModalLayer("settings-modal")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);

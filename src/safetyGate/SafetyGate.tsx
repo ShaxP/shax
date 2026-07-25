@@ -24,6 +24,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { classifyCommand, destructiveReason, type EmitSource } from "./policy";
+import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 
 /** Wire-format for the proposal event. Widgets currently
  *  don't set `source` (defaults to `"widget"`), `cwd`, or
@@ -200,6 +201,12 @@ export function SafetyGate(): React.ReactElement | null {
   pendingRef.current = pending;
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Push a modal layer only when the modal path is actually
+  // showing — inline (assistant) approvals stay peers of the
+  // dock and don't own the keyboard.
+  const modalVisible = pending !== null && !pending.inline;
+  useModalLayer("safety-gate", modalVisible);
+
   useEffect(() => {
     const onProposal = (e: Event): void => {
       const detail = (e as CustomEvent<EmitCommandDetail>).detail;
@@ -319,6 +326,7 @@ export function SafetyGate(): React.ReactElement | null {
   useEffect(() => {
     if (pending === null || pending.inline) return;
     const onKey = (e: KeyboardEvent): void => {
+      if (!isTopmostModalLayer("safety-gate")) return;
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();

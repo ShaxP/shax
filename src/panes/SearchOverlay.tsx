@@ -21,6 +21,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 import { createPortal } from "react-dom";
 import {
   embeddingProgress,
@@ -488,6 +489,7 @@ export function SearchOverlay({
   currentCwd = null,
   currentBranch = null,
 }: SearchOverlayProps): React.ReactElement {
+  useModalLayer("search-overlay");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SearchStatus>("any");
   const [time, setTime] = useState<TimeBucket>("any");
@@ -814,6 +816,7 @@ export function SearchOverlay({
   }, [selected]);
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      if (!isTopmostModalLayer("search-overlay")) return;
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
