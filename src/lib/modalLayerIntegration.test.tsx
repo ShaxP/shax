@@ -149,7 +149,7 @@ describe("modal-layer integration — assistant + safety-gate", () => {
           targetPtyId="pty-1"
         />
         <PaletteOverlay
-          ctx={{ ptyId: "pty-1", cwd: "/tmp", branch: null }}
+          ctx={{ ptyId: "pty-1", cwd: "/tmp", branch: null, gitRoot: null }}
           onClose={onClosePalette}
         />
         <SafetyGate />

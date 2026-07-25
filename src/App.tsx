@@ -39,6 +39,7 @@ import { SearchOverlay } from "./panes/SearchOverlay";
 import { PaletteOverlay } from "./palette/PaletteOverlay";
 import "./palette/builtins/echoHello";
 import "./palette/builtins/cd";
+import "./palette/builtins/git";
 import { SafetyGate } from "./safetyGate/SafetyGate";
 import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
@@ -1024,6 +1025,7 @@ export default function App(): React.ReactElement {
                 ptyId: activeFocused.ptyId,
                 cwd: activeFocused.cwd,
                 branch: activeFocused.branch,
+                gitRoot: null,
               }}
               onClose={() => {
                 setPaletteOpen(false);

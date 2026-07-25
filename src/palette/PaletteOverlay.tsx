@@ -38,6 +38,7 @@ import type { PaneCommand, PaneCommandRender, PaneContext } from "./registry";
 import { availableCommands } from "./registry";
 import { rankCommands, type RankedCommand } from "./filter";
 import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
+import { gitRootFor } from "../lib/ipc";
 
 /** Emit source tag for palette-originated commands. Matches
  *  the `EmitSource` union in the Rust safety gate; kept as a
@@ -173,7 +174,27 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
   const [view, setView] = useState<OverlayView>({ kind: "list" });
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const commands = useMemo(() => availableCommands(ctx), [ctx]);
+  // Resolve `gitRoot` lazily via IPC on open. Starts as the value
+  // the caller provided (usually `null`), then updates once
+  // `git_root_for` resolves — commands matcher'd on
+  // `ctx.gitRoot !== null` slide into the list a tick later.
+  const [resolvedGitRoot, setResolvedGitRoot] = useState<string | null>(ctx.gitRoot);
+  useEffect(() => {
+    if (ctx.cwd === null) return;
+    let cancelled = false;
+    void gitRootFor(ctx.cwd).then((root) => {
+      if (!cancelled) setResolvedGitRoot(root);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.cwd]);
+  const enrichedCtx = useMemo<PaneContext>(
+    () => ({ ...ctx, gitRoot: resolvedGitRoot }),
+    [ctx, resolvedGitRoot],
+  );
+
+  const commands = useMemo(() => availableCommands(enrichedCtx), [enrichedCtx]);
   const ranked = useMemo(() => rankCommands(commands, query), [commands, query]);
 
   // Focus the input on open; also whenever we bounce back to
@@ -201,7 +222,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
   const openSelected = (): void => {
     const entry = ranked[selectedIndex];
     if (entry === undefined) return;
-    const rendered = entry.command.render(ctx);
+    const rendered = entry.command.render(enrichedCtx);
     if (rendered.kind === "preview") {
       setView({ kind: "preview", command: rendered.command, from: entry.command });
     } else {
@@ -339,7 +360,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
         {view.kind === "panel" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
             <view.render.Panel
-              ctx={ctx}
+              ctx={enrichedCtx}
               onSubmit={(command) => {
                 if (command === null) {
                   setView({ kind: "list" });

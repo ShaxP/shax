@@ -16,7 +16,7 @@ vi.mock("../../../lib/ipc", async (importOriginal) => {
 
 import { readDirEntries } from "../../../lib/ipc";
 
-const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp/work", branch: null };
+const CTX: PaneContext = { ptyId: "pty-1", cwd: "/tmp/work", branch: null, gitRoot: null };
 
 function entry(name: string, kind: DirEntry["kind"] = "file"): DirEntry {
   return {
@@ -155,6 +155,7 @@ describe("CdPanel", () => {
       ptyId: "pty-1",
       cwd: "/tmp/has space/x",
       branch: null,
+      gitRoot: null,
     };
     vi.mocked(readDirEntries).mockResolvedValue([]);
     const onSubmit = vi.fn();
