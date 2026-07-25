@@ -33,6 +33,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { parseGitStatus, type GitStatus, type StatusEntry } from "../../formatters/parseGitStatus";
 import { gitStatusPorcelain, type PtyId } from "../../lib/ipc";
+import { shellEscape } from "../../lib/shellEscape";
 
 type SectionKind = "unmerged" | "staged" | "unstaged" | "untracked";
 
@@ -542,15 +543,6 @@ function commandForAction(section: SectionKind, entry: StatusEntry): string | nu
   if (section === "unstaged") return `git add -- ${path}`;
   if (section === "untracked") return `git add -- ${path}`;
   return null;
-}
-
-/** Minimal POSIX quoting — wrap in single quotes and escape
- *  embedded single quotes with `'\''`. Sufficient for the
- *  paths git status emits (which never contain shell
- *  metacharacters unquoted). */
-function shellEscape(path: string): string {
-  if (/^[A-Za-z0-9_./-]+$/.test(path)) return path;
-  return `'${path.replace(/'/g, "'\\''")}'`;
 }
 
 interface SectionProps {

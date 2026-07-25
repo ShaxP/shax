@@ -38,6 +38,7 @@ import { LayoutRender } from "./panes/LayoutRender";
 import { SearchOverlay } from "./panes/SearchOverlay";
 import { PaletteOverlay } from "./palette/PaletteOverlay";
 import "./palette/builtins/echoHello";
+import "./palette/builtins/cd";
 import { SafetyGate } from "./safetyGate/SafetyGate";
 import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
