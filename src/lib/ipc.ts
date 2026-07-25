@@ -530,6 +530,19 @@ export async function gitBranches(cwd: string): Promise<GitBranch[]> {
 }
 
 /**
+ * Read the local `user.email` git config for `cwd`. Returns `null`
+ * when the key isn't set or the process isn't in a Tauri context.
+ * Powers the palette commit panel's `--signoff` toggle (M8.4) —
+ * we only surface the toggle when a meaningful `Signed-off-by:`
+ * line can be produced.
+ */
+export async function gitUserEmail(cwd: string): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("git_user_email", { cwd });
+}
+
+/**
  * Run `git diff <args>` in `cwd` and return stdout. The unified
  * diff format is the machine-readable format already, so we don't
  * substitute the args — we replay what the user typed.

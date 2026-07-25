@@ -547,6 +547,29 @@ pub enum GitBranchKind {
     Remote,
 }
 
+/// Read the local `user.email` config. Returned as `Some(email)`
+/// when configured, `None` when the setting is empty or `git config`
+/// exits non-zero. Powers the palette's git-commit signoff toggle
+/// (M8.4) — the toggle only appears when we know we can produce a
+/// meaningful `Signed-off-by:` line.
+#[tauri::command]
+pub async fn git_user_email(cwd: String) -> Result<Option<String>, String> {
+    match run_git(&cwd, &["config", "--get", "user.email"]).await {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        // `git config --get` on a missing key exits with status 1
+        // and empty stdout. `run_git` folds that into `Err`; treat
+        // it as "not configured" rather than propagating the error.
+        Err(_) => Ok(None),
+    }
+}
+
 /// List every branch known to the repo, local then remote-tracking.
 ///
 /// The palette's `git checkout` command drives its picker from this,
