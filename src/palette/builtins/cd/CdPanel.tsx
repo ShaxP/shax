@@ -271,6 +271,17 @@ export function CdPanel({ ctx, onSubmit }: CdPanelProps): React.ReactElement {
     }
   }, [flat.length, selectedIndex]);
 
+  // Keep the selected row visible when arrow-key nav walks off
+  // the visible window. `block: "nearest"` scrolls only when
+  // needed — hover-selecting a row that's already visible
+  // doesn't jerk the list.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list === null) return;
+    const row = list.querySelector<HTMLElement>('[data-selected="true"]');
+    row?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
+
   const emitCurrent = useCallback((): void => {
     onSubmit(`cd ${shellEscape(currentPath)}`);
   }, [currentPath, onSubmit]);

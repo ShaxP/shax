@@ -175,4 +175,29 @@ describe("CdPanel", () => {
     renderPanel();
     await waitFor(() => expect(screen.getByText(/permission denied/i)).toBeInTheDocument());
   });
+
+  it("scrolls the selected row into view as arrow keys walk down the list", async () => {
+    vi.mocked(readDirEntries).mockResolvedValue(
+      Array.from({ length: 30 }, (_, i) => entry(`dir-${String(i).padStart(2, "0")}`, "dir")),
+    );
+    const scrollSpy = vi.fn();
+    // jsdom doesn't implement scrollIntoView — stub it on the prototype
+    // so our effect can call it under test.
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      renderPanel();
+      await waitFor(() => expect(screen.getAllByTestId("palette-cd-row")).toHaveLength(30));
+      const filter = screen.getByTestId("palette-cd-filter");
+      // Reset the initial mount call so we count only the arrow-driven ones.
+      scrollSpy.mockClear();
+      fireEvent.keyDown(filter, { key: "ArrowDown" });
+      fireEvent.keyDown(filter, { key: "ArrowDown" });
+      fireEvent.keyDown(filter, { key: "ArrowDown" });
+      expect(scrollSpy).toHaveBeenCalledTimes(3);
+      expect(scrollSpy).toHaveBeenLastCalledWith({ block: "nearest" });
+    } finally {
+      // Clean up the stub so other tests don't see it.
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
 });
