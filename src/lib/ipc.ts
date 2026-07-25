@@ -578,6 +578,29 @@ export async function listCommunityFormatters(): Promise<CommunityFormatterPaylo
 }
 
 /**
+ * One community palette command discovered on disk. Shape matches
+ * the Rust `CommunityCommandPayload` (M8.5 spec §14).
+ */
+export interface CommunityCommandPayload {
+  name: string;
+  manifest_json: string;
+  source_js: string;
+}
+
+/**
+ * Read every community palette command from
+ * `~/.config/shax/commands/`. Empty when the directory doesn't
+ * exist. Per-command parse / size failures are logged on the
+ * backend and silently skipped so one bad add-on doesn't break
+ * the load.
+ */
+export async function listCommunityCommands(): Promise<CommunityCommandPayload[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CommunityCommandPayload[]>("list_community_commands");
+}
+
+/**
  * File statistics returned by `statFile`. Shape mirrors the
  * backend `FileStat` (`serde` snake_case).
  *

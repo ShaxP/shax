@@ -139,6 +139,18 @@ const ROW_DESC: CSSProperties = {
   color: "var(--fg-dim)",
 };
 
+const COMMUNITY_PILL: CSSProperties = {
+  fontSize: 9,
+  fontWeight: 600,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
+  padding: "1px 6px",
+  borderRadius: 999,
+  border: "1px solid var(--magenta)",
+  color: "var(--magenta)",
+  fontFamily: "var(--font-mono)",
+};
+
 const EMPTY_NOTE: CSSProperties = {
   padding: "20px 14px",
   color: "var(--fg-faint)",
@@ -327,11 +339,13 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
                   <div style={GROUP_HEADER}>{group}</div>
                   {entries.map(({ command, indexInRanked }) => {
                     const isSelected = indexInRanked === selectedIndex;
+                    const isCommunity = command.source === "community";
                     return (
                       <div
                         key={command.name}
                         data-testid="palette-overlay-row"
                         data-selected={isSelected ? "true" : "false"}
+                        data-source={command.source ?? "built-in"}
                         style={isSelected ? ROW_SELECTED : ROW_BASE}
                         onMouseEnter={() => setSelectedIndex(indexInRanked)}
                         onClick={() => {
@@ -339,7 +353,18 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
                           openSelected();
                         }}
                       >
-                        <div>{command.name}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span>{command.name}</span>
+                          {isCommunity && (
+                            <span
+                              data-testid="palette-overlay-community-pill"
+                              style={COMMUNITY_PILL}
+                              title="Community command — runs sandboxed in a Web Worker."
+                            >
+                              community
+                            </span>
+                          )}
+                        </div>
                         <div style={ROW_DESC}>{command.description}</div>
                       </div>
                     );
