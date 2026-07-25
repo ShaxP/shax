@@ -16,7 +16,7 @@ A "preview before submit" step is part of every palette command. The palette nev
 
 ## Trigger and palette UX
 
-- `Cmd+K` (Linux/Windows: `Ctrl+K`) opens the palette in the active pane.
+- `Cmd+Shift+P` (Linux/Windows: `Ctrl+Shift+P`) opens the palette in the active pane. The chord matches the VS Code convention users already have muscle memory for. The plain `Cmd+K` bind reserved for the palette in the original draft of this spec is already in use for the assistant per §09; the two now share the "reach for AI or reach for a guided command" pair of chords.
 - The palette is App-level chrome — one open at a time, like search.
 - Block-focus mode, like the search overlay and viewer modal, surrenders the keymap while the palette is open. The bypass uses the same `data-testid` DOM check.
 - `Esc` closes the palette and returns focus to the prompt.

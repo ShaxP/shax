@@ -49,6 +49,22 @@ import type {
   ApprovalResolveDetail,
 } from "../safetyGate/SafetyGate";
 
+/** Whether an App-level overlay that owns the Escape gesture is
+ *  currently mounted. The assistant's own Escape close-handler
+ *  bails when one of these is up so pressing Esc inside the
+ *  palette (or the search overlay, viewer modal, etc.) doesn't
+ *  also close the assistant dock behind it (M8.1 follow-up). */
+function higherPriorityOverlayIsOpen(): boolean {
+  if (typeof document === "undefined") return false;
+  return (
+    document.querySelector('[data-testid="palette-overlay"]') !== null ||
+    document.querySelector('[data-testid="search-overlay"]') !== null ||
+    document.querySelector('[data-testid="block-viewer-modal"]') !== null ||
+    document.querySelector('[data-testid="safety-gate"]') !== null ||
+    document.querySelector('[data-testid="settings-modal"]') !== null
+  );
+}
+
 // M7.7a: no longer `position: fixed`. The parent (App's `<main>`) lays
 // out `[tab-area | divider | assistant-panel]` as a flex row; this
 // panel is a plain flex-column child whose width is set by App from
@@ -534,11 +550,18 @@ export function AssistantOverlay({
   // onKeyDown — see `handleTextareaKey` — where it bounces focus back
   // to the active pane instead of closing. Fully closing still uses
   // ⌘K / ? / the ✕ button.
+  //
+  // Also skipped when a higher-priority overlay (search, palette,
+  // viewer modal, safety-gate modal, settings modal) owns the
+  // foreground — those own the Escape gesture, and the assistant
+  // stays open behind them (fix for M8.1 regression where Esc from
+  // the palette also closed the dock).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
       const target = e.target;
       if (target instanceof Element && target === textareaRef.current) return;
+      if (higherPriorityOverlayIsOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       onClose();
