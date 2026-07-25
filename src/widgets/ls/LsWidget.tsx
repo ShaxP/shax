@@ -51,6 +51,7 @@ import {
   type LsFlags,
 } from "../../formatters/ls";
 import { readDirEntries, type DirEntry, type PtyId } from "../../lib/ipc";
+import { shellEscape } from "../../lib/shellEscape";
 
 export interface LsWidgetProps {
   /** Initial directory contents from the formatter's first
@@ -580,12 +581,6 @@ function actionHint(entry: DirEntry): string | null {
 function joinPath(parent: string, name: string): string {
   if (parent.endsWith("/")) return `${parent}${name}`;
   return `${parent}/${name}`;
-}
-
-/** POSIX-safe path escape — same shape as git-status widget. */
-function shellEscape(path: string): string {
-  if (/^[A-Za-z0-9_./-]+$/.test(path)) return path;
-  return `'${path.replace(/'/g, "'\\''")}'`;
 }
 
 function findRowIndex(rows: readonly FlatRow[], absolutePath: string): number {
