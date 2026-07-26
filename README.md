@@ -4,13 +4,24 @@ An AI-aware terminal emulator for developers. Shax runs ordinary Linux and Unix 
 
 This repository currently contains the **specifications and build guardrails**, not yet the implementation. It is structured so that a Claude Code agent team can pick it up and build the product.
 
+## Documentation
+
+- **Extension authors** — write add-ons that appear in the `⌘⇧P` palette or format command output:
+  - `docs/community-commands.md` — community pane commands.
+  - `docs/community-formatters.md` — community formatters.
+  - `docs/safety-gate.md` — how emitted commands are classified.
+- **Contributors** — build and change Shax itself:
+  - `docs/contributor-quickstart.md` — ten-minute path from clone to a running dev build.
+  - `docs/branching-and-workflow.md` — Git workflow, PR rules.
+  - `docs/README.md` — index of everything in `docs/`.
+
 ## What is in here
 
 - `specs/` numbered specifications. Start at `specs/00-overview.md` and read in order.
+- `docs/` external documentation (see above).
 - `CLAUDE.md` the always-on guardrails every agent inherits: clean-code rules, conventions, Git workflow, testing policy, and the definition of done.
 - `.claude/agents/` the agent team: one lead plus three engineers.
 - `.claude/skills/` reusable skills for the team, with install notes in `.claude/skills/README.md`.
-- `docs/branching-and-workflow.md` the Git and release workflow.
 - `.github/workflows/ci.yml` continuous integration.
 - `LICENSE` MIT.
 
