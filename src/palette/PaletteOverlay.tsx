@@ -208,6 +208,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
 
   const commands = useMemo(() => availableCommands(enrichedCtx), [enrichedCtx]);
   const ranked = useMemo(() => rankCommands(commands, query), [commands, query]);
+  const { buckets: grouped, visualOrder } = useMemo(() => groupRanked(ranked), [ranked]);
 
   // Focus the input on open; also whenever we bounce back to
   // the list view (e.g. panel cancelled).
@@ -215,12 +216,12 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
     if (view.kind === "list") inputRef.current?.focus();
   }, [view.kind]);
 
-  // Clamp selection whenever the ranked list length changes.
+  // Clamp selection whenever the visible list length changes.
   useEffect(() => {
-    if (selectedIndex >= ranked.length) {
-      setSelectedIndex(Math.max(0, ranked.length - 1));
+    if (selectedIndex >= visualOrder.length) {
+      setSelectedIndex(Math.max(0, visualOrder.length - 1));
     }
-  }, [ranked.length, selectedIndex]);
+  }, [visualOrder.length, selectedIndex]);
 
   const emitAndClose = (command: string): void => {
     window.dispatchEvent(
@@ -232,13 +233,13 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
   };
 
   const openSelected = (): void => {
-    const entry = ranked[selectedIndex];
-    if (entry === undefined) return;
-    const rendered = entry.command.render(enrichedCtx);
+    const command = visualOrder[selectedIndex];
+    if (command === undefined) return;
+    const rendered = command.render(enrichedCtx);
     if (rendered.kind === "preview") {
-      setView({ kind: "preview", command: rendered.command, from: entry.command });
+      setView({ kind: "preview", command: rendered.command, from: command });
     } else {
-      setView({ kind: "panel", render: rendered, from: entry.command });
+      setView({ kind: "panel", render: rendered, from: command });
     }
   };
 
@@ -246,7 +247,7 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
     if (view.kind !== "list") return;
     if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
       e.preventDefault();
-      setSelectedIndex((i) => Math.min(ranked.length - 1, i + 1));
+      setSelectedIndex((i) => Math.min(visualOrder.length - 1, i + 1));
       return;
     }
     if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
@@ -300,8 +301,6 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  const grouped = useMemo(() => groupRanked(ranked), [ranked]);
-
   return (
     <div
       data-testid="palette-overlay"
@@ -341,8 +340,8 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
               {grouped.map(({ group, entries }) => (
                 <div key={group}>
                   <div style={GROUP_HEADER}>{group}</div>
-                  {entries.map(({ command, indexInRanked }) => {
-                    const isSelected = indexInRanked === selectedIndex;
+                  {entries.map(({ command, visualIndex }) => {
+                    const isSelected = visualIndex === selectedIndex;
                     const isCommunity = command.source === "community";
                     return (
                       <div
@@ -351,9 +350,9 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
                         data-selected={isSelected ? "true" : "false"}
                         data-source={command.source ?? "built-in"}
                         style={isSelected ? ROW_SELECTED : ROW_BASE}
-                        onMouseEnter={() => setSelectedIndex(indexInRanked)}
+                        onMouseEnter={() => setSelectedIndex(visualIndex)}
                         onClick={() => {
-                          setSelectedIndex(indexInRanked);
+                          setSelectedIndex(visualIndex);
                           openSelected();
                         }}
                       >
@@ -405,25 +404,43 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
   );
 }
 
-/** Group ranked entries by their command group while preserving
- *  the global `indexInRanked` for keyboard navigation. Group
- *  order follows the first appearance of each group in the
- *  ranked list, so higher-relevance groups float up. */
+/** Group ranked entries by their command group and produce a
+ *  flat visual-order list alongside. Keyboard navigation uses
+ *  the visual-order index — arrows have to move through what
+ *  the user sees, not the pre-grouping rank order (rank order
+ *  interleaves groups; visually rows are contiguous within a
+ *  group). Group order follows the first appearance of each
+ *  group in the ranked list, so higher-relevance groups float
+ *  up. */
 interface GroupBucket {
   group: string;
-  entries: { command: PaneCommand; indexInRanked: number }[];
+  entries: { command: PaneCommand; visualIndex: number }[];
 }
-function groupRanked(ranked: RankedCommand[]): GroupBucket[] {
+interface GroupedResult {
+  buckets: GroupBucket[];
+  visualOrder: PaneCommand[];
+}
+function groupRanked(ranked: RankedCommand[]): GroupedResult {
   const order: string[] = [];
   const buckets = new Map<string, GroupBucket>();
-  ranked.forEach(({ command }, indexInRanked) => {
+  ranked.forEach(({ command }) => {
     let bucket = buckets.get(command.group);
     if (bucket === undefined) {
       bucket = { group: command.group, entries: [] };
       buckets.set(command.group, bucket);
       order.push(command.group);
     }
-    bucket.entries.push({ command, indexInRanked });
+    bucket.entries.push({ command, visualIndex: -1 });
   });
-  return order.map((g) => buckets.get(g)).filter((b): b is GroupBucket => b !== undefined);
+  const orderedBuckets = order
+    .map((g) => buckets.get(g))
+    .filter((b): b is GroupBucket => b !== undefined);
+  const visualOrder: PaneCommand[] = [];
+  for (const bucket of orderedBuckets) {
+    for (const entry of bucket.entries) {
+      entry.visualIndex = visualOrder.length;
+      visualOrder.push(entry.command);
+    }
+  }
+  return { buckets: orderedBuckets, visualOrder };
 }
