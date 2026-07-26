@@ -1,5 +1,7 @@
 # 14 Pane commands (the command palette)
 
+> For an author-facing guide to writing community pane commands, see `docs/community-commands.md`.
+
 A `Cmd+K` palette that exposes pane-scoped operations — `cd` via a file browser, the git operations (`status`, `checkout`, `stash`, `commit`, `rebase`), and third-party commands a user has installed. Built on the same registry-of-matchers + sandbox-the-community-ones pattern as `07-formatters.md`, but acting on the *action* axis rather than the *render* axis.
 
 ## The non-negotiable: palette is an input method, not a side-channel
