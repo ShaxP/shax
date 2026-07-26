@@ -2,7 +2,7 @@
 
 An AI-aware terminal emulator for developers. Shax runs ordinary Linux and Unix commands but treats each command and its output as a structured, searchable, occasionally interactive "block." A Claude-powered assistant is available throughout but stays quiet until invoked. It is a calm, fast, local-first daily driver, not an AI gadget.
 
-This repository currently contains the **specifications and build guardrails**, not yet the implementation. It is structured so that a Claude Code agent team can pick it up and build the product.
+Actively developed. Milestones M0–M8 have shipped: a working terminal with structured blocks, native multiplexing, history search (FTS + semantic), a file viewer with static formatters, interactive widgets, the assistant with its safety gate, and the `⌘⇧P` pane-command palette with a community-command sandbox. See `specs/12-roadmap-milestones.md` for the full plan.
 
 ## Documentation
 
@@ -25,22 +25,30 @@ This repository currently contains the **specifications and build guardrails**, 
 - `.github/workflows/ci.yml` continuous integration.
 - `LICENSE` MIT.
 
-## How to start the build
+## Building it
 
-1. Make sure you are on Claude Code v2.1.32 or later and have Opus 4.6 access through a Pro or Max plan.
-2. Enable agent teams. Add to your shell or to `settings.json`:
+```sh
+git clone https://github.com/ShaxP/shax.git
+cd shax
+npm install
+npm run tauri:dev
+```
+
+Full setup — Rust toolchain, Tauri 2 platform deps, the three tests you'll run most — in `docs/contributor-quickstart.md`.
+
+## Continuing development with an agent team
+
+Shax is written with a Claude Code agent team (one orchestrator plus three engineers, see `.claude/agents/`). To pick up where the roadmap left off:
+
+1. Make sure you are on Claude Code v2.1.32 or later and have Opus access through a Pro or Max plan.
+2. Enable agent teams:
    ```
    export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
    ```
-   Optionally install `tmux` for per-agent terminal panels (fitting, given what we are building).
-3. Open Claude Code at this repo root: `/Users/shahram/source/repos/shax`.
-4. Install the skills (see `.claude/skills/README.md`).
-5. Start a team task aimed at the orchestrator, for example:
-   > Read CLAUDE.md and specs/00-overview.md, then specs/12-roadmap-milestones.md. Form a team with the core, frontend, and ai engineers and execute milestone M0. Open a PR when the definition of done is met. Do not merge.
-
-## Build order
-
-Terminal (PTY plus blocks via OSC 133), then native multiplexing, then search, then the file viewer and static formatters, then interactive widgets (diff, status, ls), then the AI assistant and auth. See `specs/12-roadmap-milestones.md`.
+   Optionally install `tmux` for per-agent terminal panels.
+3. Open Claude Code at this repo root and install the skills (see `.claude/skills/README.md`).
+4. Start a task aimed at the orchestrator, for example:
+   > Read CLAUDE.md and specs/12-roadmap-milestones.md. Form a team with the core, frontend, and ai engineers and execute the next milestone. Open a PR when the definition of done is met. Do not merge.
 
 ## License
 
