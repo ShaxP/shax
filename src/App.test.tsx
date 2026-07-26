@@ -87,6 +87,7 @@ vi.mock("./lib/ipc", () => ({
     mockAppStateLoad(...args) as Promise<string | null>,
   appStateSave: (...args: unknown[]): Promise<void> => mockAppStateSave(...args) as Promise<void>,
   listCommunityFormatters: (): Promise<unknown[]> => Promise.resolve([]),
+  listCommunityCommands: (): Promise<unknown[]> => Promise.resolve([]),
   base64Decode: (b64: string): Uint8Array => new TextEncoder().encode(b64),
   base64Encode: (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)),
   // M7 slice 3 additions — semantic tier + progress polling. The

@@ -74,6 +74,11 @@ export interface PaneCommand {
   description: string;
   /** Section header in the palette list body. */
   group: PaneCommandGroup;
+  /** Trust tier (M8.5). `built-in` (default) runs trusted on the
+   *  main thread. `community` runs sandboxed in a Web Worker; the
+   *  palette renders a small "community" pill on those rows so
+   *  the user can tell them apart. */
+  source?: "built-in" | "community";
   /** Predicate over the current `PaneContext`. Runs
    *  synchronously on every filter tick; keep it cheap. Return
    *  `true` if the command should appear in the list. */

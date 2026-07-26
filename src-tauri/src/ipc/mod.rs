@@ -509,6 +509,116 @@ pub async fn list_community_formatters() -> Result<Vec<CommunityFormatterPayload
     Ok(out)
 }
 
+/// One community palette command discovered on disk. Same shape
+/// as `CommunityFormatterPayload` — the frontend parses the
+/// manifest + source and hands them to `createSandboxedCommand`.
+#[derive(Debug, serde::Serialize)]
+pub struct CommunityCommandPayload {
+    pub name: String,
+    pub manifest_json: String,
+    pub source_js: String,
+}
+
+/// Where on disk community palette commands live. Same convention
+/// as formatters — each immediate subdirectory of
+/// `~/.config/shax/commands/` is one add-on.
+fn community_commands_root() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::PathBuf::from(home).join(".config/shax/commands"))
+}
+
+/// Maximum size of a single community-command source file (bytes).
+/// Same cap as formatters — a runaway packaging accident is
+/// rejected before we hand the bytes to a Worker.
+const MAX_COMMAND_SOURCE_BYTES: u64 = 256 * 1024;
+
+/// Read every community palette command from
+/// `~/.config/shax/commands/` (M8.5, spec §14). One subdirectory
+/// per command; each must contain `manifest.json` + `command.js`.
+/// The frontend validates the manifest + spawns the Worker; the
+/// backend only walks the filesystem and enforces a size cap.
+///
+/// Structurally identical to `list_community_formatters` — kept
+/// as a separate command so the two disk roots stay independent
+/// and the frontend loaders don't couple.
+#[tauri::command]
+pub async fn list_community_commands() -> Result<Vec<CommunityCommandPayload>, String> {
+    let root = match community_commands_root() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let mut dir = match tokio::fs::read_dir(&root).await {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{e}")),
+    };
+    let mut out: Vec<CommunityCommandPayload> = Vec::new();
+    while let Some(entry) = dir.next_entry().await.map_err(|e| format!("{e}"))? {
+        let entry_path = entry.path();
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("list_community_commands: stat failed for {entry_path:?}: {e}");
+                continue;
+            }
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let name = match entry.file_name().to_str() {
+            Some(s) => s.to_string(),
+            None => {
+                tracing::warn!(
+                    "list_community_commands: skipping non-utf8 dir name {entry_path:?}"
+                );
+                continue;
+            }
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let manifest_path = entry_path.join("manifest.json");
+        let source_path = entry_path.join("command.js");
+        let manifest_json = match tokio::fs::read_to_string(&manifest_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "list_community_commands: {name} missing/unreadable manifest.json: {e}"
+                );
+                continue;
+            }
+        };
+        let source_meta = match tokio::fs::metadata(&source_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    "list_community_commands: {name} missing/unreadable command.js: {e}"
+                );
+                continue;
+            }
+        };
+        if source_meta.len() > MAX_COMMAND_SOURCE_BYTES {
+            tracing::warn!(
+                "list_community_commands: {name} command.js exceeds {MAX_COMMAND_SOURCE_BYTES} bytes, skipping"
+            );
+            continue;
+        }
+        let source_js = match tokio::fs::read_to_string(&source_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("list_community_commands: {name} read failed: {e}");
+                continue;
+            }
+        };
+        out.push(CommunityCommandPayload {
+            name,
+            manifest_json,
+            source_js,
+        });
+    }
+    Ok(out)
+}
+
 /// Run `git status --porcelain=v2 --branch -z` in `cwd` and return
 /// stdout. Why this and not "let the user pass arbitrary git
 /// args": narrowing the API keeps the backend from becoming a

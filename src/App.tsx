@@ -40,6 +40,11 @@ import { PaletteOverlay } from "./palette/PaletteOverlay";
 import "./palette/builtins/echoHello";
 import "./palette/builtins/cd";
 import "./palette/builtins/git";
+import "./palette/builtins/reload";
+import { registerPaneCommand as _registerPaneCommand } from "./palette/registry";
+import { mkdirSandboxCommand } from "./palette/sandbox/samples/mkdir";
+import { loadCommunityCommands } from "./palette/sandbox/loader";
+_registerPaneCommand(mkdirSandboxCommand);
 import { SafetyGate } from "./safetyGate/SafetyGate";
 import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
@@ -673,6 +678,7 @@ export default function App(): React.ReactElement {
   // IPC surface — only App tests do, and they already mock IPC.
   useEffect(() => {
     void loadCommunityFormatters();
+    void loadCommunityCommands();
   }, []);
 
   // Persist the tab/layout snapshot on change, debounced so a divider drag
