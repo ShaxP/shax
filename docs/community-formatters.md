@@ -184,6 +184,12 @@ The sandbox is a security boundary. Inside a worker:
 
 The only thing your code can do is *compute a value* from the context and return a schema node. The host renders it. The user sees text in the colours and shapes you chose — and only that.
 
+## The safety gate
+
+Formatter output never reaches the safety gate. The gate only classifies *emitted commands* (from widgets, community pane commands, and the assistant) — it doesn't see rendered content. If your formatter renders a URL or a scary-looking string, the user can copy it, but nothing runs until they type or emit a real command. That separation is deliberate and is the fidelity contract from `CLAUDE.md`.
+
+If you're also writing a community pane command that emits shell commands, or you're wondering how a destructive-looking widget action gets flagged, read `docs/safety-gate.md`.
+
 ## Loading
 
 Drop the directory under `~/.config/shax/formatters/`, then restart Shax. (A "Reload add-ons" command lands in the future pane palette; until then, restart.)

@@ -1,5 +1,7 @@
 # 07 Formatters
 
+> For an author-facing guide to writing community formatters, see `docs/community-formatters.md`.
+
 Formatters turn a completed block's output into a rich (tier 1) view. Some are promoted to interactive widgets (tier 2, see `08`). Both obey the two-path model in `02`.
 
 ## Registration
