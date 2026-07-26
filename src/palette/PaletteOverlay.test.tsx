@@ -143,4 +143,49 @@ describe("PaletteOverlay", () => {
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(rows[0]).toHaveAttribute("data-selected", "true");
   });
+
+  it("arrow-key navigation follows visual (grouped) order, not rank order", () => {
+    // Registration order interleaves groups: Nav-A, Git-B, Nav-C.
+    // With no query, rankCommands preserves that order — but the
+    // palette groups by `group` before rendering, so the visible
+    // order is [Nav-A, Nav-C, Git-B]. Arrow keys must follow what
+    // the user sees.
+    registerPaneCommand({
+      name: "A1",
+      description: "",
+      group: "Navigation",
+      matcher: () => true,
+      render: () => ({ kind: "preview", command: "" }),
+    });
+    registerPaneCommand({
+      name: "B1",
+      description: "",
+      group: "Git",
+      matcher: () => true,
+      render: () => ({ kind: "preview", command: "" }),
+    });
+    registerPaneCommand({
+      name: "A2",
+      description: "",
+      group: "Navigation",
+      matcher: () => true,
+      render: () => ({ kind: "preview", command: "" }),
+    });
+    render(<PaletteOverlay ctx={CTX} onClose={() => {}} />);
+    const input = screen.getByTestId("palette-overlay-input");
+    let rows = screen.getAllByTestId("palette-overlay-row");
+    // Visual order sanity check.
+    expect(rows.map((r) => r.textContent)).toEqual(["A1", "A2", "B1"]);
+    expect(rows[0]).toHaveAttribute("data-selected", "true");
+    // ArrowDown → second visible row (A2), NOT the second rank
+    // entry (B1). Regression against grouping/nav mismatch.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    rows = screen.getAllByTestId("palette-overlay-row");
+    expect(rows[1]).toHaveAttribute("data-selected", "true");
+    expect(rows[1]).toHaveTextContent("A2");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    rows = screen.getAllByTestId("palette-overlay-row");
+    expect(rows[2]).toHaveAttribute("data-selected", "true");
+    expect(rows[2]).toHaveTextContent("B1");
+  });
 });
