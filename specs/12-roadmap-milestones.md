@@ -239,3 +239,40 @@ Scope:
 - A "Reload commands" entry in the palette for development workflow.
 
 **Exit:** `Cmd+K` opens the palette in any pane; the built-in commands compose and submit real shell commands visible in the user's scrollback; destructive commands prompt twice (palette confirm + safety gate); a sample community command loads from disk, runs sandboxed, and cannot bypass the prompt-emission contract.
+
+## Post-M8 candidates
+
+Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M9→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
+
+### Multi-window
+
+A window is a **workspace** — its own tabs, panes, palette, and assistant dock. History and the block store are backend-global (search reaches across windows). App lifecycle follows OS convention: on macOS, closing the last window keeps the process alive (menu-bar + dock) and `Cmd+Q` quits explicitly; on Windows and Linux, closing the last window quits. Session restore restores N windows, not one.
+
+Engineering shape: Tauri 2's `WebviewWindow::new` is first-class, and the Rust backend is already position-neutral (PTYs and stores are shared across frontends). Work concentrates in a window-management surface, React state moving from "one window" to "per window," and session-restore.
+
+**Deferred to a follow-up:** pane portability (drag-a-pane-out-to-a-new-window). MVP explicitly does not include it.
+
+**Open design questions:** "Warn on quit if a foreground process is running in any pane" (Warp's model, on by default) vs. always-quit-quietly.
+
+### PDF viewer
+
+PDF-only for now via **pdf.js** (Mozilla, Apache 2.0, ~1 MB, canvas-rendered). Fits the tier-1 rendering slot in `02`. Office formats (`.docx`, `.xlsx`, `.pptx`) are explicitly deferred — the open-source library landscape ranges from "decent for simple documents" to "no viable option," and the honest terminal-first move is to delegate Office to the OS (QuickLook on macOS, associated apps on Windows/Linux) rather than reimplement it at low fidelity. Revisit only if we see real user demand for `.docx` / `.xlsx` peek-in-place.
+
+### Themes and fonts
+
+Themes are sets of CSS custom-property values plus an ANSI palette xterm.js consumes. Ship a curated built-in catalog — Catppuccin (four flavours), Phosphor (amber / green / white), Solarized L/D, Dracula, Gruvbox, Nord, Tokyo Night — and let users drop a `~/.config/shax/themes/<name>/theme.json` for anything else. Pure data, no sandbox needed. Same "reload themes" palette-entry pattern as commands.
+
+Fonts are configured separately from theme (a theme may *suggest* one, but the user override always wins). Bundle a small set of OFL-licensed monospaced fonts (JetBrains Mono, Fira Code, Cascadia Code, Iosevka) so the default look is consistent out of the box; system fonts remain available as a fallback. Ligatures are their own toggle regardless of font choice.
+
+Preferences UI: Appearance section in the existing settings modal — theme picker, font family, font size (10-24 pt), ligatures toggle, terminal-vs-UI font override. Preferences and hand-edited config are equivalent surfaces (UI writes the config; file changes hot-reload). Switching is instant — no reload.
+
+Sizing: one milestone, roughly five slices (loader + one alternate to prove the pipeline, font settings + preferences, ship the built-in catalog, community sandbox, optional preview-in-picker polish).
+
+### Sidebar with pinnable widgets
+
+A collapsible sidebar (left, opposite the assistant dock on the right) holding always-on utility widgets that share Shax's visual language: clock/calendar, caffeinate toggle (which emits `caffeinate -di` into scrollback per the honest-log non-negotiable), network status, git-branch-of-active-pane, weather, kubectl context, and similar. Two phases:
+
+- **Phase 1: built-in widgets, no runtime.** Sidebar chrome, focus/interaction rules (click-to-interact, Escape returns focus to the active pane, keyboard focus never steals from the pane by default), and five or six Shax-authored React widgets in-repo. Establishes the visual pattern.
+- **Phase 2: community widget sandbox.** Same Web Worker + declarative schema pattern used for formatters and commands, extended for widget-specific needs (persistent state, timer ticks, richer rendering). Capability gates: theme yes, keyboard yes, timer yes; network only via an explicit user-granted permission at install time (`wttr.in` for weather, etc.); shell only through the safety gate, same rule as community commands. A per-widget max tick rate and a total widget-budget cap so twelve pinned widgets can't turn the app into a heater.
+
+**Non-goals — explicit, not deferred.** A full "in-Shax app runtime" is out of scope: no Shax-native editor (users bring vim / Neovim / Helix / Zed in a pane), no cooler top-clone (btop and htop exist), no first-class pane-occupying apps. Every "app runtime" proposal that arises should be rerouted into either a widget in the sidebar or a real command running in a pane. The daily-driver non-negotiable is what draws the line here — Shax stays *a great terminal*, not an IDE-shaped dashboard.
