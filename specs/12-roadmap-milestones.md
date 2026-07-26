@@ -240,19 +240,23 @@ Scope:
 
 **Exit:** `Cmd+K` opens the palette in any pane; the built-in commands compose and submit real shell commands visible in the user's scrollback; destructive commands prompt twice (palette confirm + safety gate); a sample community command loads from disk, runs sandboxed, and cannot bypass the prompt-emission contract.
 
+## M9 Multi-window
+
+**Goal:** native OS windows in addition to tabs and splits — a window is a workspace with its own tabs, panes, palette, and assistant dock, backed by the shared Rust process. **Lead:** frontend, with core for the IPC/session-restore work.
+
+- Window state model: `WindowId`-keyed layout trees, per-window session records, IPC keying (`04`, `15`).
+- React state refactor: audit and move app-global state that assumes "one window" into per-window scope; keep genuinely-global state (history, embeddings, safety-gate ledger) global.
+- New-window command (`Cmd+N`) via the app menu and a palette entry. Spawn a fresh window with a default tab/pane against the shared backend.
+- Per-OS lifecycle: on macOS the process stays alive when the last window closes (menu-bar + dock, `Cmd+Q` quits explicitly); on Windows and Linux, quit on last-window-close.
+- Session restore for N windows: persisted list of window records, atomic write, off-screen-bounds snapping, per-window restore-error isolation.
+
+**Exit:** the user can open, close, and switch between multiple windows; each has its own tabs / panes / palette / assistant; global history search returns results across every window; the app lifecycle matches OS conventions on all three platforms; quitting and relaunching restores the exact set of windows with their tabs, panes, and cwds.
+
+**Explicitly out of scope:** pane portability (drag-across-windows), window groups, "warn on quit if a foreground process is running" (orthogonal polish decision).
+
 ## Post-M8 candidates
 
-Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M9→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
-
-### Multi-window
-
-A window is a **workspace** — its own tabs, panes, palette, and assistant dock. History and the block store are backend-global (search reaches across windows). App lifecycle follows OS convention: on macOS, closing the last window keeps the process alive (menu-bar + dock) and `Cmd+Q` quits explicitly; on Windows and Linux, closing the last window quits. Session restore restores N windows, not one.
-
-Engineering shape: Tauri 2's `WebviewWindow::new` is first-class, and the Rust backend is already position-neutral (PTYs and stores are shared across frontends). Work concentrates in a window-management surface, React state moving from "one window" to "per window," and session-restore.
-
-**Deferred to a follow-up:** pane portability (drag-a-pane-out-to-a-new-window). MVP explicitly does not include it.
-
-**Open design questions:** "Warn on quit if a foreground process is running in any pane" (Warp's model, on by default) vs. always-quit-quietly.
+Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M10→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
 
 ### PDF viewer
 
