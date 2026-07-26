@@ -327,6 +327,10 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
             }}
             onKeyDown={handleKeyDown}
             autoFocus
+            autoCorrect="off"
+            autoCapitalize="off"
+            autoComplete="off"
+            spellCheck={false}
           />
         </div>
 
