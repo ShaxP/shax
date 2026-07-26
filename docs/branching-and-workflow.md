@@ -1,5 +1,7 @@
 # Branching and workflow
 
+> New to the repo? Start at [`contributor-quickstart.md`](contributor-quickstart.md) for the setup and first-build path. This doc is the reference for how work moves through Git once you're building.
+
 Trunk-based development. The goal is a always-releasable `main`, small reviewable changes, and a linear, readable history.
 
 ## Branches
