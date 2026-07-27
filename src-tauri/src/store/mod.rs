@@ -484,7 +484,47 @@ impl Store {
             )?;
         }
 
-        conn.pragma_update(None, "user_version", 5)?;
+        // v6: session-restore keyed by window (M9.1). The v2 `app_state`
+        // table had `CHECK (id = 1)` baked in — the literal single-window
+        // assumption. Replace with `window_state` keyed by the Tauri
+        // window label so a single Rust process can persist independent
+        // session records for N windows. See specs/15-multi-window.md.
+        //
+        // Migration: any existing `app_state` row is copied into
+        // `window_state` under the label `"main"` (the default from
+        // tauri.conf.json), then the old table is dropped. Users with
+        // a saved single-window layout see the same layout restored
+        // into their first window on next launch — no data loss.
+        if version < 6 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS window_state (
+                    window_id     TEXT PRIMARY KEY,
+                    tabs_json     TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                "#,
+            )?;
+            let had_app_state: bool = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_state'",
+                [],
+                |row| row.get::<_, i64>(0).map(|n| n > 0),
+            )?;
+            if had_app_state {
+                // The old table had CHECK (id = 1), so at most one row
+                // ever existed. INSERT-OR-IGNORE keeps this idempotent
+                // if the migration is re-run on a partially-upgraded db.
+                conn.execute_batch(
+                    r#"
+                    INSERT OR IGNORE INTO window_state (window_id, tabs_json, updated_at_ms)
+                        SELECT 'main', tabs_json, updated_at_ms FROM app_state WHERE id = 1;
+                    DROP TABLE app_state;
+                    "#,
+                )?;
+            }
+        }
+
+        conn.pragma_update(None, "user_version", 6)?;
 
         // One-shot dedup: an earlier build of the FTS-insert path didn't
         // delete prior rows before inserting, so re-running `insert_block`
@@ -930,30 +970,39 @@ impl Store {
         Ok(extra)
     }
 
-    /// Load the persisted app-state JSON blob (tabs + layout + focus),
-    /// or `None` if nothing has been saved yet.
-    pub fn load_app_state(&self) -> Result<Option<String>, StoreError> {
+    /// Load the persisted session-restore JSON blob (tabs + layout +
+    /// focus) for a specific window, or `None` if nothing has been
+    /// saved for this window yet. The `window_id` is the Tauri window
+    /// label; see `crate::mux::WindowId`.
+    pub fn load_window_state(&self, window_id: &str) -> Result<Option<String>, StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let json = conn
-            .query_row("SELECT tabs_json FROM app_state WHERE id = 1", [], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT tabs_json FROM window_state WHERE window_id = ?1",
+                params![window_id],
+                |row| row.get::<_, String>(0),
+            )
             .optional()?;
         Ok(json)
     }
 
-    /// Upsert the single app-state row with the given JSON blob.
-    pub fn save_app_state(&self, json: &str, now_ms: u64) -> Result<(), StoreError> {
+    /// Upsert a per-window session-restore row.
+    pub fn save_window_state(
+        &self,
+        window_id: &str,
+        json: &str,
+        now_ms: u64,
+    ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
             r#"
-            INSERT INTO app_state (id, tabs_json, updated_at_ms)
-            VALUES (1, ?1, ?2)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO window_state (window_id, tabs_json, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(window_id) DO UPDATE SET
                 tabs_json     = excluded.tabs_json,
                 updated_at_ms = excluded.updated_at_ms
             "#,
-            params![json, now_ms as i64],
+            params![window_id, json, now_ms as i64],
         )?;
         Ok(())
     }
@@ -2030,37 +2079,63 @@ mod tests {
     }
 
     #[test]
-    fn app_state_round_trips() {
+    fn window_state_round_trips() {
         let store = Store::open_in_memory().unwrap();
-        assert!(store.load_app_state().unwrap().is_none());
-        store.save_app_state(r#"{"tabs":[]}"#, 1234).unwrap();
-        assert_eq!(
-            store.load_app_state().unwrap().as_deref(),
-            Some(r#"{"tabs":[]}"#),
-        );
-        // Upsert behaviour: second save replaces the row, doesn't insert.
+        assert!(store.load_window_state("main").unwrap().is_none());
         store
-            .save_app_state(r#"{"tabs":[{"id":"a"}]}"#, 2000)
+            .save_window_state("main", r#"{"tabs":[]}"#, 1234)
             .unwrap();
         assert_eq!(
-            store.load_app_state().unwrap().as_deref(),
+            store.load_window_state("main").unwrap().as_deref(),
+            Some(r#"{"tabs":[]}"#),
+        );
+        // Upsert behaviour: second save replaces the row for the
+        // same window_id, doesn't insert a duplicate.
+        store
+            .save_window_state("main", r#"{"tabs":[{"id":"a"}]}"#, 2000)
+            .unwrap();
+        assert_eq!(
+            store.load_window_state("main").unwrap().as_deref(),
             Some(r#"{"tabs":[{"id":"a"}]}"#),
         );
     }
 
     #[test]
-    fn app_state_persists_across_reopen() {
+    fn window_state_persists_across_reopen() {
         let tmpdir = tempfile::tempdir().unwrap();
         let path = tmpdir.path().join("shax.db");
         {
             let store = Store::open(&path).unwrap();
-            store.save_app_state(r#"{"tabs":[{"id":"x"}]}"#, 1).unwrap();
+            store
+                .save_window_state("main", r#"{"tabs":[{"id":"x"}]}"#, 1)
+                .unwrap();
         }
         let store = Store::open(&path).unwrap();
         assert_eq!(
-            store.load_app_state().unwrap().as_deref(),
+            store.load_window_state("main").unwrap().as_deref(),
             Some(r#"{"tabs":[{"id":"x"}]}"#),
         );
+    }
+
+    #[test]
+    fn window_state_isolates_windows() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .save_window_state("main", r#"{"tabs":[{"id":"m"}]}"#, 1)
+            .unwrap();
+        store
+            .save_window_state("second", r#"{"tabs":[{"id":"s"}]}"#, 2)
+            .unwrap();
+        assert_eq!(
+            store.load_window_state("main").unwrap().as_deref(),
+            Some(r#"{"tabs":[{"id":"m"}]}"#),
+        );
+        assert_eq!(
+            store.load_window_state("second").unwrap().as_deref(),
+            Some(r#"{"tabs":[{"id":"s"}]}"#),
+        );
+        // Unknown window returns None, not another window's data.
+        assert!(store.load_window_state("ghost").unwrap().is_none());
     }
 
     #[test]
@@ -3187,10 +3262,13 @@ mod tests {
             !loaded[0].interactive,
             "v1 row should default to non-interactive"
         );
-        // app_state table exists and is empty after the upgrade.
-        assert!(store.load_app_state().unwrap().is_none());
-        store.save_app_state(r#"{"tabs":[]}"#, 1).unwrap();
-        assert!(store.load_app_state().unwrap().is_some());
+        // window_state table exists (v6 migration ran alongside the
+        // v1→v5 upgrades) and is empty after the upgrade.
+        assert!(store.load_window_state("main").unwrap().is_none());
+        store
+            .save_window_state("main", r#"{"tabs":[]}"#, 1)
+            .unwrap();
+        assert!(store.load_window_state("main").unwrap().is_some());
         // The historical row was also indexed by the v3 step on the same
         // open, so search picks it up.
         let hits = store
@@ -3206,5 +3284,71 @@ mod tests {
             1,
             "v1 historical row should be back-filled into FTS"
         );
+    }
+
+    #[test]
+    fn v5_database_migrates_app_state_to_window_state_on_open() {
+        // Hand-craft a v5 schema (single-window app_state table with
+        // one saved row) and verify the v6 migration moves the payload
+        // into window_state under the label "main" without losing the
+        // JSON blob.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("shax.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE blocks (
+                    id TEXT PRIMARY KEY, pane_id TEXT NOT NULL, session_id TEXT,
+                    command TEXT, argv TEXT, cwd TEXT, git_branch TEXT, host TEXT,
+                    exit_code INTEGER, started_at_ms INTEGER NOT NULL,
+                    ended_at_ms INTEGER, duration_ms INTEGER,
+                    aborted INTEGER NOT NULL DEFAULT 0, output BLOB,
+                    interactive INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE app_state (
+                    id            INTEGER PRIMARY KEY CHECK (id = 1),
+                    tabs_json     TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO app_state (id, tabs_json, updated_at_ms)
+                    VALUES (1, '{"tabs":[{"id":"legacy"}]}', 999);
+                CREATE VIRTUAL TABLE blocks_fts USING fts5(
+                    block_id UNINDEXED, command, output,
+                    tokenize = 'porter unicode61 remove_diacritics 2'
+                );
+                CREATE VIRTUAL TABLE blocks_fts_trigram USING fts5(
+                    block_id UNINDEXED, command, tokenize = 'trigram'
+                );
+                CREATE TABLE block_embeddings (
+                    block_id TEXT PRIMARY KEY, model_id TEXT NOT NULL,
+                    dim INTEGER NOT NULL, vector BLOB NOT NULL,
+                    created_ms INTEGER NOT NULL,
+                    FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
+                );
+                "#,
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 5).unwrap();
+        }
+        let store = Store::open(&path).expect("v5 should upgrade to v6 on open");
+        // Legacy blob is now keyed by window_id="main".
+        assert_eq!(
+            store.load_window_state("main").unwrap().as_deref(),
+            Some(r#"{"tabs":[{"id":"legacy"}]}"#),
+        );
+        // No other windows exist yet.
+        assert!(store.load_window_state("other").unwrap().is_none());
+        // Old table is gone — verify via a direct query so the check
+        // survives a future rename.
+        let conn = Connection::open(&path).unwrap();
+        let app_state_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(app_state_count, 0, "app_state table should be dropped");
     }
 }

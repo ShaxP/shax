@@ -7,10 +7,20 @@ pub use crate::blocks::{BlockId, BlockSummary};
 pub use crate::pty::{PtyEvent, PtyId, SpawnOpts};
 pub use crate::store::{SearchHit, SearchOptions};
 
+use crate::mux::{WindowId, Windows};
 use crate::pty::PtyManager;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{State, WebviewWindow};
+
+/// Resolve the `WindowId` of the calling webview. Tauri injects the
+/// `WebviewWindow` handle into any command that names it as a
+/// parameter, so IPC commands don't need the frontend to pass a
+/// window id explicitly. M9.1 uses this everywhere per-window
+/// routing matters.
+fn window_id_of(window: &WebviewWindow) -> WindowId {
+    WindowId::from_label(window.label())
+}
 
 /// Spawn a new PTY with a child shell.
 ///
@@ -21,12 +31,21 @@ use tauri::State;
 pub async fn pty_spawn(
     opts: SpawnOpts,
     on_event: tauri::ipc::Channel<PtyEvent>,
+    window: WebviewWindow,
     manager: State<'_, Arc<PtyManager>>,
+    windows: State<'_, Arc<Windows>>,
 ) -> Result<PtyId, String> {
-    manager
+    let window_id = window_id_of(&window);
+    let id = manager
         .spawn(opts, on_event)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Record the (WindowId, PtyId) association so future window-close
+    // teardown (M9.4) can reap the right set of PTYs, and so any
+    // enforcement of cross-window PTY access (M9.3+) has a source of
+    // truth to consult.
+    windows.register_pty(&window_id, id).await;
+    Ok(id)
 }
 
 /// Write base64-encoded bytes to the PTY master (keystrokes, paste, etc.).
@@ -817,26 +836,45 @@ async fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
     Ok(stdout)
 }
 
-/// Load the persisted app-state JSON (tabs + layout tree + focused pane),
-/// or `null` if the user has no prior session yet. The frontend hydrates
-/// its tab reducer from this on mount; if the store isn't attached (rare,
-/// only in bare `cargo test`-style runs without a DB), returns `null` too.
+/// Load the persisted session-restore JSON (tabs + layout tree +
+/// focused pane) for the calling window, or `null` if this window
+/// has no prior saved state yet. The frontend hydrates its tab
+/// reducer from this on mount; if the store isn't attached (rare,
+/// only in bare `cargo test`-style runs without a DB), returns
+/// `null` too. Per-window (M9.1): the payload is keyed by the Tauri
+/// window label so N windows can have independent layouts. A fresh
+/// window (label not seen before) returns `null`, and the frontend
+/// initialises a default tab.
 #[tauri::command]
-pub async fn app_state_load(manager: State<'_, Arc<PtyManager>>) -> Result<Option<String>, String> {
+pub async fn app_state_load(
+    window: WebviewWindow,
+    manager: State<'_, Arc<PtyManager>>,
+    windows: State<'_, Arc<Windows>>,
+) -> Result<Option<String>, String> {
+    let window_id = window_id_of(&window);
+    // Touch the registry so the window is known even before its
+    // first PTY spawn. Session-restore load is one of the earliest
+    // things a fresh window does on boot.
+    windows.touch(&window_id).await;
     let Some(store) = manager.store() else {
         return Ok(None);
     };
-    store.load_app_state().map_err(|e| e.to_string())
+    store
+        .load_window_state(window_id.label())
+        .map_err(|e| e.to_string())
 }
 
-/// Persist the app-state JSON (tabs + layout tree + focused pane) so the
-/// next launch can restore the user's layout. Called debounced by the
-/// frontend whenever a tab is opened, closed, or split.
+/// Persist the session-restore JSON for the calling window. Called
+/// debounced by the frontend whenever a tab is opened, closed, or
+/// split. Per-window (M9.1): each window's payload is written under
+/// its own key so N windows don't clobber each other.
 #[tauri::command]
 pub async fn app_state_save(
     json: String,
+    window: WebviewWindow,
     manager: State<'_, Arc<PtyManager>>,
 ) -> Result<(), String> {
+    let window_id = window_id_of(&window);
     let Some(store) = manager.store() else {
         return Ok(());
     };
@@ -845,7 +883,7 @@ pub async fn app_state_save(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     store
-        .save_app_state(&json, now_ms)
+        .save_window_state(window_id.label(), &json, now_ms)
         .map_err(|e| e.to_string())
 }
 

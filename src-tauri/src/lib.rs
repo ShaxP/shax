@@ -241,6 +241,13 @@ pub fn run() {
     // into `.manage()` for the command-state slot.
     let manager_for_exit = Arc::clone(&manager);
 
+    // M9.1: multi-window registry. Tracks which OS window owns
+    // which PTY so future window-close teardown (M9.4) can reap
+    // the right set, and so cross-window PTY access can be
+    // rejected (M9.3+). Today N=1 always; the "main" window
+    // registers itself lazily on its first IPC call.
+    let windows = Arc::new(mux::Windows::default());
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Persists window size + position to a JSON file under the app data
@@ -248,6 +255,7 @@ pub fn run() {
         // installs window-event handlers automatically; no other glue needed.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(manager)
+        .manage(windows)
         .setup(move |app| {
             // Prefer the real ONNX-backed `all-MiniLM-L6-v2`
             // model if the resource files are present; fall
