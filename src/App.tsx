@@ -499,6 +499,42 @@ export default function App(): React.ReactElement {
     window.addEventListener("shax:approvals-pending", onPending);
     return () => window.removeEventListener("shax:approvals-pending", onPending);
   }, []);
+
+  // M9.4: macOS app menu items whose action lives on the frontend
+  // side arrive as Tauri events (backend → this webview). Bridge
+  // them to the same reducer / setter paths the ⌘T / ⌘W / ⌘,
+  // keydown handlers already use. On non-macOS builds no menu is
+  // attached so these listeners never fire, but the setup is
+  // cheap and harmless. See src-tauri/src/menu.rs::EVENT_MENU_*.
+  //
+  // Skipped entirely outside a Tauri context — `listen()` calls
+  // into `__TAURI_INTERNALS__` which doesn't exist in jsdom.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+      return;
+    }
+    const unlisteners: Array<() => void> = [];
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      if (cancelled) return;
+      unlisteners.push(
+        await listen("shax:menu-new-tab", () => {
+          dispatch({ type: "add_tab" });
+        }),
+        await listen("shax:menu-close-tab", () => {
+          dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
+        }),
+        await listen("shax:menu-open-preferences", () => {
+          setSettingsOpen((prev) => !prev);
+        }),
+      );
+    })();
+    return () => {
+      cancelled = true;
+      for (const off of unlisteners) off();
+    };
+  }, []);
   // M7.7c: statusline modal indicator. INSERT while the assistant
   // input owns focus, NORMAL otherwise. AssistantOverlay's textarea
   // publishes `shax:assistant-input-focus` on focus / blur.

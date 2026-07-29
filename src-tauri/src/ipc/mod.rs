@@ -11,8 +11,7 @@ use crate::mux::{WindowId, Windows};
 use crate::pty::PtyManager;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::sync::Arc;
-use tauri::{AppHandle, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use uuid::Uuid;
+use tauri::{AppHandle, State, WebviewWindow};
 
 /// Resolve the `WindowId` of the calling webview. Tauri injects the
 /// `WebviewWindow` handle into any command that names it as a
@@ -907,21 +906,12 @@ pub async fn app_state_save(
 /// persistence lands with M9.5 (session restore for N windows).
 #[tauri::command]
 pub async fn open_new_window(app: AppHandle) -> Result<String, String> {
-    let label = format!("w-{}", Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
-        .title("Shax")
-        .inner_size(800.0, 600.0);
-    // `title_bar_style` and `hidden_title` are macOS-only on
-    // `WebviewWindowBuilder` (they don't exist as methods on other
-    // platforms), mirroring the platform-scoped fields in
-    // `tauri.conf.json`. Gated so the file compiles on Linux and
-    // Windows CI too.
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true);
-    builder.build().map_err(|e| e.to_string())?;
-    Ok(label)
+    // Delegates to the sync helper in `menu.rs` so the same builder
+    // path serves both the IPC command (⌘N from the frontend) and
+    // the macOS `RunEvent::Reopen` dock-icon-click handler (M9.4).
+    crate::menu::spawn_new_window(&app)
+        .map(|id| id.label().to_string())
+        .map_err(|e| e.to_string())
 }
 
 /// Full-text search across all persisted block summaries. `opts.query`

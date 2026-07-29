@@ -122,9 +122,9 @@ impl Windows {
     }
 
     /// Remove `pty_id` from whichever window owned it, if any. Called
-    /// from teardown paths (M9.4). Returns the owning `WindowId` so
-    /// callers can log / assert if useful.
-    #[allow(dead_code)] // consumed by M9.4 window-close teardown
+    /// from `menu::register_close_teardown` when a window closes
+    /// (M9.4). Returns the owning `WindowId` so callers can log or
+    /// assert if useful.
     pub async fn unregister_pty(&self, pty_id: &PtyId) -> Option<WindowId> {
         let mut guard = self.inner.lock().await;
         for (window_id, state) in guard.iter_mut() {
@@ -144,8 +144,8 @@ impl Windows {
 
     /// Snapshot the PTYs owned by `window_id`. Returns an empty vec
     /// if the window isn't registered — callers treat "unknown
-    /// window" as "no PTYs to reap".
-    #[allow(dead_code)] // consumed by M9.4 window-close teardown
+    /// window" as "no PTYs to reap". Consumed by
+    /// `menu::register_close_teardown` when a window closes (M9.4).
     pub async fn ptys_of(&self, window_id: &WindowId) -> Vec<PtyId> {
         self.inner
             .lock()
