@@ -135,27 +135,30 @@ pub fn set_assistant_config(config: AssistantConfig) -> Result<(), String> {
 
 // --- Chat history persistence -----------------------------
 
-/// Load the persisted conversation. Missing / malformed
-/// file → empty history. See `history::load` for the
-/// tolerance rules.
+/// Load the persisted conversation for the calling window.
+/// Missing / malformed file → empty history. See
+/// `history::load` for the tolerance rules. Per-window
+/// (M9.1): each window has its own transcript keyed by the
+/// Tauri window label.
 #[tauri::command]
-pub fn get_chat_history() -> Result<ChatHistory, String> {
-    history::load().map_err(|e| e.to_string())
+pub fn get_chat_history(window: tauri::WebviewWindow) -> Result<ChatHistory, String> {
+    history::load(window.label()).map_err(|e| e.to_string())
 }
 
-/// Overwrite the persisted conversation. Called by the chat
-/// overlay after each turn completes.
+/// Overwrite the persisted conversation for the calling
+/// window. Called by the chat overlay after each turn
+/// completes.
 #[tauri::command]
-pub fn set_chat_history(history: ChatHistory) -> Result<(), String> {
-    history::save(history).map_err(|e| e.to_string())
+pub fn set_chat_history(history: ChatHistory, window: tauri::WebviewWindow) -> Result<(), String> {
+    history::save(window.label(), history).map_err(|e| e.to_string())
 }
 
-/// Delete the on-disk conversation. Called by the "New"
-/// button in the overlay header. Idempotent — a missing file
-/// is not an error.
+/// Delete the on-disk conversation for the calling window.
+/// Called by the "New" button in the overlay header.
+/// Idempotent — a missing file is not an error.
 #[tauri::command]
-pub fn clear_chat_history() -> Result<(), String> {
-    history::clear().map_err(|e| e.to_string())
+pub fn clear_chat_history(window: tauri::WebviewWindow) -> Result<(), String> {
+    history::clear(window.label()).map_err(|e| e.to_string())
 }
 
 /// Stream a Messages request against Anthropic's API. Reads
