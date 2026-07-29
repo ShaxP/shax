@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and dynamically-spawned windows (M9.3). The `w-*` glob matches labels produced by `open_new_window` (format `w-<uuid-simple>`); if the label scheme in src/ipc/mod.rs::open_new_window changes, update this pattern too.",
+  "windows": ["main", "w-*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

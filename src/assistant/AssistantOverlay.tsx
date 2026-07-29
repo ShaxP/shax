@@ -57,6 +57,14 @@ import { anyModalLayerOpen } from "../lib/modalLayer";
 // tab-host row.
 const PANEL: CSSProperties = {
   height: "100%",
+  // Fill the flex-item wrapper in App.tsx that carries the
+  // dragged `assistantWidth`. Without `width: 100%`, the panel
+  // defaults to its intrinsic content width (~350px), which
+  // reads as a "cap" any time the user drags the dock wider
+  // than that. (Discovered post-M9.3 during multi-window
+  // smoke — visible in both windows once the dock grows past
+  // the intrinsic width.)
+  width: "100%",
   minWidth: 0,
   background: "var(--pane)",
   borderLeft: "1px solid var(--border-strong)",
