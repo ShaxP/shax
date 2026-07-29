@@ -17,10 +17,23 @@
  */
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+/** True when running inside a Tauri webview host — same probe as
+ *  `src/lib/ipc.ts`. Kept local so this module has no cross-file
+ *  runtime deps. */
+function isTauriContext(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 /** The label of the Tauri window this React root is rendered inside.
  *  Stable for the lifetime of the window — a fresh window gets a
  *  fresh label from `WebviewWindowBuilder` (M9.3), and the built-in
- *  "main" window always reports `"main"`. */
+ *  "main" window always reports `"main"`.
+ *
+ *  Outside a Tauri context (jsdom tests, browser preview) this
+ *  falls back to `"main"` so components that key behaviour on the
+ *  window identity keep the primary-window branch — matching how
+ *  the app behaved before multi-window landed. */
 export function useWindowId(): string {
+  if (!isTauriContext()) return "main";
   return getCurrentWindow().label;
 }

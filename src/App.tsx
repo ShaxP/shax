@@ -40,6 +40,7 @@ import { PaletteOverlay } from "./palette/PaletteOverlay";
 import "./palette/builtins/echoHello";
 import "./palette/builtins/cd";
 import "./palette/builtins/git";
+import "./palette/builtins/newWindow";
 import "./palette/builtins/reload";
 import { registerPaneCommand as _registerPaneCommand } from "./palette/registry";
 import { mkdirSandboxCommand } from "./palette/sandbox/samples/mkdir";
@@ -69,7 +70,8 @@ import {
 } from "./panes/layout";
 import { AssistantDockProvider } from "./lib/AssistantDockContext";
 import { HomeDirProvider } from "./lib/HomeDirContext";
-import { appStateLoad, appStateSave, homeDir } from "./lib/ipc";
+import { appStateLoad, appStateSave, homeDir, openNewWindow } from "./lib/ipc";
+import { useWindowId } from "./lib/useWindowId";
 import { compactCwd } from "./panes/blockFormat";
 import { loadCommunityFormatters } from "./formatters";
 
@@ -443,6 +445,13 @@ export default function App(): React.ReactElement {
   const [state, dispatch] = useReducer(tabsReducer, undefined, initialState);
   const { tabs, activeId } = state;
 
+  // Whether this React root is running in the primary Shax window
+  // (label `"main"`) or a spawned one (label `"w-<uuid>"`). Some
+  // preferences (assistant dock open/width) live on the "main"
+  // window only — spawned windows default to closed and don't
+  // overwrite the persisted state. See specs/15-multi-window.md.
+  const isMainWindow = useWindowId() === "main";
+
   // Search overlay. Top-level so the keybindings can open it regardless
   // of which pane currently owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -556,7 +565,18 @@ export default function App(): React.ReactElement {
       // lands back in whatever configuration they had. Both fields
       // default to safe values in preferences.ts, so a fresh install
       // opens with the dock closed and default width.
-      setAssistantOpen(prefs.assistant_docked);
+      //
+      // M9.3 refinement: only the "main" window hydrates the dock
+      // open/closed state from global preferences. Spawned windows
+      // always start with the dock closed, matching the user's
+      // expectation that new windows are a fresh workspace and don't
+      // inherit the sibling window's runtime state (spec §15). The
+      // width still hydrates from the global default so the first
+      // time the user opens the dock in a spawned window it matches
+      // their preferred size.
+      if (isMainWindow) {
+        setAssistantOpen(prefs.assistant_docked);
+      }
       setAssistantWidth(prefs.assistant_dock_width);
       prefsLoadedRef.current = true;
     });
@@ -566,7 +586,7 @@ export default function App(): React.ReactElement {
     };
     window.addEventListener("shax:preference-changed", onChanged);
     return () => window.removeEventListener("shax:preference-changed", onChanged);
-  }, []);
+  }, [isMainWindow]);
 
   // M7.7a: persist docked open/closed state + width whenever they
   // change. `savePreferences` accepts a partial and merges with the
@@ -575,15 +595,23 @@ export default function App(): React.ReactElement {
   // No debounce needed: `assistantOpen` flips on user click,
   // `assistantWidth` only updates on drag commit (mid-drag re-renders
   // update DOM style but not this state).
+  //
+  // M9.3 refinement: only the "main" window persists these fields.
+  // If a spawned window wrote here, it would clobber the main
+  // window's saved state on every dock toggle (last-writer-wins
+  // race). Spawned-window dock changes are session-only until we
+  // grow per-window persistence in a follow-up (window_state blob
+  // gains a dockState field).
   useEffect(() => {
     // Skip until the boot loader has resolved — otherwise we'd
     // overwrite stored prefs with the initial defaults.
     if (!prefsLoadedRef.current) return;
+    if (!isMainWindow) return;
     void savePreferences({
       assistant_docked: assistantOpen,
       assistant_dock_width: assistantWidth,
     });
-  }, [assistantOpen, assistantWidth]);
+  }, [assistantOpen, assistantWidth, isMainWindow]);
 
   // When an overlay (search, viewer) closes, the focus that briefly
   // landed in its input / button is gone — nothing else is focused, so
@@ -703,6 +731,14 @@ export default function App(): React.ReactElement {
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
         dispatch({ type: "add_tab" });
+        return;
+      }
+      if (e.key === "n" || e.key === "N") {
+        // ⌘N opens a new Shax window (M9.3, spec §15). Sibling
+        // of ⌘T for tabs and ⌘D for splits — the muscle-memory
+        // hierarchy is window > tab > split.
+        e.preventDefault();
+        void openNewWindow();
         return;
       }
       if (e.key === ",") {

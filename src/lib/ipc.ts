@@ -643,3 +643,21 @@ export async function statFile(path: string): Promise<FileStat | null> {
     return null;
   }
 }
+
+/**
+ * Spawn a fresh Shax window (M9.3). The new window loads the same
+ * frontend bundle and runs its own React tree against the shared
+ * Rust backend. Returns the Tauri window label assigned to the new
+ * window — callers rarely need this since every command derives the
+ * calling window from the injected `WebviewWindow`, but it's useful
+ * for logging / diagnostics.
+ *
+ * No-op outside a Tauri context (jsdom tests / browser preview) —
+ * returns an empty string so callers can `await` without a null
+ * check.
+ */
+export async function openNewWindow(): Promise<string> {
+  if (!isTauriContext()) return "";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("open_new_window");
+}

@@ -11,7 +11,8 @@ use crate::mux::{WindowId, Windows};
 use crate::pty::PtyManager;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::sync::Arc;
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use uuid::Uuid;
 
 /// Resolve the `WindowId` of the calling webview. Tauri injects the
 /// `WebviewWindow` handle into any command that names it as a
@@ -885,6 +886,42 @@ pub async fn app_state_save(
     store
         .save_window_state(window_id.label(), &json, now_ms)
         .map_err(|e| e.to_string())
+}
+
+/// Spawn a fresh Shax window (M9.3). The new window loads the same
+/// frontend bundle as the main window and runs its own React tree
+/// against the shared Rust backend. Returns the Tauri window label
+/// assigned to the new window — callers can use it to refer to the
+/// window in later IPC calls, though for M9.3 nothing actually does
+/// (each window derives its own label from the injected
+/// `WebviewWindow` on every command).
+///
+/// Label scheme is `w-<uuid-simple>` (33 chars, filesystem-safe).
+/// The static main window keeps its `"main"` label from
+/// `tauri.conf.json`.
+///
+/// Window chrome (title, size, title-bar style) is duplicated from
+/// the static declaration in `tauri.conf.json` so spawned windows
+/// look identical. Position is left to the OS — macOS cascades,
+/// Windows/Linux use their default policy. Per-window position
+/// persistence lands with M9.5 (session restore for N windows).
+#[tauri::command]
+pub async fn open_new_window(app: AppHandle) -> Result<String, String> {
+    let label = format!("w-{}", Uuid::new_v4().simple());
+    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .title("Shax")
+        .inner_size(800.0, 600.0);
+    // `title_bar_style` and `hidden_title` are macOS-only on
+    // `WebviewWindowBuilder` (they don't exist as methods on other
+    // platforms), mirroring the platform-scoped fields in
+    // `tauri.conf.json`. Gated so the file compiles on Linux and
+    // Windows CI too.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    builder.build().map_err(|e| e.to_string())?;
+    Ok(label)
 }
 
 /// Full-text search across all persisted block summaries. `opts.query`
