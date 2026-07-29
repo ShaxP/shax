@@ -20,8 +20,9 @@ use agent::{
 use ipc::{
     app_state_load, app_state_save, block_get_output, git_branches, git_diff, git_root_for,
     git_status_porcelain, git_user_email, home_dir, list_branches, list_community_commands,
-    list_community_formatters, list_cwds, pty_get_block_output, pty_kill, pty_list_blocks,
-    pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes, search_blocks, stat_file,
+    list_community_formatters, list_cwds, open_new_window, pty_get_block_output, pty_kill,
+    pty_list_blocks, pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes,
+    search_blocks, stat_file,
 };
 use preferences::Preferences;
 use pty::PtyManager;
@@ -284,6 +285,7 @@ pub fn run() {
             pty_get_block_output,
             app_state_load,
             app_state_save,
+            open_new_window,
             search_blocks,
             list_branches,
             list_cwds,

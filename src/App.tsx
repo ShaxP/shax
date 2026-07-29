@@ -40,6 +40,7 @@ import { PaletteOverlay } from "./palette/PaletteOverlay";
 import "./palette/builtins/echoHello";
 import "./palette/builtins/cd";
 import "./palette/builtins/git";
+import "./palette/builtins/newWindow";
 import "./palette/builtins/reload";
 import { registerPaneCommand as _registerPaneCommand } from "./palette/registry";
 import { mkdirSandboxCommand } from "./palette/sandbox/samples/mkdir";
@@ -69,7 +70,7 @@ import {
 } from "./panes/layout";
 import { AssistantDockProvider } from "./lib/AssistantDockContext";
 import { HomeDirProvider } from "./lib/HomeDirContext";
-import { appStateLoad, appStateSave, homeDir } from "./lib/ipc";
+import { appStateLoad, appStateSave, homeDir, openNewWindow } from "./lib/ipc";
 import { compactCwd } from "./panes/blockFormat";
 import { loadCommunityFormatters } from "./formatters";
 
@@ -703,6 +704,14 @@ export default function App(): React.ReactElement {
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
         dispatch({ type: "add_tab" });
+        return;
+      }
+      if (e.key === "n" || e.key === "N") {
+        // ⌘N opens a new Shax window (M9.3, spec §15). Sibling
+        // of ⌘T for tabs and ⌘D for splits — the muscle-memory
+        // hierarchy is window > tab > split.
+        e.preventDefault();
+        void openNewWindow();
         return;
       }
       if (e.key === ",") {

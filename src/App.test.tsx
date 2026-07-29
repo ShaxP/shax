@@ -99,6 +99,10 @@ vi.mock("./lib/ipc", () => ({
   // M7.6 — cwd compaction reads home once at boot. Tests don't need
   // real values, and null is a legitimate "not resolved yet" state.
   homeDir: (): Promise<string | null> => Promise.resolve(null),
+  // M9.3 — Cmd+N binding calls openNewWindow. Tests don't exercise
+  // the multi-window path; stub to a no-op that resolves with an
+  // empty label.
+  openNewWindow: (): Promise<string> => Promise.resolve(""),
 }));
 
 class StubResizeObserver {
