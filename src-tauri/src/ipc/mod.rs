@@ -908,13 +908,19 @@ pub async fn app_state_save(
 #[tauri::command]
 pub async fn open_new_window(app: AppHandle) -> Result<String, String> {
     let label = format!("w-{}", Uuid::new_v4().simple());
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
         .title("Shax")
-        .inner_size(800.0, 600.0)
+        .inner_size(800.0, 600.0);
+    // `title_bar_style` and `hidden_title` are macOS-only on
+    // `WebviewWindowBuilder` (they don't exist as methods on other
+    // platforms), mirroring the platform-scoped fields in
+    // `tauri.conf.json`. Gated so the file compiles on Linux and
+    // Windows CI too.
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+        .hidden_title(true);
+    builder.build().map_err(|e| e.to_string())?;
     Ok(label)
 }
 
