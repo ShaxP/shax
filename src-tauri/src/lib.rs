@@ -1,6 +1,7 @@
 mod agent;
 mod blocks;
 mod ipc;
+mod menu;
 mod mux;
 mod preferences;
 mod pty;
@@ -274,6 +275,26 @@ pub fn run() {
             if let Some(store) = store_for_embedder.clone() {
                 std::mem::drop(search::backfill::spawn(store, embedder, wake_rx));
             }
+
+            // M9.4 app menu (macOS only). Non-macOS returns Ok(None)
+            // from build_app_menu — Windows/Linux keep their
+            // in-frontend chrome and keydown handlers.
+            let handle = app.handle().clone();
+            if let Some(menu) = menu::build_app_menu(&handle)? {
+                app.set_menu(menu)?;
+                app.on_menu_event(move |app, event| {
+                    menu::handle_menu_event(app, event.id().as_ref());
+                });
+            }
+
+            // M9.4 window-close teardown: hook the main window so
+            // closing it reaps any PTYs it owned. Spawned windows
+            // (M9.3) get the same hook installed inside
+            // `menu::spawn_new_window`.
+            if let Some(window) = app.get_webview_window("main") {
+                menu::register_close_teardown(&handle, &window);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -323,13 +344,34 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // RunEvent::Exit fires after the last window has closed and the event
-    // loop is about to terminate. We use it to reap every PTY child so no
-    // shell outlives the parent — without this, `tauri:dev` quits leave
-    // orphan zsh / bash processes still bound to the old PTY masters.
-    app.run(move |_handle, event| {
-        if let tauri::RunEvent::Exit = event {
+    // M9.4 lifecycle event routing.
+    //
+    // - `ExitRequested { code: None }` on macOS: the runtime decided
+    //   to quit (last window closed). Prevent it — the app stays
+    //   alive in the menu bar / dock, matching macOS convention.
+    //   `code: Some(_)` means an explicit `app.exit(n)` (Quit menu,
+    //   ⌘Q) which is always allowed to proceed.
+    // - `Reopen` on macOS: user clicked the dock icon (or `open`d
+    //   from the CLI) with no visible windows. Spawn a fresh one.
+    //   Session restore hookup lands with M9.5.
+    // - `Exit` (unchanged): reap every PTY child so no shell
+    //   outlives the parent.
+    app.run(move |handle, event| match event {
+        tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
+            api.prevent_exit();
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => {
+            if let Err(e) = menu::spawn_new_window(handle) {
+                tracing::warn!("dock reopen: spawn_new_window failed: {e}");
+            }
+        }
+        tauri::RunEvent::Exit => {
             tauri::async_runtime::block_on(manager_for_exit.shutdown_all());
         }
+        _ => {}
     });
 }
