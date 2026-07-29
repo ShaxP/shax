@@ -356,7 +356,12 @@ pub fn run() {
     //   Session restore hookup lands with M9.5.
     // - `Exit` (unchanged): reap every PTY child so no shell
     //   outlives the parent.
-    app.run(move |handle, event| match event {
+    // Note: `_handle` is prefixed with underscore because on non-macOS
+    // builds the `Reopen` arm (the only reader) is `cfg`'d out, and
+    // the compiler would otherwise flag the binding as unused under
+    // `-D warnings`. Leading-underscore names are legal to use, so
+    // the macOS branch still references it.
+    app.run(move |_handle, event| match event {
         tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
             api.prevent_exit();
         }
@@ -365,7 +370,7 @@ pub fn run() {
             has_visible_windows: false,
             ..
         } => {
-            if let Err(e) = menu::spawn_new_window(handle) {
+            if let Err(e) = menu::spawn_new_window(_handle) {
                 tracing::warn!("dock reopen: spawn_new_window failed: {e}");
             }
         }
