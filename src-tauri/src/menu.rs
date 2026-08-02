@@ -256,12 +256,18 @@ pub fn register_close_teardown<R: tauri::Runtime>(
         let Some(manager) = handle.try_state::<Arc<PtyManager>>() else {
             return;
         };
-        // Snapshot the PTYs owned by this window, then drop each one
-        // from the registry and kill the child. `block_on` is OK here
-        // — the closure runs on a Tauri thread that isn't the tokio
-        // runtime worker, and the window is going away anyway so a
-        // brief block is fine.
+        // Snapshot the PTYs owned by this window, then kill each
+        // child. `PtyManager::kill` also unregisters from `windows`
+        // internally, so no separate `unregister_pty` call is
+        // needed here. `block_on` is OK — the closure runs on a
+        // Tauri thread that isn't the tokio runtime worker, and
+        // the window is going away anyway.
+        //
+        // A PTY that already exited between snapshot and kill
+        // returns `PtyError::UnknownId`; that's expected under
+        // that race and logged at debug level, not warn.
         let ptys = tauri::async_runtime::block_on(windows.ptys_of(&window_id));
+        let _ = windows; // captured only for the ptys_of call above
         if ptys.is_empty() {
             return;
         }
@@ -272,11 +278,10 @@ pub fn register_close_teardown<R: tauri::Runtime>(
             if ptys.len() == 1 { "" } else { "s" },
         );
         for pty in ptys {
-            tauri::async_runtime::block_on(windows.unregister_pty(&pty));
             let manager = Arc::clone(&manager);
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = manager.kill(pty).await {
-                    tracing::warn!("window-close: kill pty {pty} failed: {e}");
+                    tracing::debug!("window-close: kill pty {pty} failed: {e}");
                 }
             });
         }
