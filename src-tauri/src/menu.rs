@@ -302,12 +302,14 @@ pub fn register_close_teardown<R: tauri::Runtime>(
                 }
             });
         }
-        // M9.5 session snapshot. `app.webview_windows()` at this
-        // moment may still include the window that just fired
-        // CloseRequested (Tauri hasn't torn it down yet); filter
-        // out our own label so the saved list reflects what will
-        // actually be open a moment from now.
-        save_session_windows_excluding(&handle, &label);
+        // Intentional: no session save on individual window close
+        // (M9.5, Safari-style restore). The session is only
+        // updated on spawn and on graceful Exit — closing a
+        // window individually leaves the session state alone so
+        // that a subsequent macOS dock-reopen (or the next
+        // launch) restores the last-quit set. See M9.5 PR body
+        // for the rationale.
+        let _ = &label; // captured only for the tracing above
     });
 }
 
@@ -315,25 +317,25 @@ pub fn register_close_teardown<R: tauri::Runtime>(
 
 /// Persist the labels of every currently-open window so the next
 /// launch (or macOS dock-reopen) can spawn the same set.
-/// Best-effort: swallows and logs any error rather than propagating,
-/// because we never want a persistence hiccup to interfere with
-/// window management.
+///
+/// Called from two places (M9.5, Safari-style restore):
+/// 1. Immediately after every successful spawn, so newly-created
+///    windows join the persisted set.
+/// 2. From `RunEvent::Exit`, so a graceful quit commits the
+///    final open-window snapshot as the "restore target."
+///
+/// NOT called from `WindowEvent::CloseRequested`. Individual
+/// window closes intentionally leave the session unchanged so
+/// that dock-reopen (macOS) or the next launch can restore the
+/// full last-quit set. If the user wanted a window gone
+/// permanently, they close it and then quit — Exit captures the
+/// new (smaller) set.
+///
+/// Best-effort: swallows and logs any error rather than
+/// propagating, because we never want a persistence hiccup to
+/// interfere with window management.
 pub fn save_session_windows<R: tauri::Runtime>(app: &AppHandle<R>) {
     let labels: Vec<String> = app.webview_windows().into_keys().collect();
-    persist_session_labels(app, labels);
-}
-
-/// Same as `save_session_windows` but omits `excluded_label` from
-/// the snapshot. Used from the close-teardown hook, where
-/// `app.webview_windows()` still includes the window that just
-/// fired `CloseRequested` — filtering it out yields the set that
-/// will actually be alive a moment from now.
-fn save_session_windows_excluding<R: tauri::Runtime>(app: &AppHandle<R>, excluded_label: &str) {
-    let labels: Vec<String> = app
-        .webview_windows()
-        .into_keys()
-        .filter(|l| l != excluded_label)
-        .collect();
     persist_session_labels(app, labels);
 }
 
