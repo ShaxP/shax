@@ -6,43 +6,52 @@ Ten minutes from `git clone` to a running dev build. If you'll be extending Shax
 
 - **Rust** — the toolchain is pinned in `rust-toolchain.toml` (currently `1.95.0`). Install [rustup](https://rustup.rs); it will read the pin automatically the first time you `cargo` inside the repo.
 - **Node** — no `.nvmrc` today. Anything reasonably recent (LTS or newer) works; CI runs on the default runner Node.
-- **pnpm or npm** — the pre-commit hook is [lefthook](https://github.com/evilmartians/lefthook), installed via `npm install`'s `prepare` script. `npm` is fine; `pnpm` works if you prefer.
-- **Platform tooling for Tauri.** Follow the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS. On macOS this is Xcode; CI pins to Xcode 16.x because 26.5 broke the `ort-sys` link path (see `.github/workflows/ci.yml`). On Linux you need `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev`.
+- **pnpm** — required (not just preferred). `src-tauri/tauri.conf.json` sets `"beforeDevCommand": "pnpm dev"`, so even if you get `npm install` past the peer-dep checks, `pnpm run tauri:dev` will fail when Tauri tries to invoke pnpm to start the vite dev server. Install with `npm install -g pnpm` (or `corepack enable && corepack prepare pnpm@latest --activate`). The pre-commit hook is [lefthook](https://github.com/evilmartians/lefthook), installed via `pnpm install`'s `prepare` script.
+- **Platform tooling for Tauri.** Follow the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
+  - **macOS.** Xcode. CI pins to Xcode 16.x because 26.5 broke the `ort-sys` link path (see `.github/workflows/ci.yml`).
+  - **Linux (Ubuntu 22.04+ tested; 24.04 works).** Install:
+    ```sh
+    sudo apt-get install -y \
+      libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev \
+      libssl-dev pkg-config
+    ```
+    `libssl-dev` + `pkg-config` are needed by the `openssl-sys` crate; CI runners have them preinstalled so this trips only fresh Linux boxes. On **Ubuntu ARM64 in Parallels**, the installer sometimes writes `us.archive.ubuntu.com` (the x86 mirror) into `/etc/apt/sources.list`, which 404s for ARM64 packages. Fix with `sudo sed -i 's|http://us.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; sudo apt-get update` before the install.
+  - **Linux VM RAM.** The final link step for a debug Shax binary needs ~2–4 GB of RAM (WebKit + GTK + hundreds of Rust crates). Give your VM at least **8 GB** or the linker gets OOM-killed with `collect2: fatal error: ld terminated with signal 9`. If you can't spare the RAM, add an 8 GB swapfile or install `mold` as a lighter linker.
 
 ## First build
 
 ```sh
 git clone https://github.com/ShaxP/shax.git
 cd shax
-npm install                # also installs the lefthook pre-commit hook
-npm run tauri:dev
+pnpm install               # also installs the lefthook pre-commit hook
+pnpm run tauri:dev
 ```
 
 Expected: a Tauri window opens with a single terminal pane at your default shell. Run any command; you'll see a "block" appear with its output. `⌘⇧P` opens the pane-command palette; `⌘K` opens the assistant.
 
-The first `tauri:dev` is slow — Cargo compiles the whole backend and downloads a MiniLM ONNX model into `src-tauri/assets/`. Subsequent runs are fast.
+The first `tauri:dev` is slow — Cargo compiles the whole backend and downloads a MiniLM ONNX model into `src-tauri/assets/`. Subsequent runs are fast. If the model fetch fails with `curl exit code 22 while fetching ... model_quantized.onnx`, HuggingFace rate-limited you (HTTP 429) — retry a minute later.
 
 ## The three tests you'll run most
 
 ```sh
-npm test -- --run          # vitest (frontend unit + component)
-npm run typecheck          # tsc --noEmit
+pnpm test -- --run         # vitest (frontend unit + component)
+pnpm run typecheck         # tsc --noEmit
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 Or run everything CI runs, matching `.github/workflows/ci.yml`:
 
 ```sh
-npm run lint
-npm run format:check
-npx tsc --noEmit
-npm test -- --run
+pnpm run lint
+pnpm run format:check
+pnpm exec tsc --noEmit
+pnpm test -- --run
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Playwright end-to-end tests (`npm run test:e2e`) run in CI on Ubuntu only; running them locally is optional.
+Playwright end-to-end tests (`pnpm run test:e2e`) run in CI on Ubuntu only; running them locally is optional.
 
 ## Try a community add-on
 
