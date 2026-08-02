@@ -390,12 +390,23 @@ function serialiseState(state: TabsState): string {
   return JSON.stringify(persistable);
 }
 
-/** Extract `{paneId: cwd}` from a tab's pane state (M9.5 follow-up).
- *  Passed to LayoutRender → PaneLeaf → TerminalPane so the shell
- *  respawns in the same cwd it was in at last save. Only the first
- *  mount per pane reads this — subsequent updates are ignored. */
-function paneCwds(tab: TabState): Record<PaneId, string | null> {
-  return Object.fromEntries(Object.entries(tab.panes).map(([id, meta]) => [id, meta.cwd]));
+/** Extract `{paneId: {cwd, branch}}` from a tab's pane state.
+ *  Passed to LayoutRender → PaneLeaf → TerminalPane so restored
+ *  panes:
+ *    - respawn their shell in the persisted cwd (via SpawnOpts.cwd)
+ *    - render the persisted branch label in the prompt strip
+ *      from the very first paint, not after the first `git`
+ *      command or OSC 133 A round-trip.
+ *
+ *  Only the first mount per pane reads either value — subsequent
+ *  updates are ignored by TerminalPane and excluded from
+ *  `paneLeafEqual` in LayoutRender. */
+function panePaneMeta(
+  tab: TabState,
+): Record<PaneId, { cwd: string | null; branch: string | null }> {
+  return Object.fromEntries(
+    Object.entries(tab.panes).map(([id, meta]) => [id, { cwd: meta.cwd, branch: meta.branch }]),
+  );
 }
 
 function hydrateFromJson(json: string): TabsState | null {
@@ -984,13 +995,17 @@ export default function App(): React.ReactElement {
                       onPaneAltScreen={handlePaneAltScreen}
                       onPanePtyId={handlePanePtyId}
                       onSetRatio={handleSetRatio}
-                      // M9.5 follow-up: pane cwds surface at first
-                      // mount so restored panes spawn back into their
-                      // saved directory. `initialCwd` is deliberately
-                      // excluded from `paneLeafEqual`, so the mostly-
-                      // pointless updates as the shell cds around
-                      // don't cascade into the pane subtree.
-                      initialCwds={paneCwds(tab)}
+                      // Persisted per-pane cwd + branch surface at
+                      // first mount so restored panes spawn back
+                      // into their saved directory (cwd via
+                      // SpawnOpts) and render the correct branch
+                      // label in the prompt strip immediately (no
+                      // wait for the first OSC 133 A). Deliberately
+                      // excluded from `paneLeafEqual`, so the
+                      // mostly-pointless updates as the shell
+                      // cds / git-checkouts around don't cascade
+                      // into the pane subtree.
+                      initialPaneMeta={panePaneMeta(tab)}
                     />
                   </div>
                 );

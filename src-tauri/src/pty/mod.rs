@@ -143,6 +143,20 @@ pub enum PtyEvent {
     /// visible block list in response; the store is untouched so the
     /// blocks remain searchable via the overlay.
     ScrollbackCleared,
+    /// The shell just started rendering a prompt (OSC 133 A / precmd).
+    /// Emitted once per prompt; carries the cwd and git branch the shell
+    /// reported on that marker.
+    ///
+    /// The block state machine still stashes these values internally so
+    /// the next `BlockStarted` can attach them to its block — this event
+    /// is *additional*, giving the frontend the current prompt cwd
+    /// without having to wait for the user to actually run a command.
+    /// Fixes the "prompt strip shows no cwd on a fresh shell until the
+    /// first command runs" gap.
+    PromptReady {
+        cwd: Option<String>,
+        git_branch: Option<String>,
+    },
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────

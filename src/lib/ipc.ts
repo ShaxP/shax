@@ -94,6 +94,19 @@ export type PtyEvent =
        * the cleared blocks stay searchable via the overlay.
        */
       kind: "scrollback_cleared";
+    }
+  | {
+      /**
+       * The shell just started rendering a prompt (OSC 133 A / precmd).
+       * Fires on every prompt including the first — the prompt strip uses
+       * it as the primary source for the cwd / branch display so a fresh
+       * shell shows its cwd immediately, not only after the user runs
+       * their first command. `cwd` and `git_branch` are `null` when the
+       * shell integration emitted a bare `A` marker without params.
+       */
+      kind: "prompt_ready";
+      cwd: string | null;
+      git_branch: string | null;
     };
 
 /**
