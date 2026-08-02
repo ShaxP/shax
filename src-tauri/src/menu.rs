@@ -27,7 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use uuid::Uuid;
 
 use crate::mux::{WindowId, Windows};
-use crate::pty::PtyManager;
+use crate::pty::{PtyId, PtyManager};
 
 // ─── Menu item ids ─────────────────────────────────────────────────
 //
@@ -263,9 +263,9 @@ pub fn register_close_teardown<R: tauri::Runtime>(
     let label = window.label().to_string();
     let handle = app.clone();
     window.on_window_event(move |event| {
-        if !matches!(event, WindowEvent::CloseRequested { .. }) {
+        let WindowEvent::CloseRequested { api, .. } = event else {
             return;
-        }
+        };
         let window_id = WindowId::from_label(&label);
         let Some(windows) = handle.try_state::<Arc<Windows>>() else {
             return;
@@ -273,6 +273,36 @@ pub fn register_close_teardown<R: tauri::Runtime>(
         let Some(manager) = handle.try_state::<Arc<PtyManager>>() else {
             return;
         };
+
+        // M9.6 pre-teardown intercept. Consume the confirmation
+        // flag first — if the frontend already showed the warning
+        // and the user clicked "Close anyway", the flag is set
+        // and we fall through to the standard teardown below.
+        // Otherwise, check whether any PTY the window owns has a
+        // running non-alt-screen command. If yes, prevent the
+        // close, tell the frontend to show its modal, and return.
+        let confirmed = tauri::async_runtime::block_on(windows.consume_close_confirmed(&window_id));
+        if !confirmed {
+            let owned: std::collections::HashSet<PtyId> =
+                tauri::async_runtime::block_on(windows.ptys_of(&window_id))
+                    .into_iter()
+                    .collect();
+            let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+            let running_here_count = running.iter().filter(|p| owned.contains(p)).count();
+            if running_here_count > 0 {
+                api.prevent_close();
+                if let Some(window) = handle.get_webview_window(&label) {
+                    if let Err(e) = window.emit(
+                        "shax:confirm-close-window",
+                        serde_json::json!({ "count": running_here_count }),
+                    ) {
+                        tracing::warn!("close-intercept: emit failed: {e}");
+                    }
+                }
+                return;
+            }
+        }
+
         // Snapshot the PTYs owned by this window, then kill each
         // child. `PtyManager::kill` also unregisters from `windows`
         // internally, so no separate `unregister_pty` call is
@@ -284,7 +314,6 @@ pub fn register_close_teardown<R: tauri::Runtime>(
         // returns `PtyError::UnknownId`; that's expected under
         // that race and logged at debug level, not warn.
         let ptys = tauri::async_runtime::block_on(windows.ptys_of(&window_id));
-        let _ = windows; // captured only for the ptys_of call above
         if ptys.is_empty() {
             return;
         }

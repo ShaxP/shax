@@ -19,16 +19,16 @@ use agent::{
     set_chat_history,
 };
 use ipc::{
-    app_state_load, app_state_save, block_get_output, git_branches, git_diff, git_root_for,
-    git_status_porcelain, git_user_email, home_dir, list_branches, list_community_commands,
-    list_community_formatters, list_cwds, open_new_window, pty_get_block_output, pty_kill,
-    pty_list_blocks, pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes,
-    search_blocks, stat_file,
+    app_state_load, app_state_save, block_get_output, close_window_confirmed, git_branches,
+    git_diff, git_root_for, git_status_porcelain, git_user_email, home_dir, list_branches,
+    list_community_commands, list_community_formatters, list_cwds, open_new_window,
+    pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_running_commands, pty_spawn,
+    pty_write, quit_confirmed, read_dir_entries, read_file_bytes, search_blocks, stat_file,
 };
 use preferences::Preferences;
 use pty::PtyManager;
 use store::{default_db_path, Store};
-use tauri::Manager as _;
+use tauri::{Emitter as _, Manager as _};
 
 /// Load the persisted app-level preferences (theme, etc.).
 /// Missing / malformed file → defaults.
@@ -318,6 +318,9 @@ pub fn run() {
             app_state_load,
             app_state_save,
             open_new_window,
+            pty_running_commands,
+            close_window_confirmed,
+            quit_confirmed,
             search_blocks,
             list_branches,
             list_cwds,
@@ -372,6 +375,47 @@ pub fn run() {
     app.run(move |handle, event| match event {
         tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
             api.prevent_exit();
+        }
+        tauri::RunEvent::ExitRequested {
+            code: Some(_), api, ..
+        } => {
+            // M9.6: explicit quit path (⌘Q, Quit menu, app.exit).
+            // If the frontend already showed the warning modal and
+            // the user confirmed, `consume_quit_confirmed()` returns
+            // true and we let the exit proceed. Otherwise, if any
+            // pane has a running non-alt-screen command, prevent
+            // the exit and ask the focused window to show the
+            // modal. `should_prevent_exit(code)` above already
+            // handled the macOS "runtime decided to exit" branch
+            // separately, so this arm sees only user-initiated
+            // explicit quits.
+            let Some(windows) = handle.try_state::<Arc<mux::Windows>>() else {
+                return;
+            };
+            if windows.consume_quit_confirmed() {
+                return;
+            }
+            let Some(manager) = handle.try_state::<Arc<PtyManager>>() else {
+                return;
+            };
+            let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+            if running.is_empty() {
+                return;
+            }
+            api.prevent_exit();
+            let target = handle
+                .webview_windows()
+                .into_values()
+                .find(|w| w.is_focused().unwrap_or(false))
+                .or_else(|| handle.webview_windows().into_values().next());
+            if let Some(window) = target {
+                if let Err(e) = window.emit(
+                    "shax:confirm-quit",
+                    serde_json::json!({ "count": running.len() }),
+                ) {
+                    tracing::warn!("quit-intercept: emit failed: {e}");
+                }
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {

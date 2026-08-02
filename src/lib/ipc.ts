@@ -674,3 +674,45 @@ export async function openNewWindow(): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("open_new_window");
 }
+
+/**
+ * M9.6: list the PTY ids that are currently running a
+ * foreground non-alt-screen command. Frontend calls this at
+ * close-time (pane / tab / window / app quit) and intersects
+ * with the PTY ids it owns for the closing scope to compute
+ * the "N commands are still running" warning count. Empty
+ * result → no warning. Empty return outside a Tauri context so
+ * jsdom tests can call it freely.
+ */
+export async function ptyRunningCommands(): Promise<PtyId[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<PtyId[]>("pty_running_commands");
+}
+
+/**
+ * M9.6: confirm a window-close after the frontend showed the
+ * warning modal and the user clicked "Close anyway". Sets the
+ * per-window bypass flag on the backend, then re-invokes the
+ * window's close — the on_window_event intercept sees the
+ * flag and lets the close proceed without re-showing the
+ * warning. No-op outside a Tauri context.
+ */
+export async function closeWindowConfirmed(label: string): Promise<void> {
+  if (!isTauriContext()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("close_window_confirmed", { label });
+}
+
+/**
+ * M9.6: confirm an app-quit after the frontend showed the
+ * warning modal and the user clicked "Quit anyway". Sets the
+ * app-wide bypass flag on the backend, then triggers
+ * `app.exit(0)` — the ExitRequested handler sees the flag
+ * and lets the exit proceed. No-op outside a Tauri context.
+ */
+export async function quitConfirmed(): Promise<void> {
+  if (!isTauriContext()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("quit_confirmed");
+}

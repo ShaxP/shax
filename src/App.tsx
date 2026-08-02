@@ -70,9 +70,18 @@ import {
 } from "./panes/layout";
 import { AssistantDockProvider } from "./lib/AssistantDockContext";
 import { HomeDirProvider } from "./lib/HomeDirContext";
-import { appStateLoad, appStateSave, homeDir, openNewWindow } from "./lib/ipc";
+import {
+  appStateLoad,
+  appStateSave,
+  closeWindowConfirmed,
+  homeDir,
+  openNewWindow,
+  ptyRunningCommands,
+  quitConfirmed,
+} from "./lib/ipc";
 import { useWindowId } from "./lib/useWindowId";
 import { compactCwd } from "./panes/blockFormat";
+import { ConfirmCloseModal, type ConfirmCloseVerb } from "./panes/ConfirmCloseModal";
 import { loadCommunityFormatters } from "./formatters";
 
 interface PaneMeta {
@@ -469,7 +478,15 @@ export default function App(): React.ReactElement {
   // preferences (assistant dock open/width) live on the "main"
   // window only — spawned windows default to closed and don't
   // overwrite the persisted state. See specs/15-multi-window.md.
-  const isMainWindow = useWindowId() === "main";
+  const windowLabel = useWindowId();
+  const isMainWindow = windowLabel === "main";
+  // Ref for use inside the once-only event-listener useEffect
+  // below — the label is stable across renders, but capturing
+  // the string value directly in the effect closure means an
+  // eslint-plugin-react-hooks exhaustive-deps complaint, and
+  // adding it to deps re-registers listeners needlessly.
+  const windowLabelRef = useRef(windowLabel);
+  windowLabelRef.current = windowLabel;
 
   // Search overlay. Top-level so the keybindings can open it regardless
   // of which pane currently owns focus.
@@ -519,6 +536,70 @@ export default function App(): React.ReactElement {
     return () => window.removeEventListener("shax:approvals-pending", onPending);
   }, []);
 
+  // M9.6: close-confirmation modal. Non-null when a close action
+  // needs the user to confirm because it would kill a running
+  // foreground command. See ConfirmCloseModal + the
+  // `confirmThenClose*` helpers below.
+  const [pendingClose, setPendingClose] = useState<{
+    verb: ConfirmCloseVerb;
+    count: number;
+    onConfirm: () => void;
+  } | null>(null);
+
+  // Live tabs-state ref so the async confirmThenClose* helpers
+  // read the current tab set without capturing stale closures.
+  const tabsStateRef = useRef(state);
+  tabsStateRef.current = state;
+
+  /** M9.6: close the focused pane, showing the warning modal if
+   *  it would kill a running non-alt-screen command. All ⌘W /
+   *  close-pane call sites go through here so behaviour stays
+   *  consistent regardless of trigger. */
+  const confirmThenClosePane = useCallback(async (tabId: string): Promise<void> => {
+    const tab = tabsStateRef.current.tabs.find((t) => t.id === tabId);
+    const doClose = (): void => {
+      dispatch({ type: "close_focused_pane", tabId });
+    };
+    const ptyId = tab?.panes[tab.focusedPaneId]?.ptyId ?? null;
+    if (ptyId === null) {
+      doClose();
+      return;
+    }
+    const running = await ptyRunningCommands();
+    if (!running.includes(ptyId)) {
+      doClose();
+      return;
+    }
+    setPendingClose({ verb: "pane", count: 1, onConfirm: doClose });
+  }, []);
+
+  /** M9.6: close a whole tab, showing the warning modal for the
+   *  aggregate count of running commands across all its panes. */
+  const confirmThenCloseTab = useCallback(async (tabId: string): Promise<void> => {
+    const tab = tabsStateRef.current.tabs.find((t) => t.id === tabId);
+    const doClose = (): void => {
+      dispatch({ type: "close_tab", id: tabId });
+    };
+    if (tab === undefined) {
+      doClose();
+      return;
+    }
+    const paneIds: string[] = Object.values(tab.panes)
+      .map((p) => p.ptyId)
+      .filter((id): id is string => id !== null);
+    if (paneIds.length === 0) {
+      doClose();
+      return;
+    }
+    const running = await ptyRunningCommands();
+    const runningHere = paneIds.filter((id) => running.includes(id)).length;
+    if (runningHere === 0) {
+      doClose();
+      return;
+    }
+    setPendingClose({ verb: "tab", count: runningHere, onConfirm: doClose });
+  }, []);
+
   // M9.4: macOS app menu items whose action lives on the frontend
   // side arrive as Tauri events (backend → this webview). Bridge
   // them to the same reducer / setter paths the ⌘T / ⌘W / ⌘,
@@ -542,10 +623,36 @@ export default function App(): React.ReactElement {
           dispatch({ type: "add_tab" });
         }),
         await listen("shax:menu-close-tab", () => {
-          dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
+          void confirmThenClosePane(activeIdRef.current);
         }),
         await listen("shax:menu-open-preferences", () => {
           setSettingsOpen((prev) => !prev);
+        }),
+        // M9.6: backend intercepted a window close because this
+        // window owns panes with running commands. Show the
+        // modal; on confirm, call closeWindowConfirmed which
+        // sets the bypass flag and re-invokes the close.
+        await listen<{ count: number }>("shax:confirm-close-window", (event) => {
+          const count = event.payload.count ?? 0;
+          setPendingClose({
+            verb: "window",
+            count,
+            onConfirm: () => {
+              void closeWindowConfirmed(windowLabelRef.current);
+            },
+          });
+        }),
+        // M9.6: backend intercepted an app quit for the same
+        // reason. Same flow, different scope + IPC.
+        await listen<{ count: number }>("shax:confirm-quit", (event) => {
+          const count = event.payload.count ?? 0;
+          setPendingClose({
+            verb: "app",
+            count,
+            onConfirm: () => {
+              void quitConfirmed();
+            },
+          });
         }),
       );
     })();
@@ -553,7 +660,10 @@ export default function App(): React.ReactElement {
       cancelled = true;
       for (const off of unlisteners) off();
     };
-  }, []);
+    // confirmThenClosePane is a stable useCallback ([]) so
+    // including it here doesn't cause the effect to re-register;
+    // the dep silences react-hooks/exhaustive-deps.
+  }, [confirmThenClosePane]);
   // M7.7c: statusline modal indicator. INSERT while the assistant
   // input owns focus, NORMAL otherwise. AssistantOverlay's textarea
   // publishes `shax:assistant-input-focus` on focus / blur.
@@ -699,9 +809,15 @@ export default function App(): React.ReactElement {
     dispatch({ type: "add_tab" });
   }, []);
 
-  const handleCloseTab = useCallback((id: string): void => {
-    dispatch({ type: "close_tab", id });
-  }, []);
+  const handleCloseTab = useCallback(
+    (id: string): void => {
+      void confirmThenCloseTab(id);
+    },
+    // confirmThenCloseTab is declared earlier and stable
+    // (useCallback with []), so this dep never fires re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const handleSwitch = useCallback((id: string): void => {
     dispatch({ type: "switch_tab", id });
@@ -850,7 +966,7 @@ export default function App(): React.ReactElement {
       }
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
-        dispatch({ type: "close_focused_pane", tabId: activeIdRef.current });
+        void confirmThenClosePane(activeIdRef.current);
         return;
       }
       if (e.key === "d" || e.key === "D") {
@@ -891,7 +1007,8 @@ export default function App(): React.ReactElement {
     // along for symmetry.
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, []);
+    // Same stable-useCallback note as the listener effect above.
+  }, [confirmThenClosePane]);
 
   // Block viewer open event. BlockRow's "view" icon dispatches a
   // `shax:open-viewer` CustomEvent with `{ pty, block }`; we store
@@ -1152,6 +1269,23 @@ export default function App(): React.ReactElement {
                 setSettingsOpen(false);
                 refocusActivePane();
               }}
+            />
+          )}
+          {/* M9.6: close-confirmation modal. Rendered at App level
+            so it can appear for any of the four close scopes
+            (pane / tab / window / app quit). onConfirm runs the
+            captured close action (dispatch or IPC); onCancel
+            just clears the pending state. */}
+          {pendingClose && (
+            <ConfirmCloseModal
+              count={pendingClose.count}
+              verb={pendingClose.verb}
+              onConfirm={() => {
+                const cb = pendingClose.onConfirm;
+                setPendingClose(null);
+                cb();
+              }}
+              onCancel={() => setPendingClose(null)}
             />
           )}
           {/* AssistantOverlay lives inside <main> as a docked column (see

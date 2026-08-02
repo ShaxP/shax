@@ -456,6 +456,35 @@ impl PtyManager {
         }
     }
 
+    /// M9.6: list the panes that are currently running a foreground
+    /// command the user is unlikely to want to lose. Defined as: the
+    /// pane's latest block has started (`ended_at_ms` is None) AND the
+    /// block never entered the alternate screen (`!interactive`).
+    ///
+    /// Alt-screen apps (vim, htop, less, top) are excluded because
+    /// they're interactive tools the user deliberately launched and
+    /// knows about — warning on every `⌘W` inside vim is friction.
+    /// Long-running non-interactive things (`sleep`, `npm run build`,
+    /// `ssh`, dev servers) all run on the primary screen and are the
+    /// warning's real target.
+    ///
+    /// The frontend calls this at close-time (pane / tab / window /
+    /// app quit) and intersects the returned list with the PTY ids
+    /// each scope owns to compute the count to warn about.
+    pub async fn running_command_pane_ids(&self) -> Vec<PtyId> {
+        let blocks = self.blocks.lock().await;
+        let mut out = Vec::new();
+        for (pty_id, shared) in blocks.iter() {
+            let shared = shared.lock().await;
+            if let Some(last) = shared.summaries.last() {
+                if last.ended_at_ms.is_none() && !last.interactive {
+                    out.push(*pty_id);
+                }
+            }
+        }
+        out
+    }
+
     /// Return the captured output bytes for a single completed block.
     ///
     /// Lookup order: the live pane's in-memory cache first, then the
@@ -1083,6 +1112,133 @@ mod tests {
 
     #[cfg(unix)]
     use tokio::sync::mpsc;
+
+    /// Seed `PtyManager.blocks` with a single BlockSummary for a
+    /// fake pane. Used by the M9.6 tests below to exercise
+    /// `running_command_pane_ids` without spinning up a real PTY.
+    async fn seed_block(manager: &PtyManager, pty_id: PtyId, summary: BlockSummary) {
+        let shared = Arc::new(Mutex::new(BlockShared {
+            summaries: vec![summary],
+            outputs: HashMap::new(),
+        }));
+        manager.blocks.lock().await.insert(pty_id, shared);
+    }
+
+    fn running_block(id: BlockId) -> BlockSummary {
+        BlockSummary {
+            id,
+            command: Some("sleep 60".into()),
+            cwd: None,
+            git_branch: None,
+            started_at_ms: 0,
+            ended_at_ms: None, // running
+            exit_code: None,
+            duration_ms: None,
+            aborted: false,
+            interactive: false,
+        }
+    }
+
+    fn ended_block(id: BlockId) -> BlockSummary {
+        BlockSummary {
+            id,
+            command: Some("echo".into()),
+            cwd: None,
+            git_branch: None,
+            started_at_ms: 0,
+            ended_at_ms: Some(1), // finished
+            exit_code: Some(0),
+            duration_ms: Some(1),
+            aborted: false,
+            interactive: false,
+        }
+    }
+
+    fn running_altscreen_block(id: BlockId) -> BlockSummary {
+        BlockSummary {
+            id,
+            command: Some("vim".into()),
+            cwd: None,
+            git_branch: None,
+            started_at_ms: 0,
+            ended_at_ms: None,
+            exit_code: None,
+            duration_ms: None,
+            aborted: false,
+            interactive: true, // alt-screen latched
+        }
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_empty_when_no_blocks() {
+        // Fresh manager with no per-pane block state → empty set.
+        // The close-flow warning check must tolerate this cleanly
+        // (called before any command has ever run in the app).
+        let manager = PtyManager::new();
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_finds_primary_screen_running_block() {
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_block(&manager, pty, running_block(BlockId(Uuid::new_v4()))).await;
+        assert_eq!(manager.running_command_pane_ids().await, vec![pty]);
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_excludes_alt_screen_apps() {
+        // M9.6 core design decision: interactive alt-screen apps
+        // (vim, htop, less, top) are what the user deliberately
+        // launched and knows about. Warning on ⌘W inside vim is
+        // pure friction.
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_block(
+            &manager,
+            pty,
+            running_altscreen_block(BlockId(Uuid::new_v4())),
+        )
+        .await;
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_excludes_ended_blocks() {
+        // A completed block means the shell is at an idle prompt.
+        // Nothing to lose; no warning.
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_block(&manager, pty, ended_block(BlockId(Uuid::new_v4()))).await;
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_partitions_across_panes() {
+        // Realistic multi-pane state: some running non-alt, some
+        // running alt-screen, some idle. Only the first bucket
+        // appears in the result.
+        let manager = PtyManager::new();
+        let running_pty = PtyId::new();
+        let vim_pty = PtyId::new();
+        let idle_pty = PtyId::new();
+        seed_block(
+            &manager,
+            running_pty,
+            running_block(BlockId(Uuid::new_v4())),
+        )
+        .await;
+        seed_block(
+            &manager,
+            vim_pty,
+            running_altscreen_block(BlockId(Uuid::new_v4())),
+        )
+        .await;
+        seed_block(&manager, idle_pty, ended_block(BlockId(Uuid::new_v4()))).await;
+        let out = manager.running_command_pane_ids().await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], running_pty);
+    }
 
     /// Build a `Channel<PtyEvent>` backed by an in-process mpsc queue so tests
     /// can receive events without a real Tauri runtime.

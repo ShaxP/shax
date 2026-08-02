@@ -103,6 +103,13 @@ vi.mock("./lib/ipc", () => ({
   // the multi-window path; stub to a no-op that resolves with an
   // empty label.
   openNewWindow: (): Promise<string> => Promise.resolve(""),
+  // M9.6 — close-confirmation IPCs. App tests never exercise a
+  // running command in the mocked PTYs, so ptyRunningCommands
+  // resolves empty and the two "confirmed" IPCs are silent
+  // no-ops.
+  ptyRunningCommands: (): Promise<string[]> => Promise.resolve([]),
+  closeWindowConfirmed: (): Promise<void> => Promise.resolve(),
+  quitConfirmed: (): Promise<void> => Promise.resolve(),
 }));
 
 class StubResizeObserver {
