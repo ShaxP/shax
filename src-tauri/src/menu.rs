@@ -210,15 +210,31 @@ fn focused_webview_window<R: tauri::Runtime>(
 
 // ─── Window spawn helper ───────────────────────────────────────────
 
-/// Spawn a fresh Shax window and register its close-teardown hook.
-/// Returns the new `WindowId` (also usable as a Tauri window label).
-///
-/// Sync entry point shared between the `open_new_window` IPC command
-/// (called from the frontend palette / `⌘N` binding) and the
-/// `RunEvent::Reopen` handler for macOS dock-icon clicks.
+/// Spawn a fresh Shax window with a newly-generated `w-<uuid>`
+/// label. Thin wrapper over `spawn_window_with_label` — the label
+/// generator lives here so callers that don't care about the
+/// specific label (⌘N, palette entry, dock-icon fresh spawn) don't
+/// have to think about it.
 pub fn spawn_new_window<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<WindowId> {
     let label = format!("w-{}", Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+    spawn_window_with_label(app, &label)
+}
+
+/// Spawn a Shax window with an explicit label. Used by session
+/// restore (M9.5) to spawn each window with its previously-used
+/// label so the `tauri-plugin-window-state` plugin's per-label
+/// bounds cache restores the correct size + position, and so the
+/// M9.1 per-window `window_state` blob hydrates the correct tabs.
+///
+/// Every window path funnels through here: register close-teardown
+/// (so PTY reap works for spawned + restored windows alike) and
+/// save the updated session-window list (M9.5) so a fresh spawn
+/// or restore is captured immediately, not just at graceful quit.
+pub fn spawn_window_with_label<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+) -> tauri::Result<WindowId> {
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Shax")
         .inner_size(800.0, 600.0);
     // See `open_new_window` doc: `title_bar_style` and
@@ -229,7 +245,8 @@ pub fn spawn_new_window<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<
         .hidden_title(true);
     let window = builder.build()?;
     register_close_teardown(app, &window);
-    Ok(WindowId::from_label(&label))
+    save_session_windows(app);
+    Ok(WindowId::from_label(label))
 }
 
 /// Hook a window's `CloseRequested` event to reap any PTYs the window
@@ -285,7 +302,99 @@ pub fn register_close_teardown<R: tauri::Runtime>(
                 }
             });
         }
+        // M9.5 session snapshot. `app.webview_windows()` at this
+        // moment may still include the window that just fired
+        // CloseRequested (Tauri hasn't torn it down yet); filter
+        // out our own label so the saved list reflects what will
+        // actually be open a moment from now.
+        save_session_windows_excluding(&handle, &label);
     });
+}
+
+// ─── Session restore (M9.5) ────────────────────────────────────────
+
+/// Persist the labels of every currently-open window so the next
+/// launch (or macOS dock-reopen) can spawn the same set.
+/// Best-effort: swallows and logs any error rather than propagating,
+/// because we never want a persistence hiccup to interfere with
+/// window management.
+pub fn save_session_windows<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let labels: Vec<String> = app.webview_windows().into_keys().collect();
+    persist_session_labels(app, labels);
+}
+
+/// Same as `save_session_windows` but omits `excluded_label` from
+/// the snapshot. Used from the close-teardown hook, where
+/// `app.webview_windows()` still includes the window that just
+/// fired `CloseRequested` — filtering it out yields the set that
+/// will actually be alive a moment from now.
+fn save_session_windows_excluding<R: tauri::Runtime>(app: &AppHandle<R>, excluded_label: &str) {
+    let labels: Vec<String> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|l| l != excluded_label)
+        .collect();
+    persist_session_labels(app, labels);
+}
+
+fn persist_session_labels<R: tauri::Runtime>(app: &AppHandle<R>, labels: Vec<String>) {
+    let Some(manager) = app.try_state::<Arc<PtyManager>>() else {
+        return;
+    };
+    let Some(store) = manager.store() else {
+        return;
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if let Err(e) = store.save_session_labels(&labels, now_ms) {
+        tracing::warn!("session save failed: {e}");
+    }
+}
+
+/// Read the saved session-window list and spawn any labels that
+/// aren't already open. Called from `.setup(...)` at boot (after
+/// the static "main" window is up) and from `RunEvent::Reopen` on
+/// macOS when the user clicks the dock icon with no visible
+/// windows. On both paths the "main" window may already exist —
+/// the filter below skips it rather than trying to re-spawn.
+///
+/// If nothing was saved (fresh install, or the file was cleared),
+/// returns without side effects. Callers that need a fallback
+/// "spawn one fresh window" behaviour do so themselves after
+/// checking `app.webview_windows()` post-restore.
+pub fn restore_session_windows<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(manager) = app.try_state::<Arc<PtyManager>>() else {
+        return;
+    };
+    let Some(store) = manager.store() else {
+        return;
+    };
+    let labels = match store.load_session_labels() {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("session restore: load_session_labels failed: {e}");
+            return;
+        }
+    };
+    if labels.is_empty() {
+        return;
+    }
+    let existing: std::collections::HashSet<String> = app.webview_windows().into_keys().collect();
+    let mut restored = 0usize;
+    for label in labels {
+        if existing.contains(&label) {
+            continue;
+        }
+        match spawn_window_with_label(app, &label) {
+            Ok(_) => restored += 1,
+            Err(e) => tracing::warn!("session restore: spawn {label} failed: {e}"),
+        }
+    }
+    if restored > 0 {
+        tracing::info!("session restore: spawned {restored} window(s)");
+    }
 }
 
 // ─── Lifecycle helpers ─────────────────────────────────────────────

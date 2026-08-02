@@ -124,6 +124,12 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
+    /// A row that should hold a well-formed encoded value contains
+    /// something we can't parse (bad JSON, wrong shape). Returned
+    /// from serde-based load paths; the IPC layer converts to a
+    /// string and callers typically fall back to defaults.
+    #[error("corrupt data: {0}")]
+    Corrupt(String),
 }
 
 /// Persisted record for a single completed (or aborted) block.
@@ -524,7 +530,31 @@ impl Store {
             }
         }
 
-        conn.pragma_update(None, "user_version", 6)?;
+        // v7: session-restore for N windows (M9.5). Single-row
+        // table listing the window labels open at last save. On
+        // boot, `menu::restore_session_windows` reads this list
+        // and spawns any non-"main" labels — the plugin
+        // `tauri-plugin-window-state` restores their bounds
+        // per-label, and the M9.1 per-window `window_state` table
+        // restores their tabs. See specs/15-multi-window.md.
+        //
+        // Intentionally single-row (`CHECK id = 1`): there is
+        // exactly one session per install. `window_state` is
+        // multi-row keyed by label; this table lists which of
+        // those labels were open, so the two work together.
+        if version < 7 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS session_state (
+                    id             INTEGER PRIMARY KEY CHECK (id = 1),
+                    window_labels  TEXT NOT NULL,
+                    updated_at_ms  INTEGER NOT NULL
+                );
+                "#,
+            )?;
+        }
+
+        conn.pragma_update(None, "user_version", 7)?;
 
         // One-shot dedup: an earlier build of the FTS-insert path didn't
         // delete prior rows before inserting, so re-running `insert_block`
@@ -1003,6 +1033,50 @@ impl Store {
                 updated_at_ms = excluded.updated_at_ms
             "#,
             params![window_id, json, now_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Load the list of window labels open at last save (M9.5).
+    /// Returns an empty vec if no session has been recorded yet
+    /// (fresh install, or a pre-M9.5 database that migrated up
+    /// but never saved a session).
+    pub fn load_session_labels(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT window_labels FROM session_state WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(json) = json else {
+            return Ok(Vec::new());
+        };
+        let labels: Vec<String> = serde_json::from_str(&json).map_err(|e| {
+            StoreError::Corrupt(format!(
+                "session_state.window_labels is not a JSON string array: {e}"
+            ))
+        })?;
+        Ok(labels)
+    }
+
+    /// Upsert the session-restore row with the given window labels.
+    /// Overwrites the previous list — this is a full snapshot, not
+    /// a delta.
+    pub fn save_session_labels(&self, labels: &[String], now_ms: u64) -> Result<(), StoreError> {
+        let json = serde_json::to_string(labels)
+            .map_err(|e| StoreError::Corrupt(format!("serialising session labels: {e}")))?;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            r#"
+            INSERT INTO session_state (id, window_labels, updated_at_ms)
+            VALUES (1, ?1, ?2)
+            ON CONFLICT(id) DO UPDATE SET
+                window_labels = excluded.window_labels,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![json, now_ms as i64],
         )?;
         Ok(())
     }
@@ -2136,6 +2210,53 @@ mod tests {
         );
         // Unknown window returns None, not another window's data.
         assert!(store.load_window_state("ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn load_session_labels_defaults_to_empty_before_first_save() {
+        // Fresh store — no session recorded yet. Every restore
+        // path must tolerate this and start with just the static
+        // "main" window (no crash, no error).
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.load_session_labels().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn save_and_load_session_labels_roundtrip() {
+        let store = Store::open_in_memory().unwrap();
+        let labels = vec![
+            "main".to_string(),
+            "w-abc123".to_string(),
+            "w-def456".to_string(),
+        ];
+        store.save_session_labels(&labels, 1234).unwrap();
+        assert_eq!(store.load_session_labels().unwrap(), labels);
+    }
+
+    #[test]
+    fn save_session_labels_upserts_previous_snapshot() {
+        // Session save is a full snapshot, not a delta — a later
+        // save overwrites the earlier list, including removing
+        // labels that were previously in the set.
+        let store = Store::open_in_memory().unwrap();
+        store
+            .save_session_labels(&["main".into(), "w-1".into(), "w-2".into()], 100)
+            .unwrap();
+        store.save_session_labels(&["main".into()], 200).unwrap();
+        assert_eq!(
+            store.load_session_labels().unwrap(),
+            vec!["main".to_string()]
+        );
+    }
+
+    #[test]
+    fn save_empty_session_labels_is_valid() {
+        // User closed all windows and force-killed before the
+        // graceful Exit path could re-save. On next boot we read
+        // an empty list — restore is a no-op. Correct behaviour.
+        let store = Store::open_in_memory().unwrap();
+        store.save_session_labels(&[], 1).unwrap();
+        assert!(store.load_session_labels().unwrap().is_empty());
     }
 
     #[test]
@@ -3350,5 +3471,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(app_state_count, 0, "app_state table should be dropped");
+    }
+
+    #[test]
+    fn v6_database_gains_session_state_on_open() {
+        // v7 migration just adds `session_state`; nothing to
+        // migrate from prior schemas. Verify the table appears
+        // and `load_session_labels` returns an empty list.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("shax.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE blocks (
+                    id TEXT PRIMARY KEY, pane_id TEXT NOT NULL, session_id TEXT,
+                    command TEXT, argv TEXT, cwd TEXT, git_branch TEXT, host TEXT,
+                    exit_code INTEGER, started_at_ms INTEGER NOT NULL,
+                    ended_at_ms INTEGER, duration_ms INTEGER,
+                    aborted INTEGER NOT NULL DEFAULT 0, output BLOB,
+                    interactive INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE window_state (
+                    window_id     TEXT PRIMARY KEY,
+                    tabs_json     TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE VIRTUAL TABLE blocks_fts USING fts5(
+                    block_id UNINDEXED, command, output,
+                    tokenize = 'porter unicode61 remove_diacritics 2'
+                );
+                CREATE VIRTUAL TABLE blocks_fts_trigram USING fts5(
+                    block_id UNINDEXED, command, tokenize = 'trigram'
+                );
+                CREATE TABLE block_embeddings (
+                    block_id TEXT PRIMARY KEY, model_id TEXT NOT NULL,
+                    dim INTEGER NOT NULL, vector BLOB NOT NULL,
+                    created_ms INTEGER NOT NULL,
+                    FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
+                );
+                "#,
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 6).unwrap();
+        }
+        let store = Store::open(&path).expect("v6 should upgrade to v7 on open");
+        assert_eq!(store.load_session_labels().unwrap(), Vec::<String>::new());
+        // Save works — table exists and is writable.
+        store
+            .save_session_labels(&["main".into(), "w-abc".into()], 42)
+            .unwrap();
+        assert_eq!(
+            store.load_session_labels().unwrap(),
+            vec!["main".to_string(), "w-abc".to_string()],
+        );
     }
 }
