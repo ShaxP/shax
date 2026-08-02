@@ -298,6 +298,14 @@ pub fn run() {
                 menu::register_close_teardown(&handle, &window);
             }
 
+            // M9.5 session restore. Spawns any non-"main" windows
+            // that were open at the previous quit. No-op on a
+            // fresh install (empty session list). Runs AFTER the
+            // main-window teardown wiring so restored windows go
+            // through the standard hook path (they'll get their
+            // own close teardowns from `spawn_window_with_label`).
+            menu::restore_session_windows(&handle);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -347,24 +355,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // M9.4 lifecycle event routing.
+    // M9.4 / M9.5 lifecycle event routing.
     //
     // - `ExitRequested { code: None }` on macOS: the runtime decided
     //   to quit (last window closed). Prevent it — the app stays
     //   alive in the menu bar / dock, matching macOS convention.
     //   `code: Some(_)` means an explicit `app.exit(n)` (Quit menu,
     //   ⌘Q) which is always allowed to proceed.
-    // - `Reopen` on macOS: user clicked the dock icon (or `open`d
-    //   from the CLI) with no visible windows. Spawn a fresh one.
-    //   Session restore hookup lands with M9.5.
-    // - `Exit` (unchanged): reap every PTY child so no shell
-    //   outlives the parent.
-    // Note: `_handle` is prefixed with underscore because on non-macOS
-    // builds the `Reopen` arm (the only reader) is `cfg`'d out, and
-    // the compiler would otherwise flag the binding as unused under
-    // `-D warnings`. Leading-underscore names are legal to use, so
-    // the macOS branch still references it.
-    app.run(move |_handle, event| match event {
+    // - `Reopen` on macOS (M9.5): user clicked the dock icon with
+    //   no visible windows. Restore the previously-saved session;
+    //   if the session was empty, fall back to spawning one fresh
+    //   window so the dock click is never a silent no-op.
+    // - `Exit`: save the (currently-empty, but here for
+    //   completeness) window list once more, then reap every PTY
+    //   child so no shell outlives the parent.
+    app.run(move |handle, event| match event {
         tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
             api.prevent_exit();
         }
@@ -373,11 +378,18 @@ pub fn run() {
             has_visible_windows: false,
             ..
         } => {
-            if let Err(e) = menu::spawn_new_window(_handle) {
-                tracing::warn!("dock reopen: spawn_new_window failed: {e}");
+            menu::restore_session_windows(handle);
+            // If nothing was restored (empty saved session or all
+            // labels failed to spawn), fall back to a fresh window
+            // so the dock click never appears to do nothing.
+            if handle.webview_windows().is_empty() {
+                if let Err(e) = menu::spawn_new_window(handle) {
+                    tracing::warn!("dock reopen: spawn_new_window fallback failed: {e}");
+                }
             }
         }
         tauri::RunEvent::Exit => {
+            menu::save_session_windows(handle);
             tauri::async_runtime::block_on(manager_for_exit.shutdown_all());
         }
         _ => {}
