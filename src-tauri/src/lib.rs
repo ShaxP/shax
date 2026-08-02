@@ -227,12 +227,22 @@ pub fn run() {
     // embedder task (receiver). Freshly-persisted blocks poke the
     // sweep straight away instead of waiting for the 30 s tick.
     let (wake_tx, wake_rx) = search::backfill::wake_channel();
+
+    // M9.1: multi-window registry. Tracks which OS window owns
+    // which PTY so window-close teardown (M9.4) can reap the right
+    // set. Built BEFORE `PtyManager` so we can inject the registry
+    // handle — every PTY removal path (kill / natural exit) then
+    // unregisters from `Windows` atomically, keeping the two data
+    // structures consistent.
+    let windows = Arc::new(mux::Windows::default());
+
     let manager = Arc::new(
         match store {
             Some(s) => PtyManager::with_store(s),
             None => PtyManager::new(),
         }
-        .with_indexer_notifier(wake_tx),
+        .with_indexer_notifier(wake_tx)
+        .with_windows(Arc::clone(&windows)),
     );
 
     // The reader thread runs outside Tauri State and reaches the manager via
@@ -242,13 +252,6 @@ pub fn run() {
     // Cloned for the exit-hook callback below — the original is moved
     // into `.manage()` for the command-state slot.
     let manager_for_exit = Arc::clone(&manager);
-
-    // M9.1: multi-window registry. Tracks which OS window owns
-    // which PTY so future window-close teardown (M9.4) can reap
-    // the right set, and so cross-window PTY access can be
-    // rejected (M9.3+). Today N=1 always; the "main" window
-    // registers itself lazily on its first IPC call.
-    let windows = Arc::new(mux::Windows::default());
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

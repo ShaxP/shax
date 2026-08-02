@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     blocks::{BlockId, BlockMachine, BlockSummary},
+    mux::Windows,
     pty::error::PtyError,
     store::{PersistedBlock, Store},
     vt::{OscParser, VtMessage},
@@ -185,6 +186,15 @@ pub struct PtyManager {
     /// the next 30 s sweep (M7 eager-indexing). `None` when
     /// indexing is disabled (memory-only fallback / tests).
     indexer_wake: Option<tokio::sync::mpsc::Sender<()>>,
+    /// Multi-window registry (M9.1). When set, every path that
+    /// removes a PTY from `inner` also unregisters the same id
+    /// from the owning window's `WindowState.ptys` set. Without
+    /// this the registry accumulates stale ids as panes close
+    /// individually, and the M9.4 window-close teardown then
+    /// warns `unknown PTY id` for every stale entry when the
+    /// window finally closes.  `None` only in unit tests that
+    /// don't need the registry hookup.
+    windows: Option<Arc<Windows>>,
 }
 
 impl PtyManager {
@@ -196,6 +206,7 @@ impl PtyManager {
             blocks: Mutex::new(HashMap::new()),
             store: None,
             indexer_wake: None,
+            windows: None,
         }
     }
 
@@ -209,6 +220,7 @@ impl PtyManager {
             blocks: Mutex::new(HashMap::new()),
             store: Some(store),
             indexer_wake: None,
+            windows: None,
         }
     }
 
@@ -218,6 +230,15 @@ impl PtyManager {
     /// means the sweep already has work queued).
     pub fn with_indexer_notifier(mut self, tx: tokio::sync::mpsc::Sender<()>) -> Self {
         self.indexer_wake = Some(tx);
+        self
+    }
+
+    /// Attach the multi-window registry so PTY removals stay in
+    /// sync with the per-window ownership set (M9.4). Every removal
+    /// path (`kill`, `remove_exited`) unregisters from `Windows`
+    /// automatically when this is set.
+    pub fn with_windows(mut self, windows: Arc<Windows>) -> Self {
+        self.windows = Some(windows);
         self
     }
 
@@ -358,6 +379,11 @@ impl PtyManager {
             let mut guard = self.inner.lock().await;
             guard.remove(&id).ok_or(PtyError::UnknownId(id))?
         };
+        // Keep the Windows registry in sync — the M9.4 window-close
+        // teardown iterates `Windows::ptys_of(window)` and calls
+        // `kill` on each entry; without this line, single-pane
+        // closes leave stale ids that then warn on window close.
+        self.unregister_window_pty(&id).await;
 
         // Killing the child causes the reader to see EOF and exit on its own.
         let kill_result = handle.child.lock().await.kill();
@@ -373,7 +399,21 @@ impl PtyManager {
     /// task after observing EOF / child exit).
     pub(crate) async fn remove_exited(&self, id: PtyId) {
         self.inner.lock().await.remove(&id);
+        // Same rationale as `kill`: a shell that exits on its own
+        // (user typed `exit`, or crashed) must also clear the
+        // window ownership entry, otherwise M9.4's window-close
+        // teardown warns on stale ids later.
+        self.unregister_window_pty(&id).await;
         tracing::debug!(%id, "PTY entry removed after natural exit");
+    }
+
+    /// Best-effort unregister from the multi-window registry.
+    /// No-op when the manager was constructed without a `Windows`
+    /// (unit tests) — the registry is optional infrastructure.
+    async fn unregister_window_pty(&self, id: &PtyId) {
+        if let Some(windows) = &self.windows {
+            windows.unregister_pty(id).await;
+        }
     }
 
     /// Kill every spawned PTY. Called from the Tauri exit hook so child
@@ -1106,6 +1146,73 @@ mod tests {
             manager.active_count().await,
             0,
             "manager table should be empty after kill"
+        );
+    }
+
+    /// Regression: closing a pane individually via `kill` must
+    /// also drop that PtyId from the `Windows` registry. Before
+    /// this fix, per-pane closes / natural shell exits left stale
+    /// ids in `Windows`, and the M9.4 window-close teardown then
+    /// logged `unknown PTY id` warnings for every stale entry
+    /// when the window finally closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_unregisters_from_windows_registry() {
+        use crate::mux::{WindowId, Windows};
+
+        let windows = Arc::new(Windows::default());
+        let manager = Arc::new(PtyManager::new().with_windows(Arc::clone(&windows)));
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, _rx) = make_test_channel();
+        let opts = SpawnOpts {
+            rows: 24,
+            cols: 80,
+            cwd: None,
+            env: None,
+        };
+        let id = manager.spawn(opts, channel).await.expect("spawn");
+
+        // Simulate the ipc/mod.rs pty_spawn wiring, which
+        // registers the PTY with the calling window.
+        let main = WindowId::from("main");
+        windows.register_pty(&main, id).await;
+        assert_eq!(windows.ptys_of(&main).await, vec![id]);
+
+        manager.kill(id).await.expect("kill");
+
+        assert!(
+            windows.ptys_of(&main).await.is_empty(),
+            "kill should have unregistered the PtyId from Windows"
+        );
+    }
+
+    /// Same guarantee for the natural-exit path (`remove_exited`,
+    /// called from the reader task when the child dies on its
+    /// own — user typed `exit`, shell crashed, etc.).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remove_exited_unregisters_from_windows_registry() {
+        use crate::mux::{WindowId, Windows};
+
+        let windows = Arc::new(Windows::default());
+        let manager = Arc::new(PtyManager::new().with_windows(Arc::clone(&windows)));
+
+        let id = PtyId::new();
+        let main = WindowId::from("main");
+        windows.register_pty(&main, id).await;
+        // Simulate an entry present in `inner` at exit time —
+        // without one, remove_exited is a no-op on the inner map
+        // and we'd be testing the registry cleanup only. The
+        // manager doesn't expose an "insert directly" helper, so
+        // we just verify the registry cleanup path on an id it
+        // has never seen (which is fine — remove_exited tolerates
+        // a missing inner entry and always cleans the registry).
+        manager.remove_exited(id).await;
+
+        assert!(
+            windows.ptys_of(&main).await.is_empty(),
+            "remove_exited should have unregistered the PtyId from Windows"
         );
     }
 
