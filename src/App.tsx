@@ -390,6 +390,14 @@ function serialiseState(state: TabsState): string {
   return JSON.stringify(persistable);
 }
 
+/** Extract `{paneId: cwd}` from a tab's pane state (M9.5 follow-up).
+ *  Passed to LayoutRender → PaneLeaf → TerminalPane so the shell
+ *  respawns in the same cwd it was in at last save. Only the first
+ *  mount per pane reads this — subsequent updates are ignored. */
+function paneCwds(tab: TabState): Record<PaneId, string | null> {
+  return Object.fromEntries(Object.entries(tab.panes).map(([id, meta]) => [id, meta.cwd]));
+}
+
 function hydrateFromJson(json: string): TabsState | null {
   let parsed: unknown;
   try {
@@ -976,6 +984,13 @@ export default function App(): React.ReactElement {
                       onPaneAltScreen={handlePaneAltScreen}
                       onPanePtyId={handlePanePtyId}
                       onSetRatio={handleSetRatio}
+                      // M9.5 follow-up: pane cwds surface at first
+                      // mount so restored panes spawn back into their
+                      // saved directory. `initialCwd` is deliberately
+                      // excluded from `paneLeafEqual`, so the mostly-
+                      // pointless updates as the shell cds around
+                      // don't cascade into the pane subtree.
+                      initialCwds={paneCwds(tab)}
                     />
                   </div>
                 );

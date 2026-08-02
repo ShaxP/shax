@@ -130,9 +130,30 @@ describe("TerminalPane", () => {
     });
     const callArgs = mockSpawnPty.mock.calls[0];
     // callArgs[0] is SpawnOpts
-    const opts = callArgs?.[0] as { rows: number; cols: number } | undefined;
+    const opts = callArgs?.[0] as { rows: number; cols: number; cwd?: string } | undefined;
     expect(opts?.rows).toBe(24);
     expect(opts?.cols).toBe(80);
+    // Without an explicit `initialCwd`, spawn omits the cwd so
+    // the shell falls through to its own default (usually $HOME).
+    expect(opts?.cwd).toBeUndefined();
+  });
+
+  it("forwards initialCwd into the spawn opts (M9.5 follow-up)", async () => {
+    render(<TerminalPane initialCwd="/Users/ada/proj" />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    const opts = mockSpawnPty.mock.calls[0]?.[0] as { cwd?: string } | undefined;
+    expect(opts?.cwd).toBe("/Users/ada/proj");
+  });
+
+  it("treats a null initialCwd the same as no initialCwd (no cwd on spawn)", async () => {
+    render(<TerminalPane initialCwd={null} />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    const opts = mockSpawnPty.mock.calls[0]?.[0] as { cwd?: string } | undefined;
+    expect(opts?.cwd).toBeUndefined();
   });
 
   it("mounts a Terminal into the container div and calls fit()", () => {
