@@ -32,7 +32,7 @@ import "@xterm/xterm/css/xterm.css";
 import { readXtermTheme } from "./xtermTheme";
 import { anyModalLayerOpen } from "../lib/modalLayer";
 import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
-import type { BlockId, PtyId, PtyEvent } from "../lib/ipc";
+import type { BlockId, PtyId, PtyEvent, SpawnOpts } from "../lib/ipc";
 import type { UiBlock } from "./blockReducer";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import { BlockList } from "./BlockList";
@@ -91,6 +91,16 @@ export interface TerminalPaneProps {
    * alive pane when its block was the search hit.
    */
   onPtyIdChange?: (ptyId: PtyId | null) => void;
+  /**
+   * Starting working directory for the spawned shell (M9.5
+   * follow-up). Used only at first mount — the shell may change
+   * dir freely afterwards. Absent / null means "use the shell's
+   * own default" (usually `$HOME`), which is the right behaviour
+   * for freshly-created panes; session-restored panes pass the
+   * cwd captured at last save so the shell starts back in the
+   * directory the user was working in.
+   */
+  initialCwd?: string | null;
 }
 
 function TerminalPaneInner({
@@ -99,6 +109,7 @@ function TerminalPaneInner({
   onMetaChange,
   onAltScreenChange,
   onPtyIdChange,
+  initialCwd,
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   // Wraps the entire pane (title-bar-below-chrome + block list +
@@ -111,6 +122,11 @@ function TerminalPaneInner({
   const terminalRef = useRef<Terminal | null>(null);
   const ptyIdRef = useRef<PtyId | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // M9.5 follow-up: capture the mount-time initial cwd so the
+  // spawn effect (which runs with empty deps) always reads the
+  // first-render value. Subsequent prop updates as the user cds
+  // are ignored — the shell owns cwd from that point on.
+  const initialCwdRef = useRef<string | null>(initialCwd ?? null);
   const promptStripRef = useRef<HTMLDivElement | null>(null);
 
   const [blockState, dispatch] = useReducer(blockReducer, initialBlockState);
@@ -908,7 +924,15 @@ function TerminalPaneInner({
       }
     };
 
-    void spawnPty({ rows: terminal.rows, cols: terminal.cols }, handleEvent).then((id) => {
+    const spawnOpts: SpawnOpts = { rows: terminal.rows, cols: terminal.cols };
+    // M9.5 follow-up: restore the pane's persisted cwd. Set only
+    // when non-null so a freshly-created pane (which has no
+    // saved cwd yet) falls through to the shell's own default,
+    // usually `$HOME`.
+    if (initialCwdRef.current !== null) {
+      spawnOpts.cwd = initialCwdRef.current;
+    }
+    void spawnPty(spawnOpts, handleEvent).then((id) => {
       if (cancelled) {
         void killPty(id);
         return;
