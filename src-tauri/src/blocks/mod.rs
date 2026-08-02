@@ -247,9 +247,15 @@ impl BlockMachine {
                 // Stash the latest values so the next OSC 133 C can attach them
                 // to its block. A bare `A` clears any stale prior values so we
                 // never carry one shell's cwd into another shell's block.
-                self.latest_cwd = cwd;
-                self.latest_git_branch = git_branch;
-                vec![]
+                self.latest_cwd = cwd.clone();
+                self.latest_git_branch = git_branch.clone();
+                // Also surface the values to the frontend immediately so the
+                // prompt strip's cwd / branch display updates on every prompt,
+                // not just after a command runs (which was the previous
+                // behaviour — blocks are created on OSC 133 C, and the display
+                // used to derive cwd from the latest block). Fixes the "fresh
+                // shell shows no cwd until the first cd" gap.
+                vec![PtyEvent::PromptReady { cwd, git_branch }]
             }
             VtEvent::PromptEnd => {
                 // PS1 is done; the shell is now waiting for input. Bytes that
@@ -758,6 +764,51 @@ mod tests {
         assert_eq!(summaries.len(), 2);
         assert_eq!(summaries[0].cwd.as_deref(), Some("/new"));
         assert_eq!(summaries[1].cwd.as_deref(), Some("/new"));
+    }
+
+    #[test]
+    fn prompt_start_emits_prompt_ready_with_cwd_and_branch() {
+        // Regression: OSC 133 A used to be silent to the frontend
+        // (the machine only stashed cwd/branch internally). Prompt
+        // strip then showed no cwd until the first OSC 133 C
+        // created a block. Now PromptStart emits PromptReady on
+        // every prompt so the display updates from the very first
+        // prompt of a fresh shell.
+        let mut machine = BlockMachine::new();
+        let events = machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: Some("/Users/ada/proj".into()),
+            git_branch: Some("main".into()),
+        });
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            PtyEvent::PromptReady { cwd, git_branch } => {
+                assert_eq!(cwd.as_deref(), Some("/Users/ada/proj"));
+                assert_eq!(git_branch.as_deref(), Some("main"));
+            }
+            other => panic!("expected PromptReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_prompt_start_emits_prompt_ready_with_nones() {
+        // A shell integration that emits a bare OSC 133 A (no
+        // cwd / branch params) is legal — the display should
+        // then clear rather than stick with the previous value.
+        // PromptReady propagates the nones so the frontend can
+        // react.
+        let mut machine = BlockMachine::new();
+        let events = machine.handle_vt_event(VtEvent::PromptStart {
+            cwd: None,
+            git_branch: None,
+        });
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            PtyEvent::PromptReady { cwd, git_branch } => {
+                assert!(cwd.is_none());
+                assert!(git_branch.is_none());
+            }
+            other => panic!("expected PromptReady, got {other:?}"),
+        }
     }
 
     #[test]

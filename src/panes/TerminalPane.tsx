@@ -101,6 +101,14 @@ export interface TerminalPaneProps {
    * directory the user was working in.
    */
   initialCwd?: string | null;
+  /**
+   * Starting git branch to show in the prompt strip before the
+   * first OSC 133 A arrives. Restored panes carry the branch
+   * captured at last save so the display isn't blank for the
+   * brief window between mount and first prompt. Only used for
+   * the initial display; every subsequent OSC 133 A overrides it.
+   */
+  initialBranch?: string | null;
 }
 
 function TerminalPaneInner({
@@ -110,6 +118,7 @@ function TerminalPaneInner({
   onAltScreenChange,
   onPtyIdChange,
   initialCwd,
+  initialBranch,
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   // Wraps the entire pane (title-bar-below-chrome + block list +
@@ -127,6 +136,17 @@ function TerminalPaneInner({
   // first-render value. Subsequent prop updates as the user cds
   // are ignored — the shell owns cwd from that point on.
   const initialCwdRef = useRef<string | null>(initialCwd ?? null);
+  // Prompt-strip cwd / branch. Initialised from the persisted
+  // values (`initialCwd`/`initialBranch`) so restored panes show
+  // the correct cwd from the very first paint; every subsequent
+  // OSC 133 A (`prompt_ready` event) overrides. For fresh panes
+  // with no persisted values, the display starts blank and
+  // populates within milliseconds when the shell renders its
+  // first prompt.
+  const [promptMeta, setPromptMeta] = useState<{
+    cwd: string | null;
+    branch: string | null;
+  }>(() => ({ cwd: initialCwd ?? null, branch: initialBranch ?? null }));
   const promptStripRef = useRef<HTMLDivElement | null>(null);
 
   const [blockState, dispatch] = useReducer(blockReducer, initialBlockState);
@@ -910,6 +930,16 @@ function TerminalPaneInner({
           dispatch({ type: "scrollback_cleared" });
           break;
 
+        case "prompt_ready":
+          // OSC 133 A fires on every prompt; the display source of
+          // truth for the prompt strip's cwd / branch. Fixes the
+          // "fresh shell shows no cwd until the first command" gap
+          // — before this event was added, cwd was derived from
+          // the latest block, which only exists once OSC 133 C
+          // fires (i.e., a command actually runs).
+          setPromptMeta({ cwd: event.cwd, branch: event.git_branch });
+          break;
+
         case "exit":
           // The shell died (user typed `exit`, it crashed, or a
           // `kill -9` from outside). The PTY entry is gone from the
@@ -967,12 +997,16 @@ function TerminalPaneInner({
     // mount, so excluding them from the dep array is deliberate.
   }, [restartNonce]);
 
-  // Derive the current cwd/branch from the most recently observed block.
-  // OSC 133 A on every prompt updates the block's metadata, so the last
-  // entry always reflects where the shell is now.
-  const latestBlock = blockState.blocks[blockState.blocks.length - 1];
-  const cwd = latestBlock?.cwd ?? null;
-  const branch = latestBlock?.git_branch ?? null;
+  // Current cwd / branch for the prompt strip and the App-level
+  // chrome. Sourced from the most recent `prompt_ready` event
+  // (OSC 133 A on every prompt), with the persisted
+  // `initialCwd`/`initialBranch` as the mount-time seed so
+  // restored panes never render a blank prompt strip. Not derived
+  // from `latestBlock` any more — blocks only exist after the
+  // first command runs, and the prompt-strip cwd needs to be
+  // visible before that.
+  const cwd = promptMeta.cwd;
+  const branch = promptMeta.branch;
 
   // Tell the parent whenever cwd / branch / alt-screen changes so the
   // App-level chrome can mirror the active tab's state. We stash the

@@ -156,6 +156,47 @@ describe("TerminalPane", () => {
     expect(opts?.cwd).toBeUndefined();
   });
 
+  it("seeds prompt-strip cwd + branch from initialCwd / initialBranch", async () => {
+    // Fixes the "restored pane briefly shows blank cwd" flicker.
+    // The onMetaChange callback fires with the initial values on
+    // mount, before any prompt_ready event arrives.
+    const onMetaChange = vi.fn();
+    render(
+      <TerminalPane
+        initialCwd="/Users/ada/proj"
+        initialBranch="feature/x"
+        onMetaChange={onMetaChange}
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(onMetaChange).toHaveBeenCalledWith("/Users/ada/proj", "feature/x");
+    });
+  });
+
+  it("updates cwd + branch when a prompt_ready event arrives (OSC 133 A)", async () => {
+    // Regression: OSC 133 A used to be invisible to the frontend
+    // (backend only emitted BlockStarted on OSC 133 C), so the
+    // prompt strip stayed blank until the first command ran.
+    // prompt_ready now fires on every prompt and drives the
+    // display.
+    const onMetaChange = vi.fn();
+    render(<TerminalPane onMetaChange={onMetaChange} />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+    expect(lastOnEvent).not.toBeNull();
+    act(() => {
+      lastOnEvent?.({
+        kind: "prompt_ready",
+        cwd: "/tmp/scratch",
+        git_branch: "main",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(onMetaChange).toHaveBeenCalledWith("/tmp/scratch", "main");
+    });
+  });
+
   it("mounts a Terminal into the container div and calls fit()", () => {
     render(<TerminalPane />);
     expect(mockTerminalOpen).toHaveBeenCalledTimes(1);

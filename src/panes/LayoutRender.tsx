@@ -45,14 +45,23 @@ export interface LayoutRenderProps {
   /** Drag-to-resize: caller updates the layout-tree Split at `path` in `tabId`. */
   onSetRatio: (tabId: string, path: SplitPath, ratio: number) => void;
   /**
-   * Starting cwd per pane (M9.5 follow-up). Session-restored
-   * panes carry their last-known cwd here so the spawned shell
-   * starts back in the right directory. Fresh panes have `null`
-   * (or the entry is missing entirely) and fall through to the
-   * shell's default. Only read at each pane's first mount —
-   * changes after that are ignored by `TerminalPane`.
+   * Persisted per-pane cwd + branch, threaded down to each
+   * TerminalPane at first mount.
+   *
+   * - `cwd` becomes the spawned shell's starting directory
+   *   (M9.5 follow-up).
+   * - `branch` seeds the prompt-strip display so restored
+   *   panes don't flash a blank branch label between mount
+   *   and the first OSC 133 A.
+   *
+   * Fresh panes have missing entries and fall through to
+   * defaults. Only read at each pane's first mount — changes
+   * after that are ignored by TerminalPane and deliberately
+   * excluded from `paneLeafEqual` so live cwd/branch updates
+   * (from `cd` / git checkout) don't cascade re-renders into
+   * the pane subtree.
    */
-  initialCwds?: Record<PaneId, string | null>;
+  initialPaneMeta?: Record<PaneId, { cwd: string | null; branch: string | null }>;
 }
 
 /** Hit-area thickness around the 1px divider line so it's easy to grab. */
@@ -173,12 +182,18 @@ interface PaneLeafProps {
   onAltScreen: (paneId: PaneId, active: boolean) => void;
   onPtyId: (paneId: PaneId, ptyId: string | null) => void;
   /**
-   * Starting cwd for the spawned shell (M9.5 follow-up). Only
-   * read at mount by TerminalPane; deliberately excluded from
-   * `paneLeafEqual` below so live cwd changes (from `cd`) don't
-   * pointlessly re-render the leaf.
+   * Starting cwd for the spawned shell. Only read at mount by
+   * TerminalPane; deliberately excluded from `paneLeafEqual`
+   * below so live cwd changes (from `cd`) don't pointlessly
+   * re-render the leaf.
    */
   initialCwd: string | null;
+  /**
+   * Starting branch for the prompt-strip display. Same
+   * mount-only semantics as `initialCwd` — excluded from
+   * `paneLeafEqual` for the same reason.
+   */
+  initialBranch: string | null;
 }
 
 function PaneLeafInner({
@@ -192,6 +207,7 @@ function PaneLeafInner({
   onAltScreen,
   onPtyId,
   initialCwd,
+  initialBranch,
 }: PaneLeafProps): React.ReactElement {
   // Per-pane bound callbacks. Stable as long as the parent's
   // (tabId-bound) callbacks are stable.
@@ -224,6 +240,7 @@ function PaneLeafInner({
         onAltScreenChange={handleAltScreen}
         onPtyIdChange={handlePtyId}
         initialCwd={initialCwd}
+        initialBranch={initialBranch}
       />
       {showFocusRing && <div data-testid="layout-focus-ring" style={focusRingStyle(isFocused)} />}
     </div>
@@ -337,7 +354,7 @@ export function LayoutRender({
   onPaneAltScreen,
   onPanePtyId,
   onSetRatio,
-  initialCwds,
+  initialPaneMeta,
 }: LayoutRenderProps): React.ReactElement {
   const geometry = useMemo(() => computeGeometry(node), [node]);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -380,7 +397,8 @@ export function LayoutRender({
           onMeta={handleMeta}
           onAltScreen={handleAltScreen}
           onPtyId={handlePtyId}
-          initialCwd={initialCwds?.[p.paneId] ?? null}
+          initialCwd={initialPaneMeta?.[p.paneId]?.cwd ?? null}
+          initialBranch={initialPaneMeta?.[p.paneId]?.branch ?? null}
         />
       ))}
       {geometry.dividers.map((d, i) => (
