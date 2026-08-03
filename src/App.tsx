@@ -56,6 +56,7 @@ import {
   loadPreferences,
   savePreferences,
 } from "./theme/preferences";
+import { listThemes, type Theme } from "./lib/ipc";
 import { BlockViewerModal } from "./viewer";
 import type { BlockSummary, PtyId } from "./lib/ipc";
 import type { LayoutNode, PaneId, SplitDirection, SplitPath } from "./panes/layout";
@@ -732,37 +733,50 @@ export default function App(): React.ReactElement {
     };
   }, []);
 
-  // Apply the persisted theme preference on mount. The
-  // `data-theme` attribute goes on `<html>` (via
-  // `applyTheme`), which our `tokens.css` reads to pick
-  // dark vs light palettes. A `shax:preference-changed`
-  // event lets the settings modal notify the App when the
-  // user flips the toggle without re-persisting.
+  // Apply the persisted theme preference on mount. M10.2:
+  // `applyTheme` now takes the full preferences plus the
+  // theme catalog so it can resolve the active preset and
+  // write its palette as CSS custom properties. The
+  // `data-theme` attribute stays set for legacy selectors.
+  // A `shax:preference-changed` event lets the settings
+  // modal notify the App when anything appearance-related
+  // flips; the handler re-loads preferences and re-applies.
   useEffect(() => {
-    void loadPreferences().then((prefs) => {
-      applyTheme(prefs.theme);
-      // M7.7a: restore the docked state from the last save so the user
-      // lands back in whatever configuration they had. Both fields
-      // default to safe values in preferences.ts, so a fresh install
-      // opens with the dock closed and default width.
-      //
-      // M9.3 refinement: only the "main" window hydrates the dock
-      // open/closed state from global preferences. Spawned windows
-      // always start with the dock closed, matching the user's
-      // expectation that new windows are a fresh workspace and don't
-      // inherit the sibling window's runtime state (spec §15). The
-      // width still hydrates from the global default so the first
-      // time the user opens the dock in a spawned window it matches
-      // their preferred size.
-      if (isMainWindow) {
-        setAssistantOpen(prefs.assistant_docked);
-      }
-      setAssistantWidth(prefs.assistant_dock_width);
-      prefsLoadedRef.current = true;
-    });
-    const onChanged = (e: Event): void => {
-      const detail = (e as CustomEvent<{ theme?: "dark" | "light" | "system" }>).detail;
-      if (detail?.theme !== undefined) applyTheme(detail.theme);
+    // Load both in parallel — the catalog is cached for the
+    // session after the first call. Ordering doesn't matter;
+    // we need both before applyTheme can resolve a preset.
+    void Promise.all([loadPreferences(), listThemes()]).then(
+      ([prefs, catalog]: [Awaited<ReturnType<typeof loadPreferences>>, Theme[]]) => {
+        applyTheme(prefs, catalog);
+        // M7.7a: restore the docked state from the last save so the user
+        // lands back in whatever configuration they had. Both fields
+        // default to safe values in preferences.ts, so a fresh install
+        // opens with the dock closed and default width.
+        //
+        // M9.3 refinement: only the "main" window hydrates the dock
+        // open/closed state from global preferences. Spawned windows
+        // always start with the dock closed, matching the user's
+        // expectation that new windows are a fresh workspace and don't
+        // inherit the sibling window's runtime state (spec §15). The
+        // width still hydrates from the global default so the first
+        // time the user opens the dock in a spawned window it matches
+        // their preferred size.
+        if (isMainWindow) {
+          setAssistantOpen(prefs.assistant_docked);
+        }
+        setAssistantWidth(prefs.assistant_dock_width);
+        prefsLoadedRef.current = true;
+      },
+    );
+    // Re-apply on any preference change — reads fresh
+    // preferences so a theme flip, a preset swap, or a
+    // font tweak (M10.3) all funnel through the same path.
+    // `listThemes` is cached, so this is one IPC call max
+    // (the preferences read).
+    const onChanged = (): void => {
+      void Promise.all([loadPreferences(), listThemes()]).then(([prefs, catalog]) => {
+        applyTheme(prefs, catalog);
+      });
     };
     window.addEventListener("shax:preference-changed", onChanged);
     return () => window.removeEventListener("shax:preference-changed", onChanged);

@@ -1,25 +1,30 @@
 /*
- * Shax design tokens — dark + light palettes (M7 slice 1).
+ * Shax design tokens (M7 slice 1, retooled in M10.2).
  *
- * Implementation home of the palettes defined in `/design`.
  * Components consume these via `var(--…)` and never hard-code
  * hexes. See `specs/13-design.md`.
  *
- * How theme switching works:
- *   - The dark palette lives under `[data-theme="dark"]` (and
- *     `:root` as the fallback so first paint before JS boots
- *     doesn't flash unstyled).
- *   - The light palette lives under `[data-theme="light"]`.
- *   - `src/theme/theme.ts` sets `document.documentElement`'s
- *     `data-theme` attribute on load and whenever the
- *     preference changes. When the preference is `"system"`
- *     the applier resolves it via the `prefers-color-scheme`
- *     media query and re-resolves when the OS setting flips.
+ * How theme switching works (M10.2):
+ *   - `:root` carries the Shax Dark palette as a **pre-JS
+ *     paint fallback** — so before `src/theme/theme.ts` boots
+ *     and resolves the user's preset, the app renders with
+ *     sensible values instead of unstyled.
+ *   - `src/theme/theme.ts::applyTheme(preferences, catalog)`
+ *     runs on mount and on every `shax:preference-changed`
+ *     event. It resolves the active preset from the M10.1
+ *     catalog and writes its `chrome` + `terminal.ansi` +
+ *     `syntax` colours as `style.setProperty` on
+ *     `documentElement.style`, which win over `:root` by
+ *     specificity — no `[data-theme=…]` selector needed.
+ *   - `data-theme` is still set to `"dark"` or `"light"` (the
+ *     active preset's `mode`) so any selector still keyed
+ *     off it — CodeMirror's own theme override, a hover
+ *     rule, etc. — keeps working during the transition.
  *
- * The light palette is a first-pass derivation of the dark
- * one — same token *roles*, just inverted lightness plus a
- * few chroma tweaks so contrast holds. Expect iteration from
- * design review after this slice ships.
+ * A pre-M10 install with `preferences.json` containing only
+ * `{"theme":"dark"}` deserialises onto the default
+ * `appearance` block (Shax Dark + Shax Light presets), so
+ * every existing user gets the same colours they had.
  */
 
 /*
@@ -39,7 +44,16 @@
   font-display: swap;
 }
 
-/* --- Dark palette (default / fallback) ------------------- */
+/* --- Pre-JS paint fallback: Shax Dark palette -----------
+ *
+ * Every value below is the compile-time default. M10.2's
+ * `applyTheme` overrides these via `style.setProperty` on
+ * `documentElement.style` once the catalog resolves. The
+ * `[data-theme="dark"]` alias is retained purely so any
+ * legacy code still writing `[data-theme="dark"] { … }`
+ * elsewhere in the tree keeps working; nothing in
+ * `tokens.css` itself relies on it.
+ */
 
 :root,
 [data-theme="dark"] {
@@ -102,9 +116,37 @@
   --ansi-bright-magenta: #d5a5f5;
   --ansi-bright-cyan: #8ecfd8;
   --ansi-bright-white: #f0f2f8;
+
+  /*
+   * Syntax palette (M10.2 pre-JS fallback — Shax Dark
+   * defaults, matching the M7 atom-one-dark-ish values that
+   * used to live under `[data-theme="dark"]` in syntax.css).
+   * `applyTheme` overrides these with the active preset's
+   * `syntax` block on mount.
+   */
+  --syntax-comment: #5c6370;
+  --syntax-keyword: #c678dd;
+  --syntax-string: #98c379;
+  --syntax-number: #d19a66;
+  --syntax-literal: #56b6c2;
+  --syntax-builtin: #e6c07b;
+  --syntax-name: #e06c75;
+  --syntax-title: #61aeee;
+  --syntax-type: #d19a66;
 }
 
-/* --- Light palette --------------------------------------- */
+/* --- Light palette (transitional) -----------------------
+ *
+ * Kept as a `[data-theme="light"]` block so a user with the
+ * old preferences (`theme: light`, no `appearance` present in
+ * a pre-M10 file on a cold-first-paint before `applyTheme`
+ * runs) still sees light colours immediately. Once
+ * `applyTheme` runs it writes the same values from the Shax
+ * Light preset (embedded in the M10.1 catalog), so the two
+ * sources agree by design. The `writePresetToRoot` output
+ * sits on `documentElement.style` and wins over this block
+ * once JS boots.
+ */
 
 [data-theme="light"] {
   /* Surfaces — flipped lightness, warm off-white so the eye

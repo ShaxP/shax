@@ -110,6 +110,11 @@ vi.mock("./lib/ipc", () => ({
   ptyRunningCommands: (): Promise<string[]> => Promise.resolve([]),
   closeWindowConfirmed: (): Promise<void> => Promise.resolve(),
   quitConfirmed: (): Promise<void> => Promise.resolve(),
+  // M10.2 — App boot loads the theme catalog to feed
+  // applyTheme. Tests don't exercise the picker, so an
+  // empty catalog is fine: applyTheme falls back to the
+  // data-theme attribute and the tokens.css :root palette.
+  listThemes: (): Promise<unknown[]> => Promise.resolve([]),
 }));
 
 class StubResizeObserver {
