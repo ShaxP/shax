@@ -376,19 +376,23 @@ pub fn run() {
         tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
             api.prevent_exit();
         }
-        tauri::RunEvent::ExitRequested {
-            code: Some(_), api, ..
-        } => {
-            // M9.6: explicit quit path (⌘Q, Quit menu, app.exit).
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            // M9.6: any ExitRequested that reaches this arm is a
+            // real quit — the guard arm above handles the macOS
+            // "runtime decided to exit because the last window
+            // closed" stay-alive case. Not filtering by `code`:
+            // on macOS `PredefinedMenuItem::quit` triggers
+            // `NSApplication::terminate:` which fires
+            // `ExitRequested { code: None }`, so requiring
+            // `code: Some(_)` would silently miss the Quit menu
+            // and ⌘Q paths.
+            //
             // If the frontend already showed the warning modal and
-            // the user confirmed, `consume_quit_confirmed()` returns
-            // true and we let the exit proceed. Otherwise, if any
-            // pane has a running non-alt-screen command, prevent
-            // the exit and ask the focused window to show the
-            // modal. `should_prevent_exit(code)` above already
-            // handled the macOS "runtime decided to exit" branch
-            // separately, so this arm sees only user-initiated
-            // explicit quits.
+            // the user confirmed, `consume_quit_confirmed()`
+            // returns true and we let the exit proceed. Otherwise,
+            // if any pane has a running non-alt-screen command,
+            // prevent the exit and ask the focused window to show
+            // the modal.
             let Some(windows) = handle.try_state::<Arc<mux::Windows>>() else {
                 return;
             };
@@ -403,13 +407,21 @@ pub fn run() {
                 return;
             }
             api.prevent_exit();
-            let target = handle
+            let target_label = handle
                 .webview_windows()
-                .into_values()
-                .find(|w| w.is_focused().unwrap_or(false))
-                .or_else(|| handle.webview_windows().into_values().next());
-            if let Some(window) = target {
-                if let Err(e) = window.emit(
+                .into_iter()
+                .find(|(_, w)| w.is_focused().unwrap_or(false))
+                .or_else(|| handle.webview_windows().into_iter().next())
+                .map(|(label, _)| label);
+            if let Some(label) = target_label {
+                // Targeted emit — `Manager::emit` (which
+                // WebviewWindow inherits) is app-global, so a
+                // plain `window.emit(...)` would open the quit
+                // modal in every window, not just the focused
+                // one. Same trap that hit the window-close
+                // intercept before the M9.6 fix.
+                if let Err(e) = handle.emit_to(
+                    tauri::EventTarget::WebviewWindow { label },
                     "shax:confirm-quit",
                     serde_json::json!({ "count": running.len() }),
                 ) {

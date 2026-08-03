@@ -291,13 +291,19 @@ pub fn register_close_teardown<R: tauri::Runtime>(
             let running_here_count = running.iter().filter(|p| owned.contains(p)).count();
             if running_here_count > 0 {
                 api.prevent_close();
-                if let Some(window) = handle.get_webview_window(&label) {
-                    if let Err(e) = window.emit(
-                        "shax:confirm-close-window",
-                        serde_json::json!({ "count": running_here_count }),
-                    ) {
-                        tracing::warn!("close-intercept: emit failed: {e}");
-                    }
+                // Target THIS window only. `WebviewWindow::emit` in
+                // Tauri 2 broadcasts to every listener across every
+                // window; without `emit_to(..., WebviewWindow{label})`
+                // the confirmation modal opens in every open window
+                // instead of just the one being closed.
+                if let Err(e) = handle.emit_to(
+                    tauri::EventTarget::WebviewWindow {
+                        label: label.clone(),
+                    },
+                    "shax:confirm-close-window",
+                    serde_json::json!({ "count": running_here_count }),
+                ) {
+                    tracing::warn!("close-intercept: emit failed: {e}");
                 }
                 return;
             }
