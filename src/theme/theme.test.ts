@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyTheme, resolveTheme, systemTheme } from "./theme";
+import type { Theme } from "../lib/ipc";
+import { DEFAULT_APPEARANCE, type Preferences } from "./preferences";
+import { applyTheme, findPreset, resolveActivePresetId, systemTheme } from "./theme";
 
 // Small helper to fake the `prefers-color-scheme` media
 // query. jsdom returns a stubbed MediaQueryList that always
@@ -30,21 +32,119 @@ function fakeMatchMedia(matches: boolean) {
   };
 }
 
-describe("resolveTheme", () => {
-  beforeEach(() => {
-    fakeMatchMedia(false);
+// Fixture presets — minimal shape, just enough to
+// exercise the applier. Real presets ship in the M10.1
+// catalog and have identical structure.
+const DARK_PRESET: Theme = {
+  id: "shax-dark",
+  name: "Shax Dark",
+  mode: "dark",
+  source: "test",
+  license: "test",
+  chrome: {
+    bg: "#111111",
+    fg: "#eeeeee",
+  },
+  terminal: {
+    foreground: "#eeeeee",
+    background: "#111111",
+    cursor: "#7ea6d8",
+    selectionBackground: "#333333",
+    ansi: {
+      black: "#000",
+      red: "#f00",
+      green: "#0f0",
+      yellow: "#ff0",
+      blue: "#00f",
+      magenta: "#f0f",
+      cyan: "#0ff",
+      white: "#fff",
+      brightBlack: "#111",
+      brightRed: "#f11",
+      brightGreen: "#1f1",
+      brightYellow: "#ff1",
+      brightBlue: "#11f",
+      brightMagenta: "#f1f",
+      brightCyan: "#1ff",
+      brightWhite: "#eee",
+    },
+  },
+  syntax: {
+    comment: "#666",
+    keyword: "#c678dd",
+    string: "#98c379",
+    number: "#d19a66",
+    literal: "#56b6c2",
+    builtin: "#e6c07b",
+    name: "#e06c75",
+    title: "#61aeee",
+    type: "#d19a66",
+  },
+  warning: "#f00",
+  caution: "#ff0",
+  match: "#ff0",
+};
+
+const LIGHT_PRESET: Theme = {
+  ...DARK_PRESET,
+  id: "shax-light",
+  name: "Shax Light",
+  mode: "light",
+  chrome: {
+    bg: "#fafaf7",
+    fg: "#1a1c22",
+  },
+};
+
+const CATALOG: Theme[] = [DARK_PRESET, LIGHT_PRESET];
+
+function prefsWith(overrides: Partial<Preferences>): Preferences {
+  return {
+    theme: "system",
+    assistant_docked: false,
+    assistant_dock_width: 420,
+    appearance: DEFAULT_APPEARANCE,
+    ...overrides,
+  };
+}
+
+describe("resolveActivePresetId", () => {
+  it("returns theme_light for the light mode", () => {
+    expect(resolveActivePresetId(prefsWith({ theme: "light" }), "dark")).toBe("shax-light");
   });
 
-  it("passes concrete themes through unchanged", () => {
-    expect(resolveTheme("dark")).toBe("dark");
-    expect(resolveTheme("light")).toBe("light");
+  it("returns theme_dark for the dark mode", () => {
+    expect(resolveActivePresetId(prefsWith({ theme: "dark" }), "light")).toBe("shax-dark");
   });
 
-  it("maps `system` to whatever `prefers-color-scheme` reports", () => {
-    fakeMatchMedia(true);
-    expect(resolveTheme("system")).toBe("light");
-    fakeMatchMedia(false);
-    expect(resolveTheme("system")).toBe("dark");
+  it("picks theme_light in system mode when the OS reports light", () => {
+    expect(resolveActivePresetId(prefsWith({ theme: "system" }), "light")).toBe("shax-light");
+  });
+
+  it("picks theme_dark in system mode when the OS reports dark", () => {
+    expect(resolveActivePresetId(prefsWith({ theme: "system" }), "dark")).toBe("shax-dark");
+  });
+
+  it("honours a non-default preset id in appearance", () => {
+    const prefs = prefsWith({
+      theme: "dark",
+      appearance: { ...DEFAULT_APPEARANCE, theme_dark: "catppuccin-mocha" },
+    });
+    expect(resolveActivePresetId(prefs, "dark")).toBe("catppuccin-mocha");
+  });
+});
+
+describe("findPreset", () => {
+  it("returns the matching preset", () => {
+    expect(findPreset(CATALOG, "shax-light")?.id).toBe("shax-light");
+  });
+
+  it("returns null when the id is unknown", () => {
+    expect(findPreset(CATALOG, "does-not-exist")).toBeNull();
+  });
+
+  it("returns null when the catalog is empty (boot race)", () => {
+    expect(findPreset([], "shax-dark")).toBeNull();
   });
 });
 
@@ -63,31 +163,49 @@ describe("systemTheme", () => {
 describe("applyTheme", () => {
   beforeEach(() => {
     document.documentElement.removeAttribute("data-theme");
+    document.documentElement.removeAttribute("style");
     fakeMatchMedia(false);
   });
 
-  it('writes `data-theme="dark"` on the document root for the dark preference', () => {
-    applyTheme("dark");
+  it('writes `data-theme="dark"` on the document root when the active preset is dark', () => {
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
-  it('writes `data-theme="light"` for the light preference', () => {
-    applyTheme("light");
+  it('writes `data-theme="light"` when the active preset is light', () => {
+    applyTheme(prefsWith({ theme: "light" }), CATALOG);
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
+  it("writes the preset's chrome colours as CSS custom properties on :root", () => {
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
+    expect(document.documentElement.style.getPropertyValue("--bg")).toBe("#111111");
+    expect(document.documentElement.style.getPropertyValue("--fg")).toBe("#eeeeee");
+  });
+
+  it("writes the preset's ANSI 16 as --ansi-* CSS custom properties", () => {
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
+    expect(document.documentElement.style.getPropertyValue("--ansi-red")).toBe("#f00");
+    expect(document.documentElement.style.getPropertyValue("--ansi-bright-white")).toBe("#eee");
+  });
+
+  it("writes the preset's syntax colours as --syntax-* CSS custom properties", () => {
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
+    expect(document.documentElement.style.getPropertyValue("--syntax-keyword")).toBe("#c678dd");
   });
 
   it("resolves `system` at apply time from the current media query", () => {
     fakeMatchMedia(true);
-    applyTheme("system");
+    applyTheme(prefsWith({ theme: "system" }), CATALOG);
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     fakeMatchMedia(false);
-    applyTheme("system");
+    applyTheme(prefsWith({ theme: "system" }), CATALOG);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
   it("re-resolves when the OS flips between dark and light under system mode", () => {
     const { flip } = fakeMatchMedia(false);
-    applyTheme("system");
+    applyTheme(prefsWith({ theme: "system" }), CATALOG);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     flip(true);
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
@@ -97,12 +215,36 @@ describe("applyTheme", () => {
 
   it("stops listening to the media query when switching from system to a concrete theme", () => {
     const { mql, flip } = fakeMatchMedia(false);
-    applyTheme("system");
-    applyTheme("dark");
+    applyTheme(prefsWith({ theme: "system" }), CATALOG);
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
     // Manually flip the OS — should NOT touch data-theme
     // because the listener was detached.
     flip(true);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(mql.removeEventListener).toHaveBeenCalled();
+  });
+
+  it("falls back to data-theme only when the catalog is empty (boot race)", () => {
+    // Boot race — the preferences load resolved before
+    // the catalog IPC. `applyTheme` must not crash and
+    // must at least set `data-theme` so tokens.css can
+    // render the pre-JS fallback palette.
+    applyTheme(prefsWith({ theme: "dark" }), []);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    // Chrome vars remain unset — the :root fallback in
+    // tokens.css covers them.
+    expect(document.documentElement.style.getPropertyValue("--bg")).toBe("");
+  });
+
+  it("falls back to data-theme only when the preset id doesn't resolve", () => {
+    // User has a preferences.json that references a
+    // renamed preset id. Falls back gracefully.
+    const prefs = prefsWith({
+      theme: "dark",
+      appearance: { ...DEFAULT_APPEARANCE, theme_dark: "gone-in-a-rename" },
+    });
+    applyTheme(prefs, CATALOG);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(document.documentElement.style.getPropertyValue("--bg")).toBe("");
   });
 });

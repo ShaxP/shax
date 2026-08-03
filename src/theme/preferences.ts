@@ -15,18 +15,57 @@ import type { ThemePreference } from "./theme";
  * `DEFAULT_ASSISTANT_DOCK_WIDTH` in `src-tauri/src/preferences.rs`. */
 export const DEFAULT_ASSISTANT_DOCK_WIDTH = 420;
 
+/** Default preset ids — kept in sync with
+ *  `DEFAULT_LIGHT_THEME_ID` / `DEFAULT_DARK_THEME_ID` in
+ *  `src-tauri/src/themes.rs`. */
+export const DEFAULT_LIGHT_THEME_ID = "shax-light";
+export const DEFAULT_DARK_THEME_ID = "shax-dark";
+
+/** Bounds for `AppearancePreferences.font_size` — mirrors
+ *  `MIN_FONT_SIZE` / `MAX_FONT_SIZE` in
+ *  `src-tauri/src/preferences.rs`. */
+export const MIN_FONT_SIZE = 10;
+export const MAX_FONT_SIZE = 24;
+export const DEFAULT_FONT_SIZE = 13;
+
+/**
+ * Appearance sub-block introduced in M10.1. Mirrors
+ * `AppearancePreferences` in `src-tauri/src/preferences.rs`.
+ * A pre-M10 `preferences.json` without this block deserialises
+ * to defaults on the backend, so the field is always populated
+ * when the frontend reads it.
+ */
+export interface AppearancePreferences {
+  theme_light: string;
+  theme_dark: string;
+  font_family: string | null;
+  font_size: number;
+  ligatures: boolean;
+}
+
+export const DEFAULT_APPEARANCE: AppearancePreferences = {
+  theme_light: DEFAULT_LIGHT_THEME_ID,
+  theme_dark: DEFAULT_DARK_THEME_ID,
+  font_family: null,
+  font_size: DEFAULT_FONT_SIZE,
+  ligatures: true,
+};
+
 export interface Preferences {
   theme: ThemePreference;
   /** True when the assistant dock was open at last save (M7.7a). */
   assistant_docked: boolean;
   /** Width in pixels of the assistant dock's right-side column (M7.7a). */
   assistant_dock_width: number;
+  /** M10.1: theme preset + font choices. */
+  appearance: AppearancePreferences;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
   theme: "system",
   assistant_docked: false,
   assistant_dock_width: DEFAULT_ASSISTANT_DOCK_WIDTH,
+  appearance: DEFAULT_APPEARANCE,
 };
 
 function isTauriContext(): boolean {

@@ -716,3 +716,101 @@ export async function quitConfirmed(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke("quit_confirmed");
 }
+
+// ── M10.2: theme catalog ──────────────────────────────────────
+
+/**
+ * A single ANSI 16-colour palette. Field names match xterm's
+ * `ITheme` shape so the object can be spread straight in.
+ */
+export interface AnsiPalette {
+  black: string;
+  red: string;
+  green: string;
+  yellow: string;
+  blue: string;
+  magenta: string;
+  cyan: string;
+  white: string;
+  brightBlack: string;
+  brightRed: string;
+  brightGreen: string;
+  brightYellow: string;
+  brightBlue: string;
+  brightMagenta: string;
+  brightCyan: string;
+  brightWhite: string;
+}
+
+/** Terminal-surface colours consumed by xterm.js. */
+export interface TerminalPalette {
+  foreground: string;
+  background: string;
+  cursor: string;
+  selectionBackground: string;
+  ansi: AnsiPalette;
+}
+
+/** Syntax-highlighting colours consumed by the code viewer +
+ *  hljs-rendered code fences. Names track the hljs token
+ *  kinds so the CSS mapping in ThemeProvider stays one-to-one. */
+export interface SyntaxPalette {
+  comment: string;
+  keyword: string;
+  string: string;
+  number: string;
+  literal: string;
+  builtin: string;
+  name: string;
+  title: string;
+  type: string;
+}
+
+/**
+ * A complete theme preset returned by `listThemes` (M10.1).
+ * `chrome` is a free-form map of CSS custom property names →
+ * colour values so the catalog can grow tokens without a
+ * schema change.
+ */
+export interface Theme {
+  id: string;
+  name: string;
+  mode: "light" | "dark";
+  source: string;
+  license: string;
+  chrome: Record<string, string>;
+  terminal: TerminalPalette;
+  syntax: SyntaxPalette;
+  warning: string;
+  caution: string;
+  match: string;
+}
+
+// One-shot session cache. The catalog is fixed at compile
+// time on the Rust side (embedded via include_str!), so
+// re-fetching would return the same bytes every time.
+let themesCache: Theme[] | null = null;
+
+/**
+ * Fetch the full built-in theme catalog (M10.1). Cached for
+ * the session — every subsequent call resolves to the same
+ * array reference. Outside Tauri returns an empty list so the
+ * app still mounts in plain-browser dev (theme resolution
+ * falls back to Shax Dark defaults baked into tokens.css).
+ */
+export async function listThemes(): Promise<Theme[]> {
+  if (themesCache !== null) return themesCache;
+  if (!isTauriContext()) {
+    themesCache = [];
+    return themesCache;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  themesCache = await invoke<Theme[]>("list_themes");
+  return themesCache;
+}
+
+/** Test-only: forget the cached catalog so a subsequent
+ *  `listThemes()` re-fetches. Never called from app code. */
+export function __resetThemesCacheForTest(): void {
+  themesCache = null;
+}
