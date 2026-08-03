@@ -28,8 +28,18 @@
 import { memo, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+// `@xterm/addon-ligatures@0.10` ships a package.json with
+// `main` pointing at a non-existent `.js` file — Vite
+// resolves `main` first and fails. Runtime import uses the
+// explicit `.mjs` path to work around this; the type import
+// uses the package root so TypeScript picks up the typings
+// declared under `typings/addon-ligatures.d.ts`. Upstream
+// bug tracked in xtermjs/xterm.js.
+import type { LigaturesAddon as LigaturesAddonType } from "@xterm/addon-ligatures";
+import { LigaturesAddon } from "@xterm/addon-ligatures/lib/addon-ligatures.mjs";
 import "@xterm/xterm/css/xterm.css";
 import { readXtermTheme } from "./xtermTheme";
+import { loadPreferences } from "../theme/preferences";
 import { anyModalLayerOpen } from "../lib/modalLayer";
 import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
 import type { BlockId, PtyId, PtyEvent, SpawnOpts } from "../lib/ipc";
@@ -52,6 +62,22 @@ import {
 } from "./blockFocus";
 
 const RESIZE_DEBOUNCE_MS = 50;
+
+/**
+ * Read `--font-size-terminal` (M10.3) and strip the trailing
+ * `px` unit so xterm's `fontSize` option (bare number) can
+ * consume it. Returns `null` when the DOM isn't ready or the
+ * variable is unset — xterm's own default (15 px) takes over.
+ */
+function readFontSizePx(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--font-size-terminal")
+    .trim();
+  if (raw === "") return null;
+  const parsed = parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 function isTauriContext(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -131,6 +157,12 @@ function TerminalPaneInner({
   const terminalRef = useRef<Terminal | null>(null);
   const ptyIdRef = useRef<PtyId | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // M10.3: single owner of the xterm-addon-ligatures lifetime.
+  // Attach when appearance.ligatures is true, dispose when
+  // false. Also disposed + re-attached on font-family change
+  // because the addon caches font metrics at construction and
+  // wouldn't otherwise pick up a new family.
+  const ligaturesAddonRef = useRef<LigaturesAddonType | null>(null);
   // M9.5 follow-up: capture the mount-time initial cwd so the
   // spawn effect (which runs with empty deps) always reads the
   // first-render value. Subsequent prop updates as the user cds
@@ -787,11 +819,17 @@ function TerminalPaneInner({
       typeof window !== "undefined"
         ? getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim()
         : "";
+    // M10.3: font size comes from --font-size-terminal
+    // (e.g. `13px`). Strip the unit for xterm's fontSize
+    // (which expects a bare number). Fall through to xterm's
+    // built-in default if the variable isn't set yet.
+    const fontSize = readFontSizePx();
     const derivedTheme = readXtermTheme();
     const terminal = new Terminal({
       // Let xterm fill the container; FitAddon will set the actual dimensions.
       allowProposedApi: true,
       fontFamily: fontMono !== "" ? fontMono : "ui-monospace, monospace",
+      ...(fontSize !== null ? { fontSize } : {}),
       // Derived from the app's design tokens so the terminal
       // colours track light/dark theme switches. `null` means the
       // DOM isn't ready — fall through to xterm's own defaults.
@@ -804,6 +842,19 @@ function TerminalPaneInner({
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+
+    // M10.3: attach the ligature addon on initial construction
+    // when the stored preference is on. Every subsequent
+    // preference change goes through the reapply hook below,
+    // which owns dispose+reattach.
+    void loadPreferences().then((prefs) => {
+      if (terminalRef.current !== terminal) return; // torn down before load resolved
+      if (prefs.appearance.ligatures) {
+        const addon = new LigaturesAddon();
+        terminal.loadAddon(addon);
+        ligaturesAddonRef.current = addon;
+      }
+    });
 
     // xterm still has `onData` for the alt-screen path: when the alternate
     // screen is active (vim, less, top), xterm takes focus and the prompt
@@ -988,6 +1039,13 @@ function TerminalPaneInner({
         ptyIdRef.current = null;
       }
 
+      // Dispose the ligature addon before the terminal so its
+      // canvas measurement handle unbinds cleanly (M10.3). No-
+      // op if the addon wasn't attached (ligatures off).
+      if (ligaturesAddonRef.current !== null) {
+        ligaturesAddonRef.current.dispose();
+        ligaturesAddonRef.current = null;
+      }
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -1077,9 +1135,54 @@ function TerminalPaneInner({
   useEffect(() => {
     const reapply = (): void => {
       const t = terminalRef.current;
+      if (t === null) return;
+      // Theme first (M10.2) — cheap and re-uses the palette
+      // xterm already had cached, no cell-metric change.
       const theme = readXtermTheme();
-      if (t === null || theme === null) return;
-      t.options.theme = theme;
+      if (theme !== null) t.options.theme = theme;
+      // Font next (M10.3). Family and size both live behind
+      // CSS custom properties, so a preset flip *plus* a font
+      // tweak in the same `shax:preference-changed` event
+      // reapplies both here. Font-metric changes invalidate
+      // xterm's cached cell size, so we `fit()` afterwards to
+      // recompute rows/cols against the container — otherwise
+      // the shell keeps its previous winsize and lines wrap
+      // at the wrong column.
+      const fontMono = getComputedStyle(document.documentElement)
+        .getPropertyValue("--font-mono")
+        .trim();
+      if (fontMono !== "") t.options.fontFamily = fontMono;
+      const fontSize = readFontSizePx();
+      if (fontSize !== null) t.options.fontSize = fontSize;
+      const fit = fitAddonRef.current;
+      if (fit !== null) {
+        try {
+          fit.fit();
+        } catch {
+          // fit() throws before the terminal is measurable
+          // (zero-size container during transient layout). The
+          // ResizeObserver will fit again once the container
+          // settles — safe to swallow.
+        }
+      }
+      // Ligature addon (M10.3). Read preferences to know
+      // whether the toggle is on. Dispose the old addon
+      // unconditionally on every reapply: the addon caches
+      // font metrics at construction and wouldn't pick up a
+      // family change otherwise. Then re-attach when the
+      // preference is on.
+      void loadPreferences().then((prefs) => {
+        if (terminalRef.current !== t) return; // pane torn down mid-flight
+        if (ligaturesAddonRef.current !== null) {
+          ligaturesAddonRef.current.dispose();
+          ligaturesAddonRef.current = null;
+        }
+        if (prefs.appearance.ligatures) {
+          const addon = new LigaturesAddon();
+          t.loadAddon(addon);
+          ligaturesAddonRef.current = addon;
+        }
+      });
     };
     window.addEventListener("shax:preference-changed", reapply);
     return () => window.removeEventListener("shax:preference-changed", reapply);

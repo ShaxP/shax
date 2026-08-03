@@ -26,6 +26,7 @@
  */
 
 import type { Theme } from "../lib/ipc";
+import { fontFamilyStack } from "./fonts";
 import type { Preferences } from "./preferences";
 
 export type ThemePreference = "dark" | "light" | "system";
@@ -109,6 +110,26 @@ function writeResolvedTheme(preferences: Preferences, catalog: readonly Theme[])
     // rest as the pre-JS default.
     document.documentElement.setAttribute("data-theme", systemMode);
   }
+  writeAppearanceToRoot(preferences);
+}
+
+/** Write the M10.3 appearance settings — font family, font
+ *  size — as CSS custom properties on `:root`. Kept separate
+ *  from `writePresetToRoot` because these values come from
+ *  the appearance block (user's choice), not from the active
+ *  preset. Ligatures are xterm-addon lifecycle and don't
+ *  translate to a CSS variable — see TerminalPane.
+ *
+ *  `--font-mono` is the stack used by xterm + CodeMirror. The
+ *  user's chosen family sits first; every bundled family and
+ *  the OS fallback stack follow. `--font-size-terminal` is a
+ *  bare number of CSS pixels — xterm consumes it via
+ *  `readXtermTheme` (or reads it off the preferences payload
+ *  in M10.4). */
+function writeAppearanceToRoot(preferences: Preferences): void {
+  const root = document.documentElement.style;
+  root.setProperty("--font-mono", fontFamilyStack(preferences.appearance.font_family));
+  root.setProperty("--font-size-terminal", `${preferences.appearance.font_size}px`);
 }
 
 function writePresetToRoot(preset: Theme): void {

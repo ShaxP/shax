@@ -92,6 +92,13 @@ const WRAPPER_STYLE: CSSProperties = {
   flexDirection: "column",
   minHeight: 0,
   fontFamily: "var(--font-mono)",
+  // M10.3: share the terminal font size so raw command
+  // output in a pane and rendered code in the viewer stay
+  // visually coherent. CodeMirror inherits from the wrapper
+  // so no extension surgery needed. Falls back to `inherit`
+  // when the variable is unset (pre-JS paint) so the initial
+  // render still has some size.
+  fontSize: "var(--font-size-terminal, inherit)",
   background: "var(--pane)",
 };
 

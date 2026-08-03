@@ -247,4 +247,43 @@ describe("applyTheme", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(document.documentElement.style.getPropertyValue("--bg")).toBe("");
   });
+
+  // ── M10.3 appearance vars ─────────────────────────────────
+
+  it("writes the default font stack when font_family is null", () => {
+    applyTheme(prefsWith({ theme: "dark" }), CATALOG);
+    const stack = document.documentElement.style.getPropertyValue("--font-mono");
+    expect(stack).toContain('"JetBrains Mono"');
+    expect(stack).toContain('"Fira Code"');
+    expect(stack).toContain("monospace");
+  });
+
+  it("puts the user's chosen font first in the --font-mono stack", () => {
+    const prefs = prefsWith({
+      theme: "dark",
+      appearance: { ...DEFAULT_APPEARANCE, font_family: "Menlo" },
+    });
+    applyTheme(prefs, CATALOG);
+    const stack = document.documentElement.style.getPropertyValue("--font-mono");
+    expect(stack.startsWith("Menlo,")).toBe(true);
+  });
+
+  it("writes --font-size-terminal in px from font_size", () => {
+    const prefs = prefsWith({
+      theme: "dark",
+      appearance: { ...DEFAULT_APPEARANCE, font_size: 18 },
+    });
+    applyTheme(prefs, CATALOG);
+    expect(document.documentElement.style.getPropertyValue("--font-size-terminal")).toBe("18px");
+  });
+
+  it("writes appearance vars even when the catalog is empty (boot race)", () => {
+    // Boot ordering: preferences may load before the theme
+    // catalog IPC returns. Font family + size shouldn't
+    // depend on the preset being resolved — they're user
+    // preferences, orthogonal to preset.
+    applyTheme(prefsWith({ theme: "dark", appearance: DEFAULT_APPEARANCE }), []);
+    expect(document.documentElement.style.getPropertyValue("--font-mono")).not.toBe("");
+    expect(document.documentElement.style.getPropertyValue("--font-size-terminal")).toBe("13px");
+  });
 });

@@ -1,0 +1,59 @@
+/*
+ * Bundled monospace fonts (M10.3).
+ *
+ * Four families ship with the app so users get a consistent
+ * default look on every platform without depending on what's
+ * already installed. All four are licensed under the SIL Open
+ * Font License 1.1 (see the source repos below) and included
+ * only in their Regular weight — italics + bold aren't used
+ * anywhere in the terminal or code viewer.
+ *
+ * The existing JetBrainsMono Nerd Font Mono (used for prompt-
+ * strip icons + statusline glyphs) is declared in `tokens.css`
+ * and stays there because it's a separate face — the Nerd
+ * Fonts patch adds glyphs the plain family doesn't carry.
+ * This file is only the "user-picked terminal font" families.
+ *
+ * Users can also select any system-installed monospace name
+ * (Menlo, Consolas, SF Mono, ...) via the `font_family`
+ * preference; the CSS fallback stack in `--font-mono` ends in
+ * the OS default, so an unknown family name still renders in
+ * some monospace face.
+ *
+ * `font-display: swap` matches the design goal: don't block
+ * paint on font load. First paint uses the fallback; the
+ * bundled face swaps in as soon as it's ready — imperceptible
+ * on first launch, invisible on every reopen (fonts cached).
+ */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  src: url("../assets/fonts/FiraCode-Regular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cascadia Code";
+  src: url("../assets/fonts/CascadiaCode-Regular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Iosevka";
+  src: url("../assets/fonts/Iosevka-Regular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
