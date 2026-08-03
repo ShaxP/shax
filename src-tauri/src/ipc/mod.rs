@@ -11,7 +11,7 @@ use crate::mux::{WindowId, Windows};
 use crate::pty::PtyManager;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::sync::Arc;
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Manager as _, State, WebviewWindow};
 
 /// Resolve the `WindowId` of the calling webview. Tauri injects the
 /// `WebviewWindow` handle into any command that names it as a
@@ -912,6 +912,54 @@ pub async fn open_new_window(app: AppHandle) -> Result<String, String> {
     crate::menu::spawn_new_window(&app)
         .map(|id| id.label().to_string())
         .map_err(|e| e.to_string())
+}
+
+/// M9.6: list the PTYs that are currently running a foreground
+/// command the user is unlikely to want to lose. Frontend calls
+/// this at close-time (pane / tab / window / app quit) and
+/// intersects with the PTYs owned by the closing scope to compute
+/// the warning count. Empty result → no warning. See
+/// `PtyManager::running_command_pane_ids` for the "running
+/// non-alt-screen" definition (excludes vim / htop / less / top).
+#[tauri::command]
+pub async fn pty_running_commands(
+    manager: State<'_, Arc<PtyManager>>,
+) -> Result<Vec<PtyId>, String> {
+    Ok(manager.running_command_pane_ids().await)
+}
+
+/// M9.6: confirm a window-close after the frontend's warning modal
+/// dismissed via "Close anyway". Sets the per-window
+/// `close_confirmed` flag on the `Windows` registry so the
+/// `on_window_event` intercept skips its running-command check on
+/// the next `CloseRequested`, then re-invokes the close.
+#[tauri::command]
+pub async fn close_window_confirmed(
+    label: String,
+    app: AppHandle,
+    windows: State<'_, Arc<Windows>>,
+) -> Result<(), String> {
+    let window_id = WindowId::from_label(&label);
+    windows.set_close_confirmed(&window_id).await;
+    let Some(window) = app.get_webview_window(&label) else {
+        return Err(format!("no such window: {label}"));
+    };
+    window.close().map_err(|e| e.to_string())
+}
+
+/// M9.6: confirm an app-quit after the frontend's warning modal
+/// dismissed via "Quit anyway". Sets the app-wide
+/// `quit_confirmed` flag on the `Windows` registry so
+/// `RunEvent::ExitRequested` skips its running-command check on
+/// the next exit, then invokes `app.exit(0)`.
+#[tauri::command]
+pub async fn quit_confirmed(
+    app: AppHandle,
+    windows: State<'_, Arc<Windows>>,
+) -> Result<(), String> {
+    windows.set_quit_confirmed();
+    app.exit(0);
+    Ok(())
 }
 
 /// Full-text search across all persisted block summaries. `opts.query`

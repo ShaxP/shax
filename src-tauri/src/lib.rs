@@ -19,16 +19,16 @@ use agent::{
     set_chat_history,
 };
 use ipc::{
-    app_state_load, app_state_save, block_get_output, git_branches, git_diff, git_root_for,
-    git_status_porcelain, git_user_email, home_dir, list_branches, list_community_commands,
-    list_community_formatters, list_cwds, open_new_window, pty_get_block_output, pty_kill,
-    pty_list_blocks, pty_resize, pty_spawn, pty_write, read_dir_entries, read_file_bytes,
-    search_blocks, stat_file,
+    app_state_load, app_state_save, block_get_output, close_window_confirmed, git_branches,
+    git_diff, git_root_for, git_status_porcelain, git_user_email, home_dir, list_branches,
+    list_community_commands, list_community_formatters, list_cwds, open_new_window,
+    pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_running_commands, pty_spawn,
+    pty_write, quit_confirmed, read_dir_entries, read_file_bytes, search_blocks, stat_file,
 };
 use preferences::Preferences;
 use pty::PtyManager;
 use store::{default_db_path, Store};
-use tauri::Manager as _;
+use tauri::{Emitter as _, Manager as _};
 
 /// Load the persisted app-level preferences (theme, etc.).
 /// Missing / malformed file → defaults.
@@ -318,6 +318,9 @@ pub fn run() {
             app_state_load,
             app_state_save,
             open_new_window,
+            pty_running_commands,
+            close_window_confirmed,
+            quit_confirmed,
             search_blocks,
             list_branches,
             list_cwds,
@@ -370,8 +373,79 @@ pub fn run() {
     //   completeness) window list once more, then reap every PTY
     //   child so no shell outlives the parent.
     app.run(move |handle, event| match event {
-        tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
+        // M9.4 stay-alive path: on macOS, the *runtime* fires
+        // `ExitRequested { code: None }` when the last window is
+        // closed. Prevent that so the app persists in the menu
+        // bar + dock (matches macOS convention). Every other
+        // ExitRequested — including ⌘Q from the app menu, which
+        // routes through `NSApplication::terminate:` and *also*
+        // fires with code=None but with windows still open — falls
+        // through to the M9.6 arm below.
+        //
+        // The `webview_windows().is_empty()` check is the
+        // distinguishing signal: last-window-close leaves zero
+        // windows by the time ExitRequested fires; menu-Quit
+        // leaves the windows in place until the exit actually
+        // proceeds.
+        tauri::RunEvent::ExitRequested { code, api, .. }
+            if menu::should_prevent_exit(code) && handle.webview_windows().is_empty() =>
+        {
             api.prevent_exit();
+        }
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            // M9.6: any ExitRequested reaching this arm is either
+            // (a) our own custom Quit menu handler calling
+            // `app.exit(0)` after clearing the modal check (or
+            // after `quit_confirmed()` set the bypass flag), or
+            // (b) a platform / IPC path (Linux OS shutdown,
+            // Windows quit, `app.exit(...)` from anywhere). On
+            // macOS, ⌘Q from our menu no longer routes here at
+            // all — see `menu::handle_quit_request` — because
+            // `PredefinedMenuItem::quit` bypasses ExitRequested,
+            // so this arm cannot intercept it and we handle the
+            // check in the menu handler instead.
+            //
+            // If the frontend already showed the warning modal
+            // and the user confirmed, `consume_quit_confirmed()`
+            // returns true and we let the exit proceed. Otherwise,
+            // if any pane has a running non-alt-screen command,
+            // prevent the exit and ask the focused window to show
+            // the modal.
+            let Some(windows) = handle.try_state::<Arc<mux::Windows>>() else {
+                return;
+            };
+            if windows.consume_quit_confirmed() {
+                return;
+            }
+            let Some(manager) = handle.try_state::<Arc<PtyManager>>() else {
+                return;
+            };
+            let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+            if running.is_empty() {
+                return;
+            }
+            api.prevent_exit();
+            let target_label = handle
+                .webview_windows()
+                .into_iter()
+                .find(|(_, w)| w.is_focused().unwrap_or(false))
+                .or_else(|| handle.webview_windows().into_iter().next())
+                .map(|(label, _)| label);
+            if let Some(label) = target_label {
+                // Targeted emit — `Manager::emit` (which
+                // WebviewWindow inherits) is app-global, so a
+                // plain `window.emit(...)` would open the quit
+                // modal in every window, not just the focused
+                // one. Same trap that hit the window-close
+                // intercept before the M9.6 fix.
+                if let Err(e) = handle.emit_to(
+                    tauri::EventTarget::WebviewWindow { label },
+                    "shax:confirm-quit",
+                    serde_json::json!({ "count": running.len() }),
+                ) {
+                    tracing::warn!("quit-intercept: emit failed: {e}");
+                }
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {

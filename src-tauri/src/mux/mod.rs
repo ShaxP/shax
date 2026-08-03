@@ -28,6 +28,7 @@
 //!   the frontend at boot.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex;
 
@@ -84,6 +85,14 @@ pub struct WindowState {
     /// PTYs (panes) owned by this window. Populated on `pty_spawn`,
     /// consulted on window-close teardown (M9.4).
     ptys: HashSet<PtyId>,
+    /// M9.6 close-confirmation bypass. Set to `true` by
+    /// `close_window_confirmed` (frontend has already shown the
+    /// warning modal and the user clicked "Close anyway"). The
+    /// window-close intercept in `menu::register_close_teardown`
+    /// consumes the flag on entry — if set, it skips the
+    /// running-command check and proceeds straight to teardown;
+    /// if not set, it runs the check and may prevent the close.
+    close_confirmed: AtomicBool,
 }
 
 impl WindowState {
@@ -99,6 +108,14 @@ impl WindowState {
 #[derive(Debug, Default)]
 pub struct Windows {
     inner: Mutex<HashMap<WindowId, WindowState>>,
+    /// M9.6 app-wide quit-confirmation bypass. Set by the
+    /// `quit_confirmed` IPC command after the frontend's warning
+    /// modal has been dismissed via "Quit anyway". The
+    /// `RunEvent::ExitRequested` handler consumes the flag on
+    /// entry (see `Windows::consume_quit_confirmed`). Atomic so
+    /// the lifecycle handler doesn't need to acquire the
+    /// registry lock.
+    quit_confirmed: AtomicBool,
 }
 
 impl Windows {
@@ -170,6 +187,45 @@ impl Windows {
             }
         }
         None
+    }
+
+    /// M9.6: mark a window's next close as confirmed. Called by
+    /// `close_window_confirmed` before it re-triggers the close.
+    /// The window's `on_window_event` intercept sees the flag on
+    /// the following `CloseRequested` and skips its running-
+    /// command check.
+    pub async fn set_close_confirmed(&self, window_id: &WindowId) {
+        let mut guard = self.inner.lock().await;
+        guard
+            .entry(window_id.clone())
+            .or_default()
+            .close_confirmed
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Consume the close-confirmed flag on `window_id`, returning
+    /// its prior value. Called from the close intercept on entry.
+    /// Returns `false` if the window isn't in the registry.
+    pub async fn consume_close_confirmed(&self, window_id: &WindowId) -> bool {
+        let guard = self.inner.lock().await;
+        guard
+            .get(window_id)
+            .map(|state| state.close_confirmed.swap(false, Ordering::SeqCst))
+            .unwrap_or(false)
+    }
+
+    /// M9.6: mark the app's next `ExitRequested` as confirmed.
+    /// Called by `quit_confirmed` before `app.exit(0)` runs.
+    pub fn set_quit_confirmed(&self) {
+        self.quit_confirmed.store(true, Ordering::SeqCst);
+    }
+
+    /// Consume the quit-confirmed flag, returning its prior value.
+    /// The lifecycle handler in `lib.rs` calls this on every
+    /// `ExitRequested`; if `true`, it skips the warning check and
+    /// lets the exit proceed.
+    pub fn consume_quit_confirmed(&self) -> bool {
+        self.quit_confirmed.swap(false, Ordering::SeqCst)
     }
 }
 

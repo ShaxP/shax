@@ -184,6 +184,14 @@ struct PtyHandle {
 struct BlockShared {
     summaries: Vec<BlockSummary>,
     outputs: HashMap<BlockId, Vec<u8>>,
+    /// M9.6: snapshot of the block currently between OSC 133 C and
+    /// D, if any. Refreshed on every reader-thread merge from
+    /// `BlockMachine::running_snapshot`. `None` while the shell is
+    /// at an idle prompt. Running blocks don't live in `summaries`
+    /// (that list only holds completed / aborted records), so
+    /// the close-confirmation warning check reads this field
+    /// instead of scanning summaries.
+    running: Option<crate::blocks::RunningBlockSnapshot>,
 }
 
 /// Owns all active PTYs. Lives as a `tauri::State` singleton.
@@ -456,6 +464,42 @@ impl PtyManager {
         }
     }
 
+    /// M9.6: list the panes that are currently running a foreground
+    /// command the user is unlikely to want to lose. Defined as: the
+    /// pane has a live block between OSC 133 C and D (a command is
+    /// actually executing) AND the block has not entered the alt
+    /// screen (`!interactive`).
+    ///
+    /// Alt-screen apps (vim, htop, less, top) are excluded because
+    /// they're interactive tools the user deliberately launched and
+    /// knows about — warning on every `⌘W` inside vim is friction.
+    /// Long-running non-interactive things (`sleep`, `npm run build`,
+    /// `ssh`, dev servers) all run on the primary screen and are the
+    /// warning's real target.
+    ///
+    /// Reads `BlockShared.running`, the reader thread's mirror of
+    /// `BlockMachine::running_snapshot`. **Not** derived from
+    /// `BlockShared.summaries` — that list only contains completed
+    /// and aborted blocks (records get pushed on OSC 133 D), so
+    /// scanning it would never find a live running command.
+    ///
+    /// The frontend calls this at close-time (pane / tab / window /
+    /// app quit) and intersects the returned list with the PTY ids
+    /// each scope owns to compute the count to warn about.
+    pub async fn running_command_pane_ids(&self) -> Vec<PtyId> {
+        let blocks = self.blocks.lock().await;
+        let mut out = Vec::new();
+        for (pty_id, shared) in blocks.iter() {
+            let shared = shared.lock().await;
+            if let Some(running) = shared.running.as_ref() {
+                if !running.interactive {
+                    out.push(*pty_id);
+                }
+            }
+        }
+        out
+    }
+
     /// Return the captured output bytes for a single completed block.
     ///
     /// Lookup order: the live pane's in-memory cache first, then the
@@ -623,6 +667,11 @@ fn spawn_reader_task(
                             indexer_wake.as_ref(),
                         );
                         merge_live_summaries_into_shared(&mut shared.summaries, live_summaries);
+                        // M9.6: mirror the machine's current
+                        // running block (if any) so the close-
+                        // confirmation IPC can read it without
+                        // touching the reader thread's state.
+                        shared.running = machine.running_snapshot();
                     });
 
                     // Forward raw bytes to xterm.js (fidelity contract).
@@ -659,6 +708,12 @@ fn spawn_reader_task(
                 indexer_wake.as_ref(),
             );
             merge_live_summaries_into_shared(&mut shared.summaries, live_summaries);
+            // finalize_on_exit() above transitioned the machine
+            // to Idle (any live block was pushed as aborted). The
+            // snapshot is now None; explicitly clear the shared
+            // field so a stale Some doesn't leak past the PTY's
+            // lifetime and confuse M9.6's close check.
+            shared.running = machine.running_snapshot();
         });
 
         let exit_code: Option<i32> = rt.block_on(async {
@@ -1083,6 +1138,85 @@ mod tests {
 
     #[cfg(unix)]
     use tokio::sync::mpsc;
+
+    /// Seed `PtyManager.blocks` with a BlockShared for a fake pane.
+    /// `running` is the snapshot the M9.6 check reads; `None` means
+    /// the pane is idle (at a prompt).
+    async fn seed_pane(
+        manager: &PtyManager,
+        pty_id: PtyId,
+        running: Option<crate::blocks::RunningBlockSnapshot>,
+    ) {
+        let shared = Arc::new(Mutex::new(BlockShared {
+            summaries: Vec::new(),
+            outputs: HashMap::new(),
+            running,
+        }));
+        manager.blocks.lock().await.insert(pty_id, shared);
+    }
+
+    fn running_snap(interactive: bool) -> crate::blocks::RunningBlockSnapshot {
+        crate::blocks::RunningBlockSnapshot {
+            id: BlockId(Uuid::new_v4()),
+            interactive,
+        }
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_empty_when_no_panes() {
+        // Fresh manager with no per-pane state → empty set. The
+        // close-flow warning check must tolerate this cleanly
+        // (called before any pane has been spawned).
+        let manager = PtyManager::new();
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_finds_primary_screen_running_block() {
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_pane(&manager, pty, Some(running_snap(false))).await;
+        assert_eq!(manager.running_command_pane_ids().await, vec![pty]);
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_excludes_alt_screen_apps() {
+        // M9.6 core design decision: interactive alt-screen apps
+        // (vim, htop, less, top) are what the user deliberately
+        // launched and knows about. Warning on ⌘W inside vim is
+        // pure friction.
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_pane(&manager, pty, Some(running_snap(true))).await;
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_excludes_idle_panes() {
+        // No running block → shell is at an idle prompt.
+        // Nothing to lose; no warning.
+        let manager = PtyManager::new();
+        let pty = PtyId::new();
+        seed_pane(&manager, pty, None).await;
+        assert!(manager.running_command_pane_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_command_pane_ids_partitions_across_panes() {
+        // Realistic multi-pane state: some running non-alt, some
+        // running alt-screen, some idle. Only the first bucket
+        // appears in the result.
+        let manager = PtyManager::new();
+        let running_pty = PtyId::new();
+        let vim_pty = PtyId::new();
+        let idle_pty = PtyId::new();
+        seed_pane(&manager, running_pty, Some(running_snap(false))).await;
+        seed_pane(&manager, vim_pty, Some(running_snap(true))).await;
+        seed_pane(&manager, idle_pty, None).await;
+        let out = manager.running_command_pane_ids().await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], running_pty);
+    }
 
     /// Build a `Channel<PtyEvent>` backed by an in-process mpsc queue so tests
     /// can receive events without a real Tauri runtime.

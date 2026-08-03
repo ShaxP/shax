@@ -27,7 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use uuid::Uuid;
 
 use crate::mux::{WindowId, Windows};
-use crate::pty::PtyManager;
+use crate::pty::{PtyId, PtyManager};
 
 // ─── Menu item ids ─────────────────────────────────────────────────
 //
@@ -41,6 +41,13 @@ pub const MENU_ID_NEW_TAB: &str = "menu.file.new-tab";
 pub const MENU_ID_CLOSE_TAB: &str = "menu.file.close-tab";
 pub const MENU_ID_CLOSE_WINDOW: &str = "menu.file.close-window";
 pub const MENU_ID_PREFERENCES: &str = "menu.shax.preferences";
+/// Custom Quit item id. We use our own instead of
+/// `PredefinedMenuItem::quit` because the predefined version calls
+/// `NSApplication::terminate:` directly on macOS — that path bypasses
+/// Tauri's `RunEvent::ExitRequested` entirely, so a listener there
+/// cannot intercept ⌘Q. Owning the menu item lets us run the M9.6
+/// running-command check before requesting the exit.
+pub const MENU_ID_QUIT: &str = "menu.shax.quit";
 
 /// Custom event names emitted to the focused webview for menu items
 /// whose action lives on the frontend side. Match the ids above so
@@ -73,6 +80,12 @@ pub fn build_app_menu<R: tauri::Runtime>(
         Some("CmdOrCtrl+,"),
     )?;
 
+    // Custom Quit item so `MENU_ID_QUIT` routes through
+    // `handle_menu_event` where the M9.6 running-command check
+    // lives — see the constant's doc for why we don't use
+    // `PredefinedMenuItem::quit`.
+    let quit = MenuItem::with_id(app, MENU_ID_QUIT, "Quit Shax", true, Some("CmdOrCtrl+Q"))?;
+
     let shax_menu = SubmenuBuilder::new(app, "Shax")
         .about(None)
         .item(&preferences)
@@ -83,7 +96,7 @@ pub fn build_app_menu<R: tauri::Runtime>(
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        .item(&quit)
         .build()?;
 
     let new_window = MenuItem::with_id(
@@ -172,6 +185,7 @@ pub fn handle_menu_event<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) {
                 }
             }
         }
+        MENU_ID_QUIT => handle_quit_request(app),
         MENU_ID_NEW_TAB => emit_to_focused(app, EVENT_MENU_NEW_TAB),
         MENU_ID_CLOSE_TAB => emit_to_focused(app, EVENT_MENU_CLOSE_TAB),
         MENU_ID_PREFERENCES => emit_to_focused(app, EVENT_MENU_PREFERENCES),
@@ -181,6 +195,48 @@ pub fn handle_menu_event<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) {
         // shipped without a dispatch arm.
         other => tracing::warn!("menu: unhandled menu id {other}"),
     }
+}
+
+/// Handle the custom Quit menu item (macOS Shax > Quit Shax / ⌘Q).
+///
+/// M9.6: if any pane holds a running non-alt-screen command, prevent
+/// the exit and ask the focused window to show the confirmation modal.
+/// Otherwise (or when the frontend has already set the "confirmed"
+/// bypass flag via `quit_confirmed()`), request the exit through
+/// `app.exit(0)` — which fires `RunEvent::ExitRequested` normally, so
+/// the `Exit` handler in `lib.rs` still runs `shutdown_all` on the way
+/// out.
+fn handle_quit_request<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(windows) = app.try_state::<Arc<Windows>>() {
+        if windows.consume_quit_confirmed() {
+            app.exit(0);
+            return;
+        }
+        let Some(manager) = app.try_state::<Arc<PtyManager>>() else {
+            app.exit(0);
+            return;
+        };
+        let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+        if !running.is_empty() {
+            let target_label = app
+                .webview_windows()
+                .into_iter()
+                .find(|(_, w)| w.is_focused().unwrap_or(false))
+                .or_else(|| app.webview_windows().into_iter().next())
+                .map(|(label, _)| label);
+            if let Some(label) = target_label {
+                if let Err(e) = app.emit_to(
+                    tauri::EventTarget::WebviewWindow { label },
+                    "shax:confirm-quit",
+                    serde_json::json!({ "count": running.len() }),
+                ) {
+                    tracing::warn!("quit-menu: emit failed: {e}");
+                }
+            }
+            return;
+        }
+    }
+    app.exit(0);
 }
 
 fn emit_to_focused<R: tauri::Runtime>(app: &AppHandle<R>, event: &str) {
@@ -263,9 +319,9 @@ pub fn register_close_teardown<R: tauri::Runtime>(
     let label = window.label().to_string();
     let handle = app.clone();
     window.on_window_event(move |event| {
-        if !matches!(event, WindowEvent::CloseRequested { .. }) {
+        let WindowEvent::CloseRequested { api, .. } = event else {
             return;
-        }
+        };
         let window_id = WindowId::from_label(&label);
         let Some(windows) = handle.try_state::<Arc<Windows>>() else {
             return;
@@ -273,6 +329,73 @@ pub fn register_close_teardown<R: tauri::Runtime>(
         let Some(manager) = handle.try_state::<Arc<PtyManager>>() else {
             return;
         };
+
+        // M9.6 pre-teardown intercept. Consume the confirmation
+        // flag first — if the frontend already showed the warning
+        // and the user clicked "Close anyway", the flag is set
+        // and we fall through to the standard teardown below.
+        // Otherwise, check whether any PTY the window owns has a
+        // running non-alt-screen command. If yes, prevent the
+        // close, tell the frontend to show its modal, and return.
+        let confirmed = tauri::async_runtime::block_on(windows.consume_close_confirmed(&window_id));
+        if !confirmed {
+            let owned: std::collections::HashSet<PtyId> =
+                tauri::async_runtime::block_on(windows.ptys_of(&window_id))
+                    .into_iter()
+                    .collect();
+            let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+            let running_here_count = running.iter().filter(|p| owned.contains(p)).count();
+            if running_here_count > 0 {
+                api.prevent_close();
+                // On non-macOS platforms, closing the last window IS
+                // the app quit — the process exits after this window
+                // is gone. Route through the "app" verb path so the
+                // modal reads "Quit anyway?" instead of the
+                // confusing "Close window anyway?" (which technically
+                // IS what's happening but understates the
+                // consequence). On macOS the app stays alive after
+                // last-window-close (M9.4) so this stays a window
+                // scope.
+                let is_last_window_on_platform_that_quits = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        false
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        handle.webview_windows().len() <= 1
+                    }
+                };
+                let (event_name, payload_extra): (&str, serde_json::Value) =
+                    if is_last_window_on_platform_that_quits {
+                        (
+                            "shax:confirm-quit",
+                            serde_json::json!({ "count": running_here_count }),
+                        )
+                    } else {
+                        (
+                            "shax:confirm-close-window",
+                            serde_json::json!({ "count": running_here_count }),
+                        )
+                    };
+                // Target THIS window only. `WebviewWindow::emit` in
+                // Tauri 2 broadcasts to every listener across every
+                // window; without `emit_to(..., WebviewWindow{label})`
+                // the confirmation modal opens in every open window
+                // instead of just the one being closed.
+                if let Err(e) = handle.emit_to(
+                    tauri::EventTarget::WebviewWindow {
+                        label: label.clone(),
+                    },
+                    event_name,
+                    payload_extra,
+                ) {
+                    tracing::warn!("close-intercept: emit failed: {e}");
+                }
+                return;
+            }
+        }
+
         // Snapshot the PTYs owned by this window, then kill each
         // child. `PtyManager::kill` also unregisters from `windows`
         // internally, so no separate `unregister_pty` call is
@@ -284,7 +407,6 @@ pub fn register_close_teardown<R: tauri::Runtime>(
         // returns `PtyError::UnknownId`; that's expected under
         // that race and logged at debug level, not warn.
         let ptys = tauri::async_runtime::block_on(windows.ptys_of(&window_id));
-        let _ = windows; // captured only for the ptys_of call above
         if ptys.is_empty() {
             return;
         }
@@ -439,6 +561,7 @@ mod tests {
         assert_eq!(MENU_ID_CLOSE_TAB, "menu.file.close-tab");
         assert_eq!(MENU_ID_CLOSE_WINDOW, "menu.file.close-window");
         assert_eq!(MENU_ID_PREFERENCES, "menu.shax.preferences");
+        assert_eq!(MENU_ID_QUIT, "menu.shax.quit");
     }
 
     #[test]
