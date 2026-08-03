@@ -373,7 +373,23 @@ pub fn run() {
     //   completeness) window list once more, then reap every PTY
     //   child so no shell outlives the parent.
     app.run(move |handle, event| match event {
-        tauri::RunEvent::ExitRequested { code, api, .. } if menu::should_prevent_exit(code) => {
+        // M9.4 stay-alive path: on macOS, the *runtime* fires
+        // `ExitRequested { code: None }` when the last window is
+        // closed. Prevent that so the app persists in the menu
+        // bar + dock (matches macOS convention). Every other
+        // ExitRequested — including ⌘Q from the app menu, which
+        // routes through `NSApplication::terminate:` and *also*
+        // fires with code=None but with windows still open — falls
+        // through to the M9.6 arm below.
+        //
+        // The `webview_windows().is_empty()` check is the
+        // distinguishing signal: last-window-close leaves zero
+        // windows by the time ExitRequested fires; menu-Quit
+        // leaves the windows in place until the exit actually
+        // proceeds.
+        tauri::RunEvent::ExitRequested { code, api, .. }
+            if menu::should_prevent_exit(code) && handle.webview_windows().is_empty() =>
+        {
             api.prevent_exit();
         }
         tauri::RunEvent::ExitRequested { api, .. } => {

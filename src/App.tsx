@@ -632,28 +632,43 @@ export default function App(): React.ReactElement {
         // window owns panes with running commands. Show the
         // modal; on confirm, call closeWindowConfirmed which
         // sets the bypass flag and re-invokes the close.
-        await listen<{ count: number }>("shax:confirm-close-window", (event) => {
-          const count = event.payload.count ?? 0;
-          setPendingClose({
-            verb: "window",
-            count,
-            onConfirm: () => {
-              void closeWindowConfirmed(windowLabelRef.current);
-            },
-          });
-        }),
+        //
+        // `target` is critical here — without it, `listen()`
+        // subscribes to events targeted at ANY listener, and the
+        // backend's `emit_to(EventTarget::WebviewWindow{label})`
+        // still lands in every window's handler. Scoping the
+        // subscription by label matches the emit target and keeps
+        // the modal in the one closing/quitting window.
+        await listen<{ count: number }>(
+          "shax:confirm-close-window",
+          (event) => {
+            const count = event.payload.count ?? 0;
+            setPendingClose({
+              verb: "window",
+              count,
+              onConfirm: () => {
+                void closeWindowConfirmed(windowLabelRef.current);
+              },
+            });
+          },
+          { target: { kind: "WebviewWindow", label: windowLabelRef.current } },
+        ),
         // M9.6: backend intercepted an app quit for the same
         // reason. Same flow, different scope + IPC.
-        await listen<{ count: number }>("shax:confirm-quit", (event) => {
-          const count = event.payload.count ?? 0;
-          setPendingClose({
-            verb: "app",
-            count,
-            onConfirm: () => {
-              void quitConfirmed();
-            },
-          });
-        }),
+        await listen<{ count: number }>(
+          "shax:confirm-quit",
+          (event) => {
+            const count = event.payload.count ?? 0;
+            setPendingClose({
+              verb: "app",
+              count,
+              onConfirm: () => {
+                void quitConfirmed();
+              },
+            });
+          },
+          { target: { kind: "WebviewWindow", label: windowLabelRef.current } },
+        ),
       );
     })();
     return () => {
