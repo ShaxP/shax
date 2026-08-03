@@ -254,23 +254,33 @@ Scope:
 
 **Explicitly out of scope:** pane portability (drag-across-windows), window groups, "warn on quit if a foreground process is running" (orthogonal polish decision).
 
+## M10 Themes and fonts
+
+**Goal:** the daily-driver polish M10 owes users — a real theming system with a curated catalog and a monospace font family / size / ligatures setting that drives both xterm and the code viewer. **Lead:** frontend.
+
+- Preferences model gains an `appearance` block: theme mode (System / Light / Dark), the preset used in each mode, font family + size + ligatures. M7's `theme: {dark|light|system}` migrates in place.
+- Built-in preset catalog embedded in the app bundle: Shax Dark / Light (default), Catppuccin (Latte / Frappé / Macchiato / Mocha), Solarized L/D, Dracula, Gruvbox L/D, Nord, Tokyo Night, and Phosphor (Amber / Green / White) as a retro toggle.
+- Bundled OFL fonts (JetBrains Mono, Fira Code, Cascadia Code, Iosevka) plus system fonts as fallback. Fonts drive xterm output **and** CodeMirror; chrome (menus / buttons / labels) stays on the OS system UI font.
+- Preferences pane Appearance section — mode picker + two preset dropdowns (one for light, one for dark), font family, size slider (10–24 pt), ligatures toggle. Every input is live; no save button.
+- OS light / dark mode follow via `matchMedia`, in System mode. Manual pin overrides.
+
+**Exit:** the user can pick any preset in the catalog and see it apply instantly across every surface (terminal, code viewer, chrome, assistant, safety modal); changing font family / size / ligatures reflows xterm correctly (TUIs stay on-grid); System mode reacts live to OS-level appearance changes; preferences persist across launches; existing M7 light/dark choices migrate without user action.
+
+**Explicitly out of scope:** community theme drop-in (`~/.config/shax/themes/`), per-pane font size (zoom), per-window theme override. All three are called out in `16` for a later milestone.
+
+Detail in `16-themes-and-fonts.md`. Sliced M10.1 – M10.4 (model + catalog, live application, fonts, preferences pane).
+
 ## Post-M8 candidates
 
-Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M10→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
+Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M11→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
 
 ### PDF viewer
 
 PDF-only for now via **pdf.js** (Mozilla, Apache 2.0, ~1 MB, canvas-rendered). Fits the tier-1 rendering slot in `02`. Office formats (`.docx`, `.xlsx`, `.pptx`) are explicitly deferred — the open-source library landscape ranges from "decent for simple documents" to "no viable option," and the honest terminal-first move is to delegate Office to the OS (QuickLook on macOS, associated apps on Windows/Linux) rather than reimplement it at low fidelity. Revisit only if we see real user demand for `.docx` / `.xlsx` peek-in-place.
 
-### Themes and fonts
+### Community theme drop-in
 
-Themes are sets of CSS custom-property values plus an ANSI palette xterm.js consumes. Ship a curated built-in catalog — Catppuccin (four flavours), Phosphor (amber / green / white), Solarized L/D, Dracula, Gruvbox, Nord, Tokyo Night — and let users drop a `~/.config/shax/themes/<name>/theme.json` for anything else. Pure data, no sandbox needed. Same "reload themes" palette-entry pattern as commands.
-
-Fonts are configured separately from theme (a theme may *suggest* one, but the user override always wins). Bundle a small set of OFL-licensed monospaced fonts (JetBrains Mono, Fira Code, Cascadia Code, Iosevka) so the default look is consistent out of the box; system fonts remain available as a fallback. Ligatures are their own toggle regardless of font choice.
-
-Preferences UI: Appearance section in the existing settings modal — theme picker, font family, font size (10-24 pt), ligatures toggle, terminal-vs-UI font override. Preferences and hand-edited config are equivalent surfaces (UI writes the config; file changes hot-reload). Switching is instant — no reload.
-
-Sizing: one milestone, roughly five slices (loader + one alternate to prove the pipeline, font settings + preferences, ship the built-in catalog, community sandbox, optional preview-in-picker polish).
+Follows M10. Users drop a `~/.config/shax/themes/<id>/theme.json` for any theme outside the built-in catalog. Same schema as the embedded catalog, plus a per-theme reload trigger in the palette. Pure data, no sandbox needed. Held for a follow-up milestone so M10 can ship without carrying schema-versioning and filesystem-watch UX.
 
 ### Sidebar with pinnable widgets
 
