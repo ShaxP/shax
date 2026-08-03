@@ -962,6 +962,20 @@ pub async fn quit_confirmed(
     Ok(())
 }
 
+/// The built-in theme catalog (M10.1). Returns every
+/// embedded preset in registry order — Shax Dark, Shax
+/// Light, then the community presets alphabetically-ish.
+/// Frontend caches the result for the session; the catalog
+/// is fixed at compile time so a re-query would return the
+/// same bytes.
+///
+/// No arguments; no failure mode — parsing errors would
+/// have panicked at first access (see `themes::catalog`).
+#[tauri::command]
+pub async fn list_themes() -> Vec<crate::themes::Theme> {
+    crate::themes::catalog().to_vec()
+}
+
 /// Full-text search across all persisted block summaries. `opts.query`
 /// is the raw FTS5 MATCH expression — multiple whitespace-separated
 /// words are AND'd implicitly. Optional status / time filters compose
