@@ -41,6 +41,13 @@ pub const MENU_ID_NEW_TAB: &str = "menu.file.new-tab";
 pub const MENU_ID_CLOSE_TAB: &str = "menu.file.close-tab";
 pub const MENU_ID_CLOSE_WINDOW: &str = "menu.file.close-window";
 pub const MENU_ID_PREFERENCES: &str = "menu.shax.preferences";
+/// Custom Quit item id. We use our own instead of
+/// `PredefinedMenuItem::quit` because the predefined version calls
+/// `NSApplication::terminate:` directly on macOS — that path bypasses
+/// Tauri's `RunEvent::ExitRequested` entirely, so a listener there
+/// cannot intercept ⌘Q. Owning the menu item lets us run the M9.6
+/// running-command check before requesting the exit.
+pub const MENU_ID_QUIT: &str = "menu.shax.quit";
 
 /// Custom event names emitted to the focused webview for menu items
 /// whose action lives on the frontend side. Match the ids above so
@@ -73,6 +80,12 @@ pub fn build_app_menu<R: tauri::Runtime>(
         Some("CmdOrCtrl+,"),
     )?;
 
+    // Custom Quit item so `MENU_ID_QUIT` routes through
+    // `handle_menu_event` where the M9.6 running-command check
+    // lives — see the constant's doc for why we don't use
+    // `PredefinedMenuItem::quit`.
+    let quit = MenuItem::with_id(app, MENU_ID_QUIT, "Quit Shax", true, Some("CmdOrCtrl+Q"))?;
+
     let shax_menu = SubmenuBuilder::new(app, "Shax")
         .about(None)
         .item(&preferences)
@@ -83,7 +96,7 @@ pub fn build_app_menu<R: tauri::Runtime>(
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        .item(&quit)
         .build()?;
 
     let new_window = MenuItem::with_id(
@@ -172,6 +185,7 @@ pub fn handle_menu_event<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) {
                 }
             }
         }
+        MENU_ID_QUIT => handle_quit_request(app),
         MENU_ID_NEW_TAB => emit_to_focused(app, EVENT_MENU_NEW_TAB),
         MENU_ID_CLOSE_TAB => emit_to_focused(app, EVENT_MENU_CLOSE_TAB),
         MENU_ID_PREFERENCES => emit_to_focused(app, EVENT_MENU_PREFERENCES),
@@ -181,6 +195,48 @@ pub fn handle_menu_event<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) {
         // shipped without a dispatch arm.
         other => tracing::warn!("menu: unhandled menu id {other}"),
     }
+}
+
+/// Handle the custom Quit menu item (macOS Shax > Quit Shax / ⌘Q).
+///
+/// M9.6: if any pane holds a running non-alt-screen command, prevent
+/// the exit and ask the focused window to show the confirmation modal.
+/// Otherwise (or when the frontend has already set the "confirmed"
+/// bypass flag via `quit_confirmed()`), request the exit through
+/// `app.exit(0)` — which fires `RunEvent::ExitRequested` normally, so
+/// the `Exit` handler in `lib.rs` still runs `shutdown_all` on the way
+/// out.
+fn handle_quit_request<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(windows) = app.try_state::<Arc<Windows>>() {
+        if windows.consume_quit_confirmed() {
+            app.exit(0);
+            return;
+        }
+        let Some(manager) = app.try_state::<Arc<PtyManager>>() else {
+            app.exit(0);
+            return;
+        };
+        let running = tauri::async_runtime::block_on(manager.running_command_pane_ids());
+        if !running.is_empty() {
+            let target_label = app
+                .webview_windows()
+                .into_iter()
+                .find(|(_, w)| w.is_focused().unwrap_or(false))
+                .or_else(|| app.webview_windows().into_iter().next())
+                .map(|(label, _)| label);
+            if let Some(label) = target_label {
+                if let Err(e) = app.emit_to(
+                    tauri::EventTarget::WebviewWindow { label },
+                    "shax:confirm-quit",
+                    serde_json::json!({ "count": running.len() }),
+                ) {
+                    tracing::warn!("quit-menu: emit failed: {e}");
+                }
+            }
+            return;
+        }
+    }
+    app.exit(0);
 }
 
 fn emit_to_focused<R: tauri::Runtime>(app: &AppHandle<R>, event: &str) {
@@ -505,6 +561,7 @@ mod tests {
         assert_eq!(MENU_ID_CLOSE_TAB, "menu.file.close-tab");
         assert_eq!(MENU_ID_CLOSE_WINDOW, "menu.file.close-window");
         assert_eq!(MENU_ID_PREFERENCES, "menu.shax.preferences");
+        assert_eq!(MENU_ID_QUIT, "menu.shax.quit");
     }
 
     #[test]

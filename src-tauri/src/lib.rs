@@ -390,36 +390,23 @@ pub fn run() {
         tauri::RunEvent::ExitRequested { code, api, .. }
             if menu::should_prevent_exit(code) && handle.webview_windows().is_empty() =>
         {
-            // TEMP M9.6 diagnostic: user reports ⌘Q on macOS
-            // never shows the modal. If this line fires, the
-            // guard is (wrongly?) matching for ⌘Q too.
-            tracing::info!(
-                "[m9.6-diag] guard prevented exit; code={:?} windows={}",
-                code,
-                handle.webview_windows().len()
-            );
             api.prevent_exit();
         }
-        tauri::RunEvent::ExitRequested { api, code, .. } => {
-            // TEMP M9.6 diagnostic — matched here should mean
-            // we're about to run the running-command check.
-            tracing::info!(
-                "[m9.6-diag] M9.6 arm reached; code={:?} windows={}",
-                code,
-                handle.webview_windows().len()
-            );
-            // M9.6: any ExitRequested that reaches this arm is a
-            // real quit — the guard arm above handles the macOS
-            // "runtime decided to exit because the last window
-            // closed" stay-alive case. Not filtering by `code`:
-            // on macOS `PredefinedMenuItem::quit` triggers
-            // `NSApplication::terminate:` which fires
-            // `ExitRequested { code: None }`, so requiring
-            // `code: Some(_)` would silently miss the Quit menu
-            // and ⌘Q paths.
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            // M9.6: any ExitRequested reaching this arm is either
+            // (a) our own custom Quit menu handler calling
+            // `app.exit(0)` after clearing the modal check (or
+            // after `quit_confirmed()` set the bypass flag), or
+            // (b) a platform / IPC path (Linux OS shutdown,
+            // Windows quit, `app.exit(...)` from anywhere). On
+            // macOS, ⌘Q from our menu no longer routes here at
+            // all — see `menu::handle_quit_request` — because
+            // `PredefinedMenuItem::quit` bypasses ExitRequested,
+            // so this arm cannot intercept it and we handle the
+            // check in the menu handler instead.
             //
-            // If the frontend already showed the warning modal and
-            // the user confirmed, `consume_quit_confirmed()`
+            // If the frontend already showed the warning modal
+            // and the user confirmed, `consume_quit_confirmed()`
             // returns true and we let the exit proceed. Otherwise,
             // if any pane has a running non-alt-screen command,
             // prevent the exit and ask the focused window to show
