@@ -483,13 +483,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
 
   const persistTheme = async (next: ThemePreference): Promise<void> => {
     setTheme(next);
-    // Broadcast so App re-applies immediately — no restart,
-    // no reopen. Save happens in the background; a failure
-    // here doesn't roll back the in-memory / visual state
-    // (user's on-screen preference wins over a stale file).
-    window.dispatchEvent(new CustomEvent("shax:preference-changed", { detail: { theme: next } }));
+    // M10.2: save FIRST, then dispatch. The App-level handler
+    // now re-reads preferences.json to pick up any appearance
+    // field (preset ids, font, ligatures) alongside the theme
+    // mode. Dispatching before the save races the disk write —
+    // the handler would read the previous value on every click.
+    // The M7 pattern was to dispatch first and rely on
+    // `detail.theme` for the applied value; M10.2's re-read is
+    // strictly more powerful (handles the M10.3/M10.4 fields
+    // too) but requires save-before-dispatch ordering.
     try {
       await savePreferences({ theme: next });
+      window.dispatchEvent(new CustomEvent("shax:preference-changed", { detail: { theme: next } }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus(`Failed to save theme: ${message}`);
