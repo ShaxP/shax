@@ -291,6 +291,37 @@ pub fn register_close_teardown<R: tauri::Runtime>(
             let running_here_count = running.iter().filter(|p| owned.contains(p)).count();
             if running_here_count > 0 {
                 api.prevent_close();
+                // On non-macOS platforms, closing the last window IS
+                // the app quit — the process exits after this window
+                // is gone. Route through the "app" verb path so the
+                // modal reads "Quit anyway?" instead of the
+                // confusing "Close window anyway?" (which technically
+                // IS what's happening but understates the
+                // consequence). On macOS the app stays alive after
+                // last-window-close (M9.4) so this stays a window
+                // scope.
+                let is_last_window_on_platform_that_quits = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        false
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        handle.webview_windows().len() <= 1
+                    }
+                };
+                let (event_name, payload_extra): (&str, serde_json::Value) =
+                    if is_last_window_on_platform_that_quits {
+                        (
+                            "shax:confirm-quit",
+                            serde_json::json!({ "count": running_here_count }),
+                        )
+                    } else {
+                        (
+                            "shax:confirm-close-window",
+                            serde_json::json!({ "count": running_here_count }),
+                        )
+                    };
                 // Target THIS window only. `WebviewWindow::emit` in
                 // Tauri 2 broadcasts to every listener across every
                 // window; without `emit_to(..., WebviewWindow{label})`
@@ -300,8 +331,8 @@ pub fn register_close_teardown<R: tauri::Runtime>(
                     tauri::EventTarget::WebviewWindow {
                         label: label.clone(),
                     },
-                    "shax:confirm-close-window",
-                    serde_json::json!({ "count": running_here_count }),
+                    event_name,
+                    payload_extra,
                 ) {
                     tracing::warn!("close-intercept: emit failed: {e}");
                 }

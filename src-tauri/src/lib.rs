@@ -390,9 +390,24 @@ pub fn run() {
         tauri::RunEvent::ExitRequested { code, api, .. }
             if menu::should_prevent_exit(code) && handle.webview_windows().is_empty() =>
         {
+            // TEMP M9.6 diagnostic: user reports ⌘Q on macOS
+            // never shows the modal. If this line fires, the
+            // guard is (wrongly?) matching for ⌘Q too.
+            tracing::info!(
+                "[m9.6-diag] guard prevented exit; code={:?} windows={}",
+                code,
+                handle.webview_windows().len()
+            );
             api.prevent_exit();
         }
-        tauri::RunEvent::ExitRequested { api, .. } => {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            // TEMP M9.6 diagnostic — matched here should mean
+            // we're about to run the running-command check.
+            tracing::info!(
+                "[m9.6-diag] M9.6 arm reached; code={:?} windows={}",
+                code,
+                handle.webview_windows().len()
+            );
             // M9.6: any ExitRequested that reaches this arm is a
             // real quit — the guard arm above handles the macOS
             // "runtime decided to exit because the last window
