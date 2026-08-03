@@ -73,6 +73,28 @@ impl std::fmt::Display for BlockId {
 /// is `Some`. `aborted` is `true` when the block was closed without a clean
 /// OSC 133 D — either by the PTY exiting mid-block or by a second
 /// OSC 133 C arriving first.
+/// Snapshot of the block that's currently between OSC 133 C and D —
+/// the shell has just started running a command and hasn't yet
+/// returned to a prompt. Populated by `BlockMachine::running_snapshot`
+/// and mirrored into `BlockShared.running` on every reader-thread
+/// merge, so the M9.6 close-confirmation check can ask "is any pane
+/// running a non-alt-screen command?" without racing the state
+/// machine directly.
+#[derive(Debug, Clone, Copy)]
+pub struct RunningBlockSnapshot {
+    /// Present for diagnostics + future-proofing (a caller may
+    /// eventually want to match up the running block with its
+    /// entry in `BlockShared.summaries` after the OSC 133 D
+    /// arrives). Not read by the current M9.6 check itself,
+    /// which only cares about the `interactive` flag.
+    #[allow(dead_code)]
+    pub id: BlockId,
+    /// True whenever the alt-screen was active at any point during
+    /// this block (vim / htop / less). Latched — once set, stays
+    /// set until the block completes.
+    pub interactive: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BlockSummary {
     pub id: BlockId,
@@ -316,6 +338,26 @@ impl BlockMachine {
     pub fn current_block_id(&self) -> Option<BlockId> {
         match self.state {
             BlockState::Running { id, .. } => Some(id),
+            BlockState::Idle => None,
+        }
+    }
+
+    /// Snapshot of the currently-running block, if any. `interactive`
+    /// is the latched alt-screen flag — set to `true` whenever the
+    /// alt-screen was active at any point during this block (matches
+    /// the `BlockSummary.interactive` semantic for completed blocks).
+    ///
+    /// Consumed by the reader thread to keep `BlockShared.running` in
+    /// sync, which the M9.6 close-confirmation warning reads to
+    /// decide whether a pane has a "running non-alt-screen command"
+    /// worth warning about. Running blocks aren't in `self.records`
+    /// (only completed / aborted blocks are), so `block_summaries()`
+    /// alone can't answer this question.
+    pub fn running_snapshot(&self) -> Option<RunningBlockSnapshot> {
+        match self.state {
+            BlockState::Running {
+                id, interactive, ..
+            } => Some(RunningBlockSnapshot { id, interactive }),
             BlockState::Idle => None,
         }
     }
