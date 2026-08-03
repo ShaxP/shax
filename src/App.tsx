@@ -561,11 +561,23 @@ export default function App(): React.ReactElement {
       dispatch({ type: "close_focused_pane", tabId });
     };
     const ptyId = tab?.panes[tab.focusedPaneId]?.ptyId ?? null;
+    // eslint-disable-next-line no-console -- temp M9.6 diagnostic
+    console.log("[m9.6] confirmThenClosePane", {
+      tabId,
+      tabFound: tab !== undefined,
+      focusedPaneId: tab?.focusedPaneId,
+      paneMeta: tab?.focusedPaneId ? tab.panes[tab.focusedPaneId] : null,
+      ptyId,
+    });
     if (ptyId === null) {
+      // eslint-disable-next-line no-console -- temp M9.6 diagnostic
+      console.log("[m9.6] no ptyId; closing without check");
       doClose();
       return;
     }
     const running = await ptyRunningCommands();
+    // eslint-disable-next-line no-console -- temp M9.6 diagnostic
+    console.log("[m9.6] running set from backend:", running, "includes?", running.includes(ptyId));
     if (!running.includes(ptyId)) {
       doClose();
       return;

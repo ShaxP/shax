@@ -474,14 +474,30 @@ impl PtyManager {
     pub async fn running_command_pane_ids(&self) -> Vec<PtyId> {
         let blocks = self.blocks.lock().await;
         let mut out = Vec::new();
+        // Temp M9.6 diagnostic — logs the shape the check sees so
+        // we can distinguish "no blocks at all" from "blocks exist
+        // but all interactive/ended" when running_command_pane_ids
+        // unexpectedly returns empty. Remove before landing.
+        tracing::info!(
+            "[m9.6] running_command_pane_ids: {} known panes",
+            blocks.len()
+        );
         for (pty_id, shared) in blocks.iter() {
             let shared = shared.lock().await;
-            if let Some(last) = shared.summaries.last() {
+            let last = shared.summaries.last();
+            tracing::info!(
+                "[m9.6]   pane {pty_id}: {} block(s); last: ended={:?} interactive={:?}",
+                shared.summaries.len(),
+                last.map(|s| s.ended_at_ms),
+                last.map(|s| s.interactive),
+            );
+            if let Some(last) = last {
                 if last.ended_at_ms.is_none() && !last.interactive {
                     out.push(*pty_id);
                 }
             }
         }
+        tracing::info!("[m9.6] running_command_pane_ids: returning {:?}", out);
         out
     }
 
