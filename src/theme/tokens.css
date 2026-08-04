@@ -244,14 +244,38 @@
    * consumes it.
    */
   --terminal-ligatures: normal;
+  /*
+   * The `font-feature-settings` equivalent of the above.
+   * Necessary because `font-feature-settings` overrides
+   * `font-variant-*` (per the CSS Fonts spec), and many
+   * consumers — xterm's DOM renderer, some libraries — write
+   * `font-feature-settings` inline, defeating any
+   * `font-variant-ligatures` rule further up the cascade.
+   * `theme.ts` writes this to `"normal"` (font default = on)
+   * or `'"liga" 0, "clig" 0, "calt" 0'` (off) from the
+   * `appearance.ligatures` preference.
+   */
+  --terminal-font-features: normal;
 }
 
 /*
- * Apply the ligature toggle to every xterm-owned span. The
- * DOM renderer emits `.xterm-rows` containing spans for every
- * glyph; the property inherits, so setting it on the root
- * `.xterm` container covers everything.
+ * Apply the ligature toggle globally. Both properties inherit
+ * by default, so this covers every mono surface (prompt
+ * strip, block list, formatters, viewer, assistant code
+ * fences, palette panels, ...) without touching each inline
+ * style. It also reaches chrome elements using `--font-ui`;
+ * that's acceptable because system UI fonts rarely feature
+ * the ligatures a coding-font user is toggling for, and
+ * disabling `liga`/`clig`/`calt` in a UI font has no
+ * user-visible effect in practice.
+ *
+ * `.xterm` still gets both properties explicitly because its
+ * DOM renderer sets `font-feature-settings` inline — the more
+ * specific selector alone doesn't win when the property is
+ * inline on the same element.
  */
+:root,
 .xterm {
   font-variant-ligatures: var(--terminal-ligatures, normal);
+  font-feature-settings: var(--terminal-font-features, normal);
 }

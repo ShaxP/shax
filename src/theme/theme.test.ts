@@ -287,11 +287,14 @@ describe("applyTheme", () => {
     expect(document.documentElement.style.getPropertyValue("--font-size-terminal")).toBe("13px");
   });
 
-  it("writes --terminal-ligatures = normal when ligatures is true", () => {
-    // M10.4 bug fix: xterm's DOM renderer takes ligatures
-    // from font-variant-ligatures, not from the xterm addon.
-    // The preference must drive a CSS var, which the .xterm
-    // rule in tokens.css consumes.
+  it("writes both --terminal-ligatures and --terminal-font-features = normal when ligatures is true", () => {
+    // M10.4 bug fix: the preference must drive CSS vars,
+    // which tokens.css's `:root, .xterm` rule inherits to
+    // every mono surface (prompt strip, code viewer, ...).
+    // Both properties are written because font-feature-
+    // settings overrides font-variant-* per CSS spec —
+    // covering both means consumers that set either one
+    // inline still see the correct final value.
     applyTheme(
       prefsWith({
         theme: "dark",
@@ -300,9 +303,12 @@ describe("applyTheme", () => {
       CATALOG,
     );
     expect(document.documentElement.style.getPropertyValue("--terminal-ligatures")).toBe("normal");
+    expect(document.documentElement.style.getPropertyValue("--terminal-font-features")).toBe(
+      "normal",
+    );
   });
 
-  it("writes --terminal-ligatures = none when ligatures is false", () => {
+  it("writes --terminal-ligatures = none + explicit feature-off list when ligatures is false", () => {
     applyTheme(
       prefsWith({
         theme: "dark",
@@ -311,5 +317,8 @@ describe("applyTheme", () => {
       CATALOG,
     );
     expect(document.documentElement.style.getPropertyValue("--terminal-ligatures")).toBe("none");
+    expect(document.documentElement.style.getPropertyValue("--terminal-font-features")).toBe(
+      '"liga" 0, "clig" 0, "calt" 0',
+    );
   });
 });

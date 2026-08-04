@@ -131,13 +131,19 @@ function writeAppearanceToRoot(preferences: Preferences): void {
   root.setProperty("--font-mono", fontFamilyStack(preferences.appearance.font_family));
   root.setProperty("--font-size-terminal", `${preferences.appearance.font_size}px`);
   // Ligatures on the DOM renderer come from the browser's own
-  // text engine (`font-variant-ligatures`, defaulting to on).
-  // `xterm-addon-ligatures` only affects the canvas / webgl
-  // renderer; it's a no-op here. So the toggle needs a CSS
-  // mechanism to actually flip. See the rule in `tokens.css`
-  // (and the CodeMirror wrapper inline style) that reads this
-  // variable.
-  root.setProperty("--terminal-ligatures", preferences.appearance.ligatures ? "normal" : "none");
+  // text engine (`font-variant-ligatures`) and, when set
+  // inline by consumers like xterm, from `font-feature-
+  // settings`. Per the CSS Fonts spec, feature-settings
+  // OVERRIDES variant-*, so we must write both to cover the
+  // full cascade. tokens.css's `:root, .xterm` rule reads
+  // these and inherits them to every descendant. The xterm
+  // options path (`fontFeatureSettings` in TerminalPane) is a
+  // parallel mechanism for the DOM renderer's own inline
+  // write — the CSS var is what other mono surfaces (prompt
+  // strip, code viewer, formatters, palette, ...) read.
+  const on = preferences.appearance.ligatures;
+  root.setProperty("--terminal-ligatures", on ? "normal" : "none");
+  root.setProperty("--terminal-font-features", on ? "normal" : '"liga" 0, "clig" 0, "calt" 0');
 }
 
 function writePresetToRoot(preset: Theme): void {
