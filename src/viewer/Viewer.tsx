@@ -99,6 +99,10 @@ const WRAPPER_STYLE: CSSProperties = {
   // when the variable is unset (pre-JS paint) so the initial
   // render still has some size.
   fontSize: "var(--font-size-terminal, inherit)",
+  // M10.4 fix: honour the ligatures toggle. Same var the
+  // xterm rule in tokens.css reads. `normal` / `none` from
+  // theme.ts based on `appearance.ligatures`.
+  fontVariantLigatures: "var(--terminal-ligatures, normal)",
   background: "var(--pane)",
 };
 

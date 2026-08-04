@@ -40,6 +40,11 @@ vi.mock("@xterm/xterm", () => {
       focus: mockTerminalFocus,
       rows: 24,
       cols: 80,
+      // M10.3/M10.4 writes to `.options.theme`, `.fontFamily`,
+      // `.fontSize`, `.fontFeatureSettings`. A bare object here
+      // satisfies those assignments in tests without pulling in
+      // the full xterm options type.
+      options: {} as Record<string, unknown>,
     };
   }
   return { Terminal: MockTerminal };

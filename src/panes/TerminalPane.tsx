@@ -64,6 +64,35 @@ import {
 const RESIZE_DEBOUNCE_MS = 50;
 
 /**
+ * The `fontFeatureSettings` string xterm writes inline on its
+ * container from the `fontFeatureSettings` option. Per CSS
+ * spec, `font-feature-settings` overrides `font-variant-*`, so
+ * xterm's inline value defeats the M10.4 CSS-var toggle unless
+ * we explicitly disable ligatures via features.
+ *
+ * - `true`  → `""` — no features forced; the font's default
+ *                     ligature behaviour (usually on) applies.
+ * - `false` → `'"liga" 0, "clig" 0, "calt" 0'` — disables
+ *                     standard, contextual, and stylistic
+ *                     ligatures.
+ */
+function ligaturesToFontFeatureSettings(on: boolean): string {
+  return on ? "" : '"liga" 0, "clig" 0, "calt" 0';
+}
+
+/**
+ * Apply the ligature-driving `fontFeatureSettings` on a live
+ * Terminal. The public typings don't declare this option
+ * (it's proposed-API territory, which we've opted into via
+ * `allowProposedApi: true`), so we assert on the local
+ * writable-options shape here rather than sprinkle
+ * `@ts-expect-error` at every call site.
+ */
+function setFontFeatureSettings(terminal: Terminal, value: string): void {
+  (terminal.options as { fontFeatureSettings?: string }).fontFeatureSettings = value;
+}
+
+/**
  * Read `--font-size-terminal` (M10.3) and strip the trailing
  * `px` unit so xterm's `fontSize` option (bare number) can
  * consume it. Returns `null` when the DOM isn't ready or the
@@ -162,6 +191,14 @@ function TerminalPaneInner({
   // false. Also disposed + re-attached on font-family change
   // because the addon caches font metrics at construction and
   // wouldn't otherwise pick up a new family.
+  //
+  // M10.4 note: this addon only affects xterm's canvas / webgl
+  // renderers. Shax uses the default DOM renderer, so the
+  // *visible* ligature toggle is driven by the
+  // `--terminal-ligatures` CSS var (see theme.ts +
+  // tokens.css). The addon is kept in place so a future
+  // switch to canvas / webgl doesn't silently lose the toggle
+  // — no cost while inactive.
   const ligaturesAddonRef = useRef<LigaturesAddonType | null>(null);
   // M9.5 follow-up: capture the mount-time initial cwd so the
   // spawn effect (which runs with empty deps) always reads the
@@ -843,12 +880,14 @@ function TerminalPaneInner({
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    // M10.3: attach the ligature addon on initial construction
-    // when the stored preference is on. Every subsequent
-    // preference change goes through the reapply hook below,
-    // which owns dispose+reattach.
+    // M10.3 + M10.4 fix: set fontFeatureSettings (the actual
+    // DOM-renderer ligature toggle — see comment on
+    // `ligaturesToFontFeatureSettings`) and attach the
+    // canvas/webgl ligature addon if enabled. Every subsequent
+    // change goes through the reapply hook below.
     void loadPreferences().then((prefs) => {
       if (terminalRef.current !== terminal) return; // torn down before load resolved
+      setFontFeatureSettings(terminal, ligaturesToFontFeatureSettings(prefs.appearance.ligatures));
       if (prefs.appearance.ligatures) {
         const addon = new LigaturesAddon();
         terminal.loadAddon(addon);
@@ -1165,14 +1204,20 @@ function TerminalPaneInner({
           // settles — safe to swallow.
         }
       }
-      // Ligature addon (M10.3). Read preferences to know
-      // whether the toggle is on. Dispose the old addon
-      // unconditionally on every reapply: the addon caches
-      // font metrics at construction and wouldn't pick up a
-      // family change otherwise. Then re-attach when the
-      // preference is on.
+      // Ligatures (M10.3 + M10.4 fix). Two mechanisms in
+      // parallel, because they cover different renderers:
+      //
+      //   1. `t.options.fontFeatureSettings` — xterm writes
+      //      this inline on its container. Per CSS spec,
+      //      font-feature-settings overrides font-variant-*,
+      //      so this is what actually toggles ligatures in
+      //      the DOM renderer.
+      //   2. The `LigaturesAddon` — only affects the canvas /
+      //      webgl renderers. Kept in sync in case Shax ever
+      //      switches away from DOM.
       void loadPreferences().then((prefs) => {
         if (terminalRef.current !== t) return; // pane torn down mid-flight
+        setFontFeatureSettings(t, ligaturesToFontFeatureSettings(prefs.appearance.ligatures));
         if (ligaturesAddonRef.current !== null) {
           ligaturesAddonRef.current.dispose();
           ligaturesAddonRef.current = null;

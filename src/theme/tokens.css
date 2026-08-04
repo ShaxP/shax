@@ -230,4 +230,52 @@
     "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font Mono",
     "JetBrainsMonoNL Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
     Consolas, monospace;
+
+  /*
+   * Ligature control for the terminal + code viewer (M10.4).
+   *
+   * xterm's default renderer is DOM, and the browser's own text
+   * engine handles ligatures via `font-variant-ligatures`
+   * (defaulting to `normal`, i.e. on). `xterm-addon-ligatures`
+   * only affects the canvas / webgl renderers, so the actual
+   * toggle needs a CSS mechanism. `src/theme/theme.ts` writes
+   * this variable to `"normal"` (on) or `"none"` (off) from
+   * `preferences.appearance.ligatures`; the `.xterm` rule below
+   * consumes it.
+   */
+  --terminal-ligatures: normal;
+  /*
+   * The `font-feature-settings` equivalent of the above.
+   * Necessary because `font-feature-settings` overrides
+   * `font-variant-*` (per the CSS Fonts spec), and many
+   * consumers — xterm's DOM renderer, some libraries — write
+   * `font-feature-settings` inline, defeating any
+   * `font-variant-ligatures` rule further up the cascade.
+   * `theme.ts` writes this to `"normal"` (font default = on)
+   * or `'"liga" 0, "clig" 0, "calt" 0'` (off) from the
+   * `appearance.ligatures` preference.
+   */
+  --terminal-font-features: normal;
+}
+
+/*
+ * Apply the ligature toggle globally. Both properties inherit
+ * by default, so this covers every mono surface (prompt
+ * strip, block list, formatters, viewer, assistant code
+ * fences, palette panels, ...) without touching each inline
+ * style. It also reaches chrome elements using `--font-ui`;
+ * that's acceptable because system UI fonts rarely feature
+ * the ligatures a coding-font user is toggling for, and
+ * disabling `liga`/`clig`/`calt` in a UI font has no
+ * user-visible effect in practice.
+ *
+ * `.xterm` still gets both properties explicitly because its
+ * DOM renderer sets `font-feature-settings` inline — the more
+ * specific selector alone doesn't win when the property is
+ * inline on the same element.
+ */
+:root,
+.xterm {
+  font-variant-ligatures: var(--terminal-ligatures, normal);
+  font-feature-settings: var(--terminal-font-features, normal);
 }
