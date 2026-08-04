@@ -1,8 +1,12 @@
 /*
  * Full-window layout: the single TerminalPane fills the entire viewport.
  * Background, fg, and typography come from theme tokens (`src/theme/tokens.css`).
+ * Bundled monospace fonts (M10.3) declared in `src/theme/fonts.css` are
+ * imported here so their `@font-face` rules land in the global stylesheet
+ * once, not per-component.
  */
 @import "./theme/tokens.css";
+@import "./theme/fonts.css";
 
 *,
 *::before,
