@@ -162,6 +162,14 @@ function TerminalPaneInner({
   // false. Also disposed + re-attached on font-family change
   // because the addon caches font metrics at construction and
   // wouldn't otherwise pick up a new family.
+  //
+  // M10.4 note: this addon only affects xterm's canvas / webgl
+  // renderers. Shax uses the default DOM renderer, so the
+  // *visible* ligature toggle is driven by the
+  // `--terminal-ligatures` CSS var (see theme.ts +
+  // tokens.css). The addon is kept in place so a future
+  // switch to canvas / webgl doesn't silently lose the toggle
+  // — no cost while inactive.
   const ligaturesAddonRef = useRef<LigaturesAddonType | null>(null);
   // M9.5 follow-up: capture the mount-time initial cwd so the
   // spawn effect (which runs with empty deps) always reads the

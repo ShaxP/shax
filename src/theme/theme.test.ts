@@ -286,4 +286,30 @@ describe("applyTheme", () => {
     expect(document.documentElement.style.getPropertyValue("--font-mono")).not.toBe("");
     expect(document.documentElement.style.getPropertyValue("--font-size-terminal")).toBe("13px");
   });
+
+  it("writes --terminal-ligatures = normal when ligatures is true", () => {
+    // M10.4 bug fix: xterm's DOM renderer takes ligatures
+    // from font-variant-ligatures, not from the xterm addon.
+    // The preference must drive a CSS var, which the .xterm
+    // rule in tokens.css consumes.
+    applyTheme(
+      prefsWith({
+        theme: "dark",
+        appearance: { ...DEFAULT_APPEARANCE, ligatures: true },
+      }),
+      CATALOG,
+    );
+    expect(document.documentElement.style.getPropertyValue("--terminal-ligatures")).toBe("normal");
+  });
+
+  it("writes --terminal-ligatures = none when ligatures is false", () => {
+    applyTheme(
+      prefsWith({
+        theme: "dark",
+        appearance: { ...DEFAULT_APPEARANCE, ligatures: false },
+      }),
+      CATALOG,
+    );
+    expect(document.documentElement.style.getPropertyValue("--terminal-ligatures")).toBe("none");
+  });
 });

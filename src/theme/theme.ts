@@ -130,6 +130,14 @@ function writeAppearanceToRoot(preferences: Preferences): void {
   const root = document.documentElement.style;
   root.setProperty("--font-mono", fontFamilyStack(preferences.appearance.font_family));
   root.setProperty("--font-size-terminal", `${preferences.appearance.font_size}px`);
+  // Ligatures on the DOM renderer come from the browser's own
+  // text engine (`font-variant-ligatures`, defaulting to on).
+  // `xterm-addon-ligatures` only affects the canvas / webgl
+  // renderer; it's a no-op here. So the toggle needs a CSS
+  // mechanism to actually flip. See the rule in `tokens.css`
+  // (and the CodeMirror wrapper inline style) that reads this
+  // variable.
+  root.setProperty("--terminal-ligatures", preferences.appearance.ligatures ? "normal" : "none");
 }
 
 function writePresetToRoot(preset: Theme): void {
