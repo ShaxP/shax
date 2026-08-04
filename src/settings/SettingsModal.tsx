@@ -23,8 +23,17 @@ import {
   setClaudeApiKey,
 } from "../assistant/providers/claude/apiKey";
 import { probeClaudeCli } from "../assistant/providers/claude/subscription";
-import { loadPreferences, savePreferences } from "../theme/preferences";
+import {
+  DEFAULT_APPEARANCE,
+  MAX_FONT_SIZE,
+  MIN_FONT_SIZE,
+  loadPreferences,
+  savePreferences,
+  type AppearancePreferences,
+} from "../theme/preferences";
 import type { ThemePreference } from "../theme/theme";
+import { BUNDLED_FONTS } from "../theme/fonts";
+import { listThemes, type Theme } from "../lib/ipc";
 import {
   probeOllama,
   probeOllamaModel,
@@ -206,6 +215,32 @@ const SUB_DIVIDER: CSSProperties = {
   margin: "20px 0",
   border: "none",
   borderTop: "1px solid var(--border)",
+};
+
+// ── M10.4: Appearance row layout ────────────────────────
+
+const APPEARANCE_ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  margin: "10px 0",
+};
+
+const APPEARANCE_LABEL: CSSProperties = {
+  minWidth: 72,
+  fontSize: 12,
+  color: "var(--fg-dim)",
+};
+
+const SELECT_STYLE: CSSProperties = {
+  flex: 1,
+  padding: "6px 10px",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  background: "var(--pane2)",
+  color: "var(--fg)",
+  fontFamily: "var(--font-ui)",
+  fontSize: 12.5,
 };
 
 const LANE_LIST: CSSProperties = {
@@ -407,26 +442,39 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
   const [cliVersion, setCliVersion] = useState<string | null | undefined>(undefined);
   const [ollama, setOllama] = useState<OllamaProbeResult | undefined>(undefined);
   const [theme, setTheme] = useState<ThemePreference>("system");
+  // M10.4: appearance sub-block + catalog for the preset dropdowns.
+  const [appearance, setAppearance] = useState<AppearancePreferences>(DEFAULT_APPEARANCE);
+  const [themeCatalog, setThemeCatalog] = useState<Theme[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     panelRef.current?.focus();
     void (async () => {
-      const [cfg, cli, hasKey, ol, prefs] = await Promise.all([
+      const [cfg, cli, hasKey, ol, prefs, catalog] = await Promise.all([
         getAssistantConfig().catch(() => DEFAULT_CONFIG),
         probeClaudeCli().catch(() => null),
         hasClaudeApiKey().catch(() => false),
         probeOllama().catch(
           (): OllamaProbeResult => ({ reachable: false, models: [], error: null }),
         ),
-        loadPreferences().catch(() => ({ theme: "system" as ThemePreference })),
+        loadPreferences().catch(
+          (): { theme: ThemePreference; appearance: AppearancePreferences } => ({
+            theme: "system",
+            appearance: DEFAULT_APPEARANCE,
+          }),
+        ),
+        listThemes().catch((): Theme[] => []),
       ]);
       setConfig(cfg);
       setCliVersion(cli);
       setApiKeyConfigured(hasKey);
       setOllama(ol);
       setTheme(prefs.theme);
+      // M10.4: hydrate appearance from disk (or fall back to
+      // defaults if the field was absent on a pre-M10 file).
+      setAppearance(prefs.appearance ?? DEFAULT_APPEARANCE);
+      setThemeCatalog(catalog);
       // Back-fill missing Ollama capabilities on modal open —
       // e.g. a config saved before per-model probing landed,
       // or after Ollama was reinstalled with new models.
@@ -498,6 +546,28 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus(`Failed to save theme: ${message}`);
+    }
+  };
+
+  /**
+   * M10.4: persist an appearance update. Same save-then-dispatch
+   * pattern as `persistTheme` — the App handler re-reads the
+   * file, so we must land the write before it fires. Optimistic
+   * UI update stays: the picker reflects the new value
+   * immediately, and a save failure surfaces via `status`
+   * without rolling the visible state back.
+   */
+  const persistAppearance = async (patch: Partial<AppearancePreferences>): Promise<void> => {
+    const next: AppearancePreferences = { ...appearance, ...patch };
+    setAppearance(next);
+    try {
+      await savePreferences({ appearance: next });
+      window.dispatchEvent(
+        new CustomEvent("shax:preference-changed", { detail: { appearance: next } }),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setStatus(`Failed to save appearance: ${message}`);
     }
   };
 
@@ -604,7 +674,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
 
           <div style={RIGHT_PANE}>
             {activeSection === "appearance" && (
-              <AppearanceSection theme={theme} onPickTheme={persistTheme} />
+              <AppearanceSection
+                theme={theme}
+                onPickTheme={persistTheme}
+                appearance={appearance}
+                catalog={themeCatalog}
+                onPatchAppearance={persistAppearance}
+              />
             )}
             {activeSection === "assistant" && (
               <AssistantSection
@@ -668,12 +744,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
 function AppearanceSection({
   theme,
   onPickTheme,
+  appearance,
+  catalog,
+  onPatchAppearance,
 }: {
   theme: ThemePreference;
   onPickTheme: (next: ThemePreference) => Promise<void>;
+  appearance: AppearancePreferences;
+  catalog: readonly Theme[];
+  onPatchAppearance: (patch: Partial<AppearancePreferences>) => Promise<void>;
 }): React.ReactElement {
+  const lightPresets = catalog.filter((t) => t.mode === "light");
+  const darkPresets = catalog.filter((t) => t.mode === "dark");
   return (
     <section>
+      {/* ── Mode ─────────────────────────────────────────── */}
       <div style={SECTION_TITLE}>Theme</div>
       <div style={{ ...SECTION_DESCRIPTION, marginBottom: 10 }}>
         Pick the palette Shax uses for chrome and blocks.
@@ -706,6 +791,124 @@ function AppearanceSection({
           : theme === "dark"
             ? "Dark palette, always."
             : "Light palette, always."}
+      </div>
+
+      {/* ── Preset pickers (M10.4) ───────────────────────── */}
+      <hr style={SUB_DIVIDER} />
+      <div style={SECTION_TITLE}>Presets</div>
+      <div style={SECTION_DESCRIPTION}>
+        The catalog Shax picks from for each mode. Changes apply immediately.
+      </div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-theme-light" style={APPEARANCE_LABEL}>
+          Light
+        </label>
+        <select
+          id="settings-theme-light"
+          data-testid="settings-preset-light"
+          value={appearance.theme_light}
+          onChange={(e) => void onPatchAppearance({ theme_light: e.target.value })}
+          style={SELECT_STYLE}
+        >
+          {lightPresets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-theme-dark" style={APPEARANCE_LABEL}>
+          Dark
+        </label>
+        <select
+          id="settings-theme-dark"
+          data-testid="settings-preset-dark"
+          value={appearance.theme_dark}
+          onChange={(e) => void onPatchAppearance({ theme_dark: e.target.value })}
+          style={SELECT_STYLE}
+        >
+          {darkPresets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* ── Font ─────────────────────────────────────────── */}
+      <hr style={SUB_DIVIDER} />
+      <div style={SECTION_TITLE}>Font</div>
+      <div style={SECTION_DESCRIPTION}>
+        Applies to the terminal and the file viewer. Chrome keeps the OS default.
+      </div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-font-family" style={APPEARANCE_LABEL}>
+          Family
+        </label>
+        <select
+          id="settings-font-family"
+          data-testid="settings-font-family"
+          value={appearance.font_family ?? ""}
+          onChange={(e) =>
+            void onPatchAppearance({
+              // The empty string is the "System default" sentinel:
+              // maps back to null, which `fontFamilyStack` treats
+              // as "no user override, use the bundled default".
+              font_family: e.target.value === "" ? null : e.target.value,
+            })
+          }
+          style={SELECT_STYLE}
+        >
+          <option value="">System default (JetBrains Mono)</option>
+          {BUNDLED_FONTS.map((font) => (
+            <option key={font.cssFamily} value={font.cssFamily}>
+              {font.displayName}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-font-size" style={APPEARANCE_LABEL}>
+          Size
+        </label>
+        <input
+          id="settings-font-size"
+          data-testid="settings-font-size"
+          type="range"
+          min={MIN_FONT_SIZE}
+          max={MAX_FONT_SIZE}
+          value={appearance.font_size}
+          onChange={(e) => void onPatchAppearance({ font_size: Number(e.target.value) })}
+          style={{ flex: 1 }}
+        />
+        <span
+          data-testid="settings-font-size-value"
+          style={{
+            minWidth: 32,
+            textAlign: "right",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            color: "var(--fg-dim)",
+          }}
+        >
+          {appearance.font_size}px
+        </span>
+      </div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-ligatures" style={APPEARANCE_LABEL}>
+          Ligatures
+        </label>
+        <input
+          id="settings-ligatures"
+          data-testid="settings-ligatures"
+          type="checkbox"
+          checked={appearance.ligatures}
+          onChange={(e) => void onPatchAppearance({ ligatures: e.target.checked })}
+        />
+        <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
+          Fuses `==`, `!=`, `=&gt;` etc. when the font supports it.
+        </span>
       </div>
     </section>
   );
