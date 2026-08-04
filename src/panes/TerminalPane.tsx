@@ -40,6 +40,7 @@ import { LigaturesAddon } from "@xterm/addon-ligatures/lib/addon-ligatures.mjs";
 import "@xterm/xterm/css/xterm.css";
 import { readXtermTheme } from "./xtermTheme";
 import { loadPreferences } from "../theme/preferences";
+import { fontFamilyStack } from "../theme/fonts";
 import { anyModalLayerOpen } from "../lib/modalLayer";
 import { spawnPty, writePty, resizePty, killPty, base64Decode } from "../lib/ipc";
 import type { BlockId, PtyId, PtyEvent, SpawnOpts } from "../lib/ipc";
@@ -1179,44 +1180,46 @@ function TerminalPaneInner({
       // xterm already had cached, no cell-metric change.
       const theme = readXtermTheme();
       if (theme !== null) t.options.theme = theme;
-      // Font next (M10.3). Family and size both live behind
-      // CSS custom properties, so a preset flip *plus* a font
-      // tweak in the same `shax:preference-changed` event
-      // reapplies both here. Font-metric changes invalidate
-      // xterm's cached cell size, so we `fit()` afterwards to
-      // recompute rows/cols against the container — otherwise
-      // the shell keeps its previous winsize and lines wrap
-      // at the wrong column.
-      const fontMono = getComputedStyle(document.documentElement)
-        .getPropertyValue("--font-mono")
-        .trim();
-      if (fontMono !== "") t.options.fontFamily = fontMono;
-      const fontSize = readFontSizePx();
-      if (fontSize !== null) t.options.fontSize = fontSize;
-      const fit = fitAddonRef.current;
-      if (fit !== null) {
-        try {
-          fit.fit();
-        } catch {
-          // fit() throws before the terminal is measurable
-          // (zero-size container during transient layout). The
-          // ResizeObserver will fit again once the container
-          // settles — safe to swallow.
-        }
-      }
-      // Ligatures (M10.3 + M10.4 fix). Two mechanisms in
-      // parallel, because they cover different renderers:
-      //
-      //   1. `t.options.fontFeatureSettings` — xterm writes
-      //      this inline on its container. Per CSS spec,
-      //      font-feature-settings overrides font-variant-*,
-      //      so this is what actually toggles ligatures in
-      //      the DOM renderer.
-      //   2. The `LigaturesAddon` — only affects the canvas /
-      //      webgl renderers. Kept in sync in case Shax ever
-      //      switches away from DOM.
+      // Font + ligatures — all keyed on the fresh preferences
+      // read below. Reading from disk (not from CSS vars) is
+      // deliberate: `App.tsx`'s handler that writes the CSS
+      // vars is async, and this handler is sync, so a
+      // getComputedStyle read here would see stale values.
+      // `loadPreferences()` skips the cascade entirely.
       void loadPreferences().then((prefs) => {
         if (terminalRef.current !== t) return; // pane torn down mid-flight
+        // Family (M10.3): reuse the resolved stack theme.ts
+        // computes — that way an unknown user-typed family
+        // still ends up with the right fallback chain.
+        t.options.fontFamily = fontFamilyStack(prefs.appearance.font_family);
+        // Size (M10.3): a bare number in CSS px.
+        t.options.fontSize = prefs.appearance.font_size;
+        // Font-metric change invalidates xterm's cached cell
+        // size, so `fit()` afterwards to recompute rows/cols
+        // against the container — otherwise the shell keeps
+        // its previous winsize and lines wrap at the wrong
+        // column.
+        const fit = fitAddonRef.current;
+        if (fit !== null) {
+          try {
+            fit.fit();
+          } catch {
+            // fit() throws before the terminal is measurable
+            // (zero-size container during transient layout).
+            // The ResizeObserver will fit again once the
+            // container settles — safe to swallow.
+          }
+        }
+        // Ligatures (M10.3 + M10.4 fix). Two mechanisms in
+        // parallel, because they cover different renderers:
+        //   1. `t.options.fontFeatureSettings` — xterm writes
+        //      this inline on its container. Per CSS spec,
+        //      font-feature-settings overrides font-variant-*,
+        //      so this is what actually toggles ligatures in
+        //      the DOM renderer.
+        //   2. The `LigaturesAddon` — only affects the canvas /
+        //      webgl renderers. Kept in sync in case Shax ever
+        //      switches away from DOM.
         setFontFeatureSettings(t, ligaturesToFontFeatureSettings(prefs.appearance.ligatures));
         if (ligaturesAddonRef.current !== null) {
           ligaturesAddonRef.current.dispose();
