@@ -27,7 +27,8 @@ const SIGNATURE_BYTES = 8;
 
 const HOST: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   lineHeight: 1.55,
   // Match the other formatters' max-height system so the modal
   // can fill the panel via `--formatter-max-height: 100%`.
@@ -66,7 +67,9 @@ const SIG: CSSProperties = {
 const FOOTER: CSSProperties = {
   padding: "8px 0 4px 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 11,
+  // M10.5: footer meta ("N bytes shown, N total") is
+  // compact-tier — a step smaller than the hex dump itself.
+  fontSize: "var(--font-size-compact)",
   color: "var(--fg-faint)",
 };
 

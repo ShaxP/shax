@@ -252,7 +252,9 @@ const ROW: CSSProperties = {
   padding: "8px 12px",
   borderBottom: "1px solid var(--border)",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  // M10.5: block-row content is real terminal output, so it
+  // scales with the user's terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   color: "var(--fg)",
 };
 
@@ -1011,7 +1013,10 @@ function BlockRowInner({
               margin: "4px 0 0 0",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
-              fontSize: 12,
+              // M10.5: the block's raw command output is the
+              // most important mono surface after xterm itself.
+              // Scale with the user's terminal-size preference.
+              fontSize: "var(--font-size-secondary)",
               color: "var(--fg-dim)",
               // The User-Agent stylesheet sets `<pre>` to a generic
               // `monospace`, which overrides the Nerd-Font-first stack

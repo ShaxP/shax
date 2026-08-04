@@ -103,7 +103,8 @@ const CLOSE_BTN: CSSProperties = {
 const STATUS_LINE: CSSProperties = {
   padding: 24,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   color: "var(--fg-faint)",
 };
 
@@ -600,7 +601,9 @@ export function BlockViewerModal({
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
               fontFamily: "var(--font-mono)",
-              fontSize: 12.5,
+              // M10.5: raw block output in the modal viewer —
+              // primary content, scales with terminal preference.
+              fontSize: "var(--font-size-secondary)",
               lineHeight: 1.5,
               color: "var(--fg-dim)",
               background: "var(--pane)",

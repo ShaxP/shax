@@ -72,7 +72,10 @@ const ROW: CSSProperties = {
   borderTop: "1px solid var(--border)",
   background: "var(--pane)",
   fontFamily: "var(--font-mono)",
-  fontSize: 13,
+  // M10.5: the prompt strip mirrors what will become the next
+  // terminal command, so it uses the same size as the terminal
+  // itself (not the smaller "secondary" tier).
+  fontSize: "var(--font-size-terminal)",
   color: "var(--fg)",
   flexShrink: 0,
   minHeight: 40,

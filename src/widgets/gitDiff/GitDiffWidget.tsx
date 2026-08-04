@@ -36,7 +36,8 @@ const HOST: CSSProperties = {
   flexDirection: "column",
   margin: "4px 0 0 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   maxHeight: "var(--formatter-max-height, 480px)",
   flex: "var(--formatter-flex, none)",
   minHeight: 0,
@@ -111,7 +112,8 @@ const HUNK_HEADER: CSSProperties = {
   padding: "2px 8px",
   color: "var(--cyan)",
   fontFamily: "var(--font-mono)",
-  fontSize: 11.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   background: "color-mix(in srgb, var(--cyan) 6%, transparent)",
 };
 

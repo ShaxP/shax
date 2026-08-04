@@ -20,13 +20,15 @@ import { PASS, type Formatter, type FormatterContext } from "./types";
 const HOST: CSSProperties = {
   margin: "4px 0 0 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
 };
 
 const STATUS_LINE: CSSProperties = {
   padding: "4px 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   color: "var(--fg-faint)",
 };
 

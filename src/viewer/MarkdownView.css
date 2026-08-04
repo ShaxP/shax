@@ -17,7 +17,8 @@
   display: block;
   padding: 12px 14px;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  /* M10.5: scales with the terminal font-size preference. */
+  font-size: var(--font-size-secondary);
   line-height: 1.5;
   background: transparent;
 }

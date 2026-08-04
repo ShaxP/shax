@@ -13,7 +13,9 @@ import type { MetadataView } from "./types";
 
 const HOST: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: metadata (cwd / branch / exit code) is mono
+  // content, so it scales with the terminal preference.
+  fontSize: "var(--font-size-secondary)",
   lineHeight: 1.55,
   maxHeight: "var(--formatter-max-height, 480px)",
   overflowY: "auto",

@@ -766,6 +766,16 @@ export default function App(): React.ReactElement {
         }
         setAssistantWidth(prefs.assistant_dock_width);
         prefsLoadedRef.current = true;
+        // M10.5: notify every consumer that reads preferences
+        // (TerminalPane, Viewer, AssistantOverlay) so they
+        // pick up the persisted appearance on cold boot too —
+        // otherwise xterm keeps its default 13 px font after a
+        // restart even though the user's saved size is 18. On
+        // subsequent preference changes the SettingsModal
+        // fires this same event.
+        window.dispatchEvent(
+          new CustomEvent("shax:preference-changed", { detail: { appearance: prefs.appearance } }),
+        );
       },
     );
     // Re-apply on any preference change — reads fresh
