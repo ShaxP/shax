@@ -24,7 +24,8 @@ import type {
 const HOST: CSSProperties = {
   margin: "4px 0 0 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   lineHeight: 1.55,
   // Inline cap; modal can override via `--formatter-max-height`.
   maxHeight: "var(--formatter-max-height, 480px)",
@@ -128,7 +129,8 @@ function TableRender({ node }: { node: TableNode }): React.ReactElement {
       style={{
         borderCollapse: "collapse",
         fontFamily: "var(--font-mono)",
-        fontSize: 12,
+        // M10.5: scales with the terminal font-size preference.
+        fontSize: "var(--font-size-secondary)",
       }}
     >
       {node.header !== undefined && (
