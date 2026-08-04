@@ -232,6 +232,21 @@
     Consolas, monospace;
 
   /*
+   * Monospace size hierarchy (M10.3 / M10.5).
+   *
+   * `--font-size-terminal` is the user's chosen terminal
+   * size (13 px default). `--font-size-secondary` and
+   * `--font-size-compact` are derived ratios that every
+   * "second-tier" and "third-tier" mono surface consumes so
+   * bumping the terminal size scales them together — see
+   * `theme.ts::writeAppearanceToRoot`. Fallback values below
+   * are the M10.3 pre-JS-paint defaults at 13 px.
+   */
+  --font-size-terminal: 13px;
+  --font-size-secondary: 12px;
+  --font-size-compact: 11px;
+
+  /*
    * Ligature control for the terminal + code viewer (M10.4).
    *
    * xterm's default renderer is DOM, and the browser's own text

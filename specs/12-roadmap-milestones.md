@@ -268,7 +268,23 @@ Scope:
 
 **Explicitly out of scope:** community theme drop-in (`~/.config/shax/themes/`), per-pane font size (zoom), per-window theme override. All three are called out in `16` for a later milestone.
 
-Detail in `16-themes-and-fonts.md`. Sliced M10.1 – M10.4 (model + catalog, live application, fonts, preferences pane).
+Detail in `16-themes-and-fonts.md`. Sliced M10.1 – M10.4 (model + catalog, live application, fonts, preferences pane), plus a follow-up M10.5 below.
+
+## M10.5 Monospace font-size scaling across secondary surfaces
+
+**Goal:** the `appearance.font_size` preference should scale every monospace surface together, not just xterm and the code viewer. **Lead:** frontend.
+
+M10.3 wired `appearance.font_size` to xterm and CodeMirror only. Nine other monospace-context surfaces (git-diff / git-status / ls formatters, block-list output preview, block metadata line, markdown code fences and inline code in both the file viewer and the assistant dock) carry hard-coded 11 / 12 / 12.5 px sizes. Bumping the terminal to 18 px leaves those "second-tier" mono surfaces stuck at their old size — visibly wrong against the surrounding terminal output.
+
+- Derived scale tokens written by `applyTheme` alongside `--font-size-terminal`:
+  - `--font-size-secondary: calc(var(--font-size-terminal) * 0.92)` — replaces 12 / 12.5 px sites.
+  - `--font-size-compact: calc(var(--font-size-terminal) * 0.85)` — replaces 11 px sites.
+- Nine hard-coded sites swap to these tokens. `em`-relative sizes (`0.9em`, `0.92em`) stay as-is — they already scale off prose.
+- Design hierarchy (secondary content sits smaller than the terminal) is preserved because the ratio is fixed, not the pixel value.
+
+**Exit:** bump `font_size` in the preferences pane; every mono surface scales together, and their relative sizes hold.
+
+**Explicitly out of scope:** exposing the two ratios as user knobs. Fixed design values — a user complaining about hierarchy is a design conversation, not a preference.
 
 ## Post-M8 candidates
 
@@ -281,12 +297,6 @@ PDF-only for now via **pdf.js** (Mozilla, Apache 2.0, ~1 MB, canvas-rendered). F
 ### Community theme drop-in
 
 Follows M10. Users drop a `~/.config/shax/themes/<id>/theme.json` for any theme outside the built-in catalog. Same schema as the embedded catalog, plus a per-theme reload trigger in the palette. Pure data, no sandbox needed. Held for a follow-up milestone so M10 can ship without carrying schema-versioning and filesystem-watch UX.
-
-### Monospace font-size scaling across secondary surfaces
-
-Flagged during M10.3. `appearance.font_size` currently wires only to xterm and the CodeMirror file viewer. Nine monospace-context surfaces (git-diff / git-status / ls formatters, block-list output preview, block metadata line, markdown code fences and inline code in both the file viewer and the assistant dock) still carry hard-coded 11 / 12 / 12.5 px sizes. That's intentional design hierarchy — secondary content is *deliberately* smaller than the terminal — but it means a user bumping to 18 px sees only the terminal grow while every "second-tier" mono surface stays put.
-
-Clean fix is derived scale tokens (`--font-size-secondary: calc(var(--font-size-terminal) * 0.92)` etc.) written by `applyTheme` and consumed at those nine sites. Preserves the visual hierarchy, everything scales together. Deferred until real users pick unusual sizes and complain.
 
 ### Sidebar with pinnable widgets
 

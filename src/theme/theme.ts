@@ -130,6 +130,14 @@ function writeAppearanceToRoot(preferences: Preferences): void {
   const root = document.documentElement.style;
   root.setProperty("--font-mono", fontFamilyStack(preferences.appearance.font_family));
   root.setProperty("--font-size-terminal", `${preferences.appearance.font_size}px`);
+  // M10.5: derived scale tokens for secondary mono surfaces
+  // (formatters, block-list preview, metadata line, markdown
+  // code fences and inline code). Ratios preserve the design
+  // hierarchy — secondary content sits deliberately smaller
+  // than the terminal — while letting everything scale
+  // together when the user bumps the base size.
+  root.setProperty("--font-size-secondary", `calc(var(--font-size-terminal) * 0.92)`);
+  root.setProperty("--font-size-compact", `calc(var(--font-size-terminal) * 0.85)`);
   // Ligatures on the DOM renderer come from the browser's own
   // text engine (`font-variant-ligatures`) and, when set
   // inline by consumers like xterm, from `font-feature-

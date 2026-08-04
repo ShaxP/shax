@@ -252,7 +252,9 @@ const ROW: CSSProperties = {
   padding: "8px 12px",
   borderBottom: "1px solid var(--border)",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  // M10.5: block-row content is real terminal output, so it
+  // scales with the user's terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   color: "var(--fg)",
 };
 

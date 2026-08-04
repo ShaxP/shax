@@ -89,7 +89,8 @@
 
 .chat-markdown pre {
   font-family: var(--font-mono);
-  font-size: 12px;
+  /* M10.5: scales with the terminal font-size preference. */
+  font-size: var(--font-size-secondary);
   padding: 6px 8px;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.35);

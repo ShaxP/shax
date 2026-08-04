@@ -279,7 +279,8 @@ const SHELL = {
 const STATUS_LINE: CSSProperties = {
   padding: "4px 0",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
   color: "var(--fg-faint)",
 };
 
@@ -289,7 +290,8 @@ const SCROLL_HOST: CSSProperties = {
   maxHeight: "var(--formatter-max-height, 320px)",
   overflowY: "auto",
   fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
+  // M10.5: scales with the terminal font-size preference.
+  fontSize: "var(--font-size-secondary)",
 };
 
 const GRID: CSSProperties = {

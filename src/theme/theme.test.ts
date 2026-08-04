@@ -308,6 +308,20 @@ describe("applyTheme", () => {
     );
   });
 
+  it("writes derived --font-size-secondary + --font-size-compact scale tokens", () => {
+    // M10.5: secondary + compact are calc() expressions off
+    // --font-size-terminal, so every mono surface (formatters,
+    // block rows, metadata, markdown code) scales together
+    // when the user bumps the terminal size.
+    applyTheme(prefsWith({ theme: "dark", appearance: DEFAULT_APPEARANCE }), CATALOG);
+    expect(document.documentElement.style.getPropertyValue("--font-size-secondary")).toBe(
+      "calc(var(--font-size-terminal) * 0.92)",
+    );
+    expect(document.documentElement.style.getPropertyValue("--font-size-compact")).toBe(
+      "calc(var(--font-size-terminal) * 0.85)",
+    );
+  });
+
   it("writes --terminal-ligatures = none + explicit feature-off list when ligatures is false", () => {
     applyTheme(
       prefsWith({
