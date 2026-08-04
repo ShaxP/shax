@@ -282,6 +282,12 @@ PDF-only for now via **pdf.js** (Mozilla, Apache 2.0, ~1 MB, canvas-rendered). F
 
 Follows M10. Users drop a `~/.config/shax/themes/<id>/theme.json` for any theme outside the built-in catalog. Same schema as the embedded catalog, plus a per-theme reload trigger in the palette. Pure data, no sandbox needed. Held for a follow-up milestone so M10 can ship without carrying schema-versioning and filesystem-watch UX.
 
+### Monospace font-size scaling across secondary surfaces
+
+Flagged during M10.3. `appearance.font_size` currently wires only to xterm and the CodeMirror file viewer. Nine monospace-context surfaces (git-diff / git-status / ls formatters, block-list output preview, block metadata line, markdown code fences and inline code in both the file viewer and the assistant dock) still carry hard-coded 11 / 12 / 12.5 px sizes. That's intentional design hierarchy — secondary content is *deliberately* smaller than the terminal — but it means a user bumping to 18 px sees only the terminal grow while every "second-tier" mono surface stays put.
+
+Clean fix is derived scale tokens (`--font-size-secondary: calc(var(--font-size-terminal) * 0.92)` etc.) written by `applyTheme` and consumed at those nine sites. Preserves the visual hierarchy, everything scales together. Deferred until real users pick unusual sizes and complain.
+
 ### Sidebar with pinnable widgets
 
 A collapsible sidebar (left, opposite the assistant dock on the right) holding always-on utility widgets that share Shax's visual language: clock/calendar, caffeinate toggle (which emits `caffeinate -di` into scrollback per the honest-log non-negotiable), network status, git-branch-of-active-pane, weather, kubectl context, and similar. Two phases:
