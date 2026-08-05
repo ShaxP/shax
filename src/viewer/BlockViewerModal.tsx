@@ -31,6 +31,7 @@ import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
+import { PdfView } from "./PdfView";
 import { stripAnsi, stripShellArtifacts } from "./stripAnsi";
 import { Viewer } from "./Viewer";
 
@@ -329,7 +330,10 @@ export function BlockViewerModal({
 
   const text = useMemo(() => {
     if (renderBytes === null) return null;
-    if (contentType === "image") return null;
+    // Binary content types skip the UTF-8 decode entirely —
+    // decoding image / PDF bytes as text produces mojibake and
+    // wastes CPU on multi-MB files.
+    if (contentType === "image" || contentType === "pdf") return null;
     // Prefer the disk-read override (clean file bytes) over the
     // captured stdout (which carries zsh's missing-newline
     // indicator `%` and other shell artifacts). ANSI stripping
@@ -620,6 +624,10 @@ export function BlockViewerModal({
           />
         ) : contentType === "svg" ? (
           <ImageView bytes={renderBytes ?? bytes} kind="svg" style={{ flex: 1 }} />
+        ) : contentType === "pdf" ? (
+          // M11.1: routing lands with a placeholder. M11.2
+          // replaces PdfView's body with real pdf.js render.
+          <PdfView bytes={renderBytes ?? bytes ?? new Uint8Array()} />
         ) : contentType === "markdown" && text !== null ? (
           <MarkdownView text={text} style={{ flex: 1 }} />
         ) : (

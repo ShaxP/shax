@@ -27,6 +27,7 @@
 
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
+import { PdfView } from "./PdfView";
 import { Viewer } from "./Viewer";
 import { HexView } from "./HexView";
 import type { ContentType } from "./detectContentType";
@@ -110,6 +111,16 @@ export function ContentView({
           style={style}
         />
       );
+
+    case "pdf":
+      // M11.1: routing placeholder — PdfView renders a "coming
+      // in M11.2" hint when mode === "rendered". SRC / RAW fall
+      // back to the hex dump, same rule as image: decoding PDF
+      // bytes as text is mojibake, and hex is the honest lens.
+      if (mode === "rendered") {
+        return <PdfView bytes={bytes} />;
+      }
+      return <HexView bytes={bytes} style={style} />;
 
     case "code":
       // Plain code has no separate "rendered" tier — the

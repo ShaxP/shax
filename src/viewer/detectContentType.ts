@@ -21,7 +21,8 @@ export type ContentType =
   | "code" // Default — render with CodeMirror.
   | "markdown" // Render with react-markdown + DOMPurify.
   | "image" // png / jpeg / gif inline <img>.
-  | "svg"; // Sanitised SVG (own renderer; not <img> via data URL).
+  | "svg" // Sanitised SVG (own renderer; not <img> via data URL).
+  | "pdf"; // pdf.js-backed viewer (M11).
 
 /**
  * Lower-case extension → content type. Only the renderer-choosing
@@ -38,6 +39,7 @@ const EXTENSION_MAP: Record<string, ContentType> = {
   gif: "image",
   webp: "image",
   svg: "svg",
+  pdf: "pdf",
 };
 
 /**
@@ -73,6 +75,23 @@ function imageFromMagicBytes(bytes: Uint8Array): ContentType | null {
     bytes[11] === 0x50
   ) {
     return "image";
+  }
+  return null;
+}
+
+/**
+ * PDF magic-byte sniff (M11.1). Header is a fixed 5-byte prefix
+ * — `%PDF-` — followed by a version like `1.4` / `1.7` / `2.0`.
+ * Sniff only the first four bytes so `curl -sO ... && cat` and
+ * every other "captured PDF bytes" path routes into the pdf.js
+ * viewer without needing an extension. Kept as its own function
+ * so `imageFromMagicBytes` stays image-only and testable.
+ */
+function pdfFromMagicBytes(bytes: Uint8Array): ContentType | null {
+  if (bytes.length < 4) return null;
+  // %PDF: 25 50 44 46
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+    return "pdf";
   }
   return null;
 }
@@ -146,12 +165,17 @@ export function detectContentType(input: DetectInput): ContentType {
     }
   }
 
-  // 2. Magic bytes. Decides for binary images even when the user
-  //    cat'd by stdin / via a pipe (rare but happens with
-  //    `curl … | display`-style invocations).
+  // 2. Magic bytes. Decides for binary content even when the
+  //    user cat'd by stdin / via a pipe (rare for images, more
+  //    common for PDFs — `curl -sO ... && cat`, `git show <blob>`).
+  //    PDF is checked before image because both are single-shot
+  //    sniffs; order doesn't matter for correctness (headers
+  //    don't collide), only for micro-consistency.
   if (bytes !== undefined && bytes.length > 0) {
-    const fromBytes = imageFromMagicBytes(bytes);
-    if (fromBytes !== null) return fromBytes;
+    const fromPdf = pdfFromMagicBytes(bytes);
+    if (fromPdf !== null) return fromPdf;
+    const fromImage = imageFromMagicBytes(bytes);
+    if (fromImage !== null) return fromImage;
   }
 
   // 3. SVG via text sniff. `text` is the decoded view of `bytes`
@@ -164,4 +188,4 @@ export function detectContentType(input: DetectInput): ContentType {
 }
 
 // Re-exported for tests.
-export { extensionOf, firstFilenameArg, imageFromMagicBytes, looksLikeSvg };
+export { extensionOf, firstFilenameArg, imageFromMagicBytes, looksLikeSvg, pdfFromMagicBytes };
