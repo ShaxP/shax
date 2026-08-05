@@ -286,13 +286,28 @@ M10.3 wired `appearance.font_size` to xterm and CodeMirror only. Nine other mono
 
 **Explicitly out of scope:** exposing the two ratios as user knobs. Fixed design values — a user complaining about hierarchy is a design conversation, not a preference.
 
+## M11 PDF viewer
+
+**Goal:** peek a PDF inline instead of shelling out to Preview / a browser. Extends the viewer stack (`06`) with one more content type. **Lead:** frontend.
+
+- New `<PdfView>` component sitting next to `MarkdownView` / `HexView` in the viewer routing. Renders via **pdf.js** (Mozilla, Apache 2.0, ~1 MB minified) on a canvas per page, lazy-imported so the bundle doesn't take the hit until a user opens a PDF.
+- Detection: magic bytes (`%PDF`) in `detectContentType.ts` catches any block whose captured output begins with the header — `cat file.pdf`, `curl -sO ... && cat`, `git show <blob>`. Extension `.pdf` covers the disk-read override path. The `ls` widget's file rows gain "open in viewer" for PDFs.
+- v1 features: multi-page navigation (buttons + keyboard), in-content text search (`⌘F`), inline password prompt for encrypted PDFs.
+- Modal-only render (same `BlockViewerModal` surface as image / markdown / hex). No inline-in-block preview in v1.
+
+**Exit:** `cat any.pdf` in a pane surfaces a "View as PDF" affordance; opening it renders the PDF with page nav; `⌘F` searches text; encrypted files prompt for a password; the disk-read override handles files larger than the block store's captured-output cap.
+
+**Explicitly out of scope:** zoom controls beyond fit-to-width, copy-text, annotations, form fields, signatures, print UI, `.docx` / `.xlsx` / `.pptx` (Office formats stay OS-delegated per the design note in the deferred candidate below).
+
+Detail in `17-pdf-viewer.md`. Sliced M11.1 – M11.3 (detection + routing, pdf.js render + navigation, text search).
+
 ## Post-M8 candidates
 
-Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M11→M12+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
+Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M12→M13+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
 
-### PDF viewer
+### PDF viewer follow-ups
 
-PDF-only for now via **pdf.js** (Mozilla, Apache 2.0, ~1 MB, canvas-rendered). Fits the tier-1 rendering slot in `02`. Office formats (`.docx`, `.xlsx`, `.pptx`) are explicitly deferred — the open-source library landscape ranges from "decent for simple documents" to "no viable option," and the honest terminal-first move is to delegate Office to the OS (QuickLook on macOS, associated apps on Windows/Linux) rather than reimplement it at low fidelity. Revisit only if we see real user demand for `.docx` / `.xlsx` peek-in-place.
+Deferred from M11: zoom controls (in / out / fit-width toggle) for small-print PDFs, PDF text copy (pdf.js's `getTextContent` already extracts it for search — wiring copy is small), Office-format viewers (`.docx` / `.xlsx` / `.pptx` explicitly stay OS-delegated — the OSS library landscape doesn't hit the quality bar and reimplementing at low fidelity is the wrong move for a terminal).
 
 ### Community theme drop-in
 
