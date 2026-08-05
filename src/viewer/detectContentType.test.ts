@@ -5,6 +5,7 @@ import {
   firstFilenameArg,
   imageFromMagicBytes,
   looksLikeSvg,
+  pdfFromMagicBytes,
 } from "./detectContentType";
 
 describe("extensionOf", () => {
@@ -64,6 +65,34 @@ describe("imageFromMagicBytes", () => {
   });
 });
 
+describe("pdfFromMagicBytes", () => {
+  it("detects the %PDF- header (v1.4)", () => {
+    // "%PDF-1.4" — the header a normal PDF starts with.
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    expect(pdfFromMagicBytes(bytes)).toBe("pdf");
+  });
+
+  it("detects PDF 2.0 headers the same way (four-byte sniff)", () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x32, 0x2e, 0x30]);
+    expect(pdfFromMagicBytes(bytes)).toBe("pdf");
+  });
+
+  it("returns null for a PNG header", () => {
+    expect(pdfFromMagicBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]))).toBeNull();
+  });
+
+  it("returns null for plaintext that starts with a %", () => {
+    // A shell script starting with `%comment` should NOT
+    // register — the second byte must be `P` (0x50).
+    expect(pdfFromMagicBytes(new Uint8Array([0x25, 0x20, 0x63, 0x6f]))).toBeNull();
+  });
+
+  it("returns null for empty / too-short input", () => {
+    expect(pdfFromMagicBytes(new Uint8Array([]))).toBeNull();
+    expect(pdfFromMagicBytes(new Uint8Array([0x25, 0x50, 0x44]))).toBeNull();
+  });
+});
+
 describe("looksLikeSvg", () => {
   it("matches an inline <svg> root", () => {
     expect(looksLikeSvg("<svg xmlns='http://www.w3.org/2000/svg'><circle r='1'/></svg>")).toBe(
@@ -102,5 +131,25 @@ describe("detectContentType pipeline", () => {
   it("defaults to code", () => {
     expect(detectContentType({ argv: ["cat", "main.rs"], text: "fn main() {}" })).toBe("code");
     expect(detectContentType({ text: "plain text" })).toBe("code");
+  });
+
+  // M11.1 — PDF entry paths
+  it("classifies PDF by extension", () => {
+    expect(detectContentType({ argv: ["cat", "invoice.pdf"] })).toBe("pdf");
+  });
+
+  it("classifies PDF by magic bytes when filename is absent", () => {
+    // "%PDF-1.4" — a bare byte sniff, e.g. `curl -sO ... && cat`
+    // where the argv doesn't carry a filename hint.
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    expect(detectContentType({ bytes })).toBe("pdf");
+  });
+
+  it("classifies PDF by magic bytes even when the filename lies", () => {
+    // A file named `foo.txt` that actually holds PDF bytes.
+    // The extension check hits `foo.txt` → no map entry → falls
+    // through to the magic-byte sniff → pdf.
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x37]);
+    expect(detectContentType({ argv: ["cat", "foo.txt"], bytes })).toBe("pdf");
   });
 });
