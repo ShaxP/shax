@@ -29,6 +29,7 @@ import { hasDistinctSource } from "./ContentView";
 import { shellTokenize } from "../lib/shellTokenize";
 import { detectContentType, firstFilenameArg } from "./detectContentType";
 import { detectLanguage } from "./detectLanguage";
+import { HexView } from "./HexView";
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
 import { PdfView } from "./PdfView";
@@ -576,6 +577,43 @@ export function BlockViewerModal({
           <div style={STATUS_LINE} data-testid="block-viewer-loading">
             Loading…
           </div>
+        ) : contentType === "pdf" ? (
+          // M11.2 fix: PDF gets one dedicated branch that
+          // covers every mode, checked BEFORE the formatter
+          // path. The `cat` formatter's ContentView renders a
+          // compact inline placeholder for PDFs — correct in
+          // block cards ("modal only" per spec §17), wrong
+          // inside the modal itself. Bypassing the formatter
+          // here means the modal always shows the real viewer
+          // in FMT, hex in SRC, and the captured bytes in
+          // RAW, regardless of whether a formatter matched.
+          modalMode === "raw" ? (
+            <pre
+              data-testid="block-viewer-raw"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: "auto",
+                margin: 0,
+                padding: "10px 14px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--font-size-secondary)",
+                lineHeight: 1.5,
+                color: "var(--fg-dim)",
+                background: "var(--pane)",
+              }}
+            >
+              <AnsiSpans text={rawDisplayText} />
+            </pre>
+          ) : modalMode === "src" ? (
+            <HexView bytes={renderBytes ?? bytes} style={{ flex: 1 }} />
+          ) : (
+            // FMT (and INFO, which has no PDF-specific view yet)
+            // both mount the real PdfView.
+            <PdfView bytes={renderBytes ?? bytes ?? new Uint8Array()} />
+          )
         ) : formatterOutput !== null ? (
           // FMT in modal: uncap the formatter's own height via the
           // CSS variable so it fills the panel. The wrapper is a
@@ -624,10 +662,6 @@ export function BlockViewerModal({
           />
         ) : contentType === "svg" ? (
           <ImageView bytes={renderBytes ?? bytes} kind="svg" style={{ flex: 1 }} />
-        ) : contentType === "pdf" ? (
-          // M11.1: routing lands with a placeholder. M11.2
-          // replaces PdfView's body with real pdf.js render.
-          <PdfView bytes={renderBytes ?? bytes ?? new Uint8Array()} />
         ) : contentType === "markdown" && text !== null ? (
           <MarkdownView text={text} style={{ flex: 1 }} />
         ) : (
