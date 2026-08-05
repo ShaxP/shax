@@ -308,15 +308,64 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
 
   // Keyboard navigation. Only active while the pane owns
   // keydown — the modal shell handles Escape.
+  //
+  // Two axes:
+  //   - Page-level (change PDF page): ← / → and ⌘←/⌘→ jump
+  //     to first / last.
+  //   - Scroll-level (within the current page): ↑ / ↓
+  //     scroll a small amount; PageUp / PageDown scroll a
+  //     viewport height; Home / End jump to top / bottom.
+  //     Space acts like PageDown (matches every native PDF
+  //     viewer).
   useEffect(() => {
     if (state.kind !== "loaded") return;
+    const SCROLL_STEP = 60; // ↑/↓ nudge, in CSS px.
     const handler = (e: KeyboardEvent): void => {
+      const scroller = scrollerRef.current;
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         goToPage(e.metaKey || e.ctrlKey ? 1 : state.currentPage - 1);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         goToPage(e.metaKey || e.ctrlKey ? state.pageCount : state.currentPage + 1);
+      } else if (scroller !== null && e.key === "ArrowDown") {
+        e.preventDefault();
+        scroller.scrollBy({ top: SCROLL_STEP });
+      } else if (scroller !== null && e.key === "ArrowUp") {
+        e.preventDefault();
+        scroller.scrollBy({ top: -SCROLL_STEP });
+      } else if (scroller !== null && (e.key === "PageDown" || e.key === " ")) {
+        e.preventDefault();
+        // Reading flow: if already at the bottom of the
+        // current page's scroll, advance to the next PDF
+        // page (scrolled to top by the render effect).
+        // Threshold of 2 px absorbs sub-pixel rounding.
+        const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+        if (atBottom && state.currentPage < state.pageCount) {
+          goToPage(state.currentPage + 1);
+          scroller.scrollTo({ top: 0 });
+        } else {
+          scroller.scrollBy({ top: scroller.clientHeight * 0.9 });
+        }
+      } else if (scroller !== null && e.key === "PageUp") {
+        e.preventDefault();
+        const atTop = scroller.scrollTop <= 2;
+        if (atTop && state.currentPage > 1) {
+          goToPage(state.currentPage - 1);
+          // Jump to bottom of the just-loaded prev page. The
+          // render effect writes canvas dimensions
+          // synchronously; scrollHeight is available on the
+          // next microtask.
+          queueMicrotask(() => scroller.scrollTo({ top: scroller.scrollHeight }));
+        } else {
+          scroller.scrollBy({ top: -scroller.clientHeight * 0.9 });
+        }
+      } else if (scroller !== null && e.key === "Home") {
+        e.preventDefault();
+        scroller.scrollTo({ top: 0 });
+      } else if (scroller !== null && e.key === "End") {
+        e.preventDefault();
+        scroller.scrollTo({ top: scroller.scrollHeight });
       }
     };
     window.addEventListener("keydown", handler);
