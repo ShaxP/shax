@@ -27,7 +27,6 @@
 
 import { ImageView } from "./ImageView";
 import { MarkdownView } from "./MarkdownView";
-import { PdfView } from "./PdfView";
 import { Viewer } from "./Viewer";
 import { HexView } from "./HexView";
 import type { ContentType } from "./detectContentType";
@@ -113,12 +112,15 @@ export function ContentView({
       );
 
     case "pdf":
-      // M11.1: routing placeholder — PdfView renders a "coming
-      // in M11.2" hint when mode === "rendered". SRC / RAW fall
-      // back to the hex dump, same rule as image: decoding PDF
-      // bytes as text is mojibake, and hex is the honest lens.
+      // M11.2: PDFs are modal-only per spec §17. Inline (via
+      // the cat formatter's block-card render) shows a compact
+      // "click to view" hint that dispatches to open the
+      // modal. Only BlockViewerModal mounts the full PdfView —
+      // that keeps the ~1 MB pdfjs-dist bundle out of the
+      // inline path. SRC / RAW still fall back to the hex dump
+      // (decoding PDF bytes as text is mojibake).
       if (mode === "rendered") {
-        return <PdfView bytes={bytes} />;
+        return <PdfInlinePlaceholder bytes={bytes} style={style} />;
       }
       return <HexView bytes={bytes} style={style} />;
 
@@ -134,4 +136,42 @@ export function ContentView({
         />
       );
   }
+}
+
+/** M11.2: compact inline placeholder for PDF content in the
+ *  block card. Doesn't import pdfjs — the full viewer lives
+ *  in `PdfView`, mounted only by `BlockViewerModal`. This
+ *  keeps the ~1 MB pdfjs bundle out of the inline render
+ *  path, which every block goes through. */
+function PdfInlinePlaceholder({
+  bytes,
+  style,
+}: {
+  bytes: Uint8Array;
+  style?: CSSProperties;
+}): React.ReactElement {
+  const kib = Math.max(1, Math.round(bytes.byteLength / 1024));
+  return (
+    <div
+      data-testid="pdf-inline-placeholder"
+      style={{
+        ...style,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        padding: "24px 16px",
+        color: "var(--fg-dim)",
+        fontFamily: "var(--font-ui)",
+        fontSize: 13,
+        minHeight: 96,
+      }}
+    >
+      <div style={{ color: "var(--fg)", fontWeight: 500 }}>PDF · {kib.toLocaleString()} KiB</div>
+      <div style={{ fontSize: 11.5, color: "var(--fg-faint)" }}>
+        Click the eye icon in the block header to open in the viewer.
+      </div>
+    </div>
+  );
 }
