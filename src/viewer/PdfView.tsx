@@ -282,11 +282,14 @@ const PDF_TEXT_LAYER_CSS = `
   cursor: text;
   transform-origin: 0% 0%;
 }
-.shax-pdf-text-layer span.shax-pdf-hit {
+.shax-pdf-text-layer mark.shax-pdf-hit {
   background: color-mix(in srgb, var(--amber) 55%, transparent);
+  color: transparent;
   border-radius: 2px;
+  padding: 0;
+  margin: 0;
 }
-.shax-pdf-text-layer span.shax-pdf-hit-current {
+.shax-pdf-text-layer mark.shax-pdf-hit-current {
   background: color-mix(in srgb, var(--amber) 90%, transparent);
   outline: 2px solid var(--amber);
   outline-offset: 1px;
@@ -623,21 +626,33 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
   }, [state]);
 
   // M11.3: after the text layer renders (or when the query /
-  // current match changes), walk its spans and toggle
-  // highlight classes. This runs on every relevant state
-  // change so pagination re-applies highlights against the
-  // freshly-built spans.
+  // current match changes), walk its spans and paint
+  // highlight `<mark>` elements around JUST the matched
+  // substring — not the whole span. Runs on every relevant
+  // state change so pagination re-applies highlights against
+  // the freshly-built spans.
+  //
+  // Splitting spans at match boundaries: pdf.js positions
+  // each `<span>` absolutely with an inline `transform`. The
+  // text inside a span flows inline within the span's box,
+  // so wrapping a portion in `<mark>` produces a highlight
+  // that sits exactly over the matched glyphs and inherits
+  // the span's transform + font metrics automatically. No
+  // per-character coordinate math needed.
   useEffect(() => {
     const el = textLayerRef.current;
     if (el === null) return;
     if (state.kind !== "loaded") return;
     const q = searchQuery.trim().toLowerCase();
     const spans = el.querySelectorAll<HTMLSpanElement>("span");
-    // Clear previous highlights up front so a shortened query
-    // (or closed search) leaves nothing stale behind.
+    // Clear previous highlights up front: restore each span's
+    // original text (any `<mark>` children collapse back into
+    // plain text via textContent read+write).
     spans.forEach((s) => {
-      s.classList.remove("shax-pdf-hit");
-      s.classList.remove("shax-pdf-hit-current");
+      if (s.querySelector(".shax-pdf-hit") !== null) {
+        // eslint-disable-next-line no-self-assign
+        s.textContent = s.textContent;
+      }
     });
     if (q.length < 2 || !searchOpen) return;
     // Which hit on this page corresponds to the currently-
@@ -654,25 +669,41 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
       currentLocalHitIdx = count;
     }
     let localHit = 0;
+    let currentMarkEl: HTMLElement | null = null;
     spans.forEach((span) => {
-      const text = span.textContent ?? "";
-      if (text.length === 0) return;
-      // Simple contains-check: paint the whole span if any
-      // occurrence of the query lives inside it. For M11.3
-      // v1, we intentionally don't split spans at match
-      // boundaries — that would need pdf.js's own text-
-      // divs-splitter and is measurably heavier. Users see a
-      // slightly wider highlight than the exact hit; still
-      // reads correctly.
-      if (text.toLowerCase().includes(q)) {
-        span.classList.add("shax-pdf-hit");
-        if (localHit === currentLocalHitIdx) {
-          span.classList.add("shax-pdf-hit-current");
-          span.scrollIntoView({ block: "center", behavior: "auto" });
+      const original = span.textContent ?? "";
+      if (original.length === 0) return;
+      const lower = original.toLowerCase();
+      if (!lower.includes(q)) return;
+      // Rebuild the span: alternate plain text and `<mark>`
+      // for each occurrence. Original casing preserved by
+      // slicing from the untouched `original`.
+      span.textContent = "";
+      let cursor = 0;
+      while (cursor < original.length) {
+        const idx = lower.indexOf(q, cursor);
+        if (idx === -1) {
+          span.append(document.createTextNode(original.slice(cursor)));
+          break;
         }
+        if (idx > cursor) {
+          span.append(document.createTextNode(original.slice(cursor, idx)));
+        }
+        const mark = document.createElement("mark");
+        mark.className = "shax-pdf-hit";
+        if (localHit === currentLocalHitIdx) {
+          mark.classList.add("shax-pdf-hit-current");
+          currentMarkEl = mark;
+        }
+        mark.textContent = original.slice(idx, idx + q.length);
+        span.append(mark);
+        cursor = idx + q.length;
         localHit++;
       }
     });
+    if (currentMarkEl !== null) {
+      (currentMarkEl as HTMLElement).scrollIntoView({ block: "center", behavior: "auto" });
+    }
   }, [state, searchQuery, searchOpen, matches, searchIndex]);
 
   const goToPage = useCallback((next: number): void => {
