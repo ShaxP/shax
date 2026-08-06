@@ -584,10 +584,23 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
 
       // Build the TextLayer over the canvas. Clear any prior
       // page's spans first, then let pdf.js re-populate.
+      //
+      // pdf.js v6 sizes the container via
+      // `round(down, var(--total-scale-factor) * pageWidth,
+      // var(--scale-round-x))` (see `setLayerDimensions` in
+      // the pdfjs bundle). If those CSS custom properties
+      // aren't set on the container, the `var()` collapses to
+      // nothing, the `round()` becomes invalid, the container
+      // renders 0×0, and every span's absolute position lands
+      // in the wrong place — the classic "highlights in the
+      // wrong spot" bug. Setting them explicitly restores
+      // correct positioning.
       if (textLayerEl !== null) {
         textLayerEl.textContent = "";
-        textLayerEl.style.width = `${cssViewport.width}px`;
-        textLayerEl.style.height = `${cssViewport.height}px`;
+        textLayerEl.style.setProperty("--scale-factor", String(cssScale));
+        textLayerEl.style.setProperty("--total-scale-factor", String(cssScale));
+        textLayerEl.style.setProperty("--scale-round-x", "1px");
+        textLayerEl.style.setProperty("--scale-round-y", "1px");
         try {
           const textContent = await page.getTextContent();
           if (cancelled) return;
