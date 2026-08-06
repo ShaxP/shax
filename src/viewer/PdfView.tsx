@@ -73,6 +73,35 @@ function isPasswordException(err: unknown): boolean {
   return typeof name === "string" && name === "PasswordException";
 }
 
+// Polyfill `ReadableStream[Symbol.asyncIterator]` on WebKit
+// builds that don't ship it. pdf.js's `getTextContent`
+// internally does `for await (const chunk of stream)`; on
+// Safari < 17.4 / macOS < 14.4 (which every Tauri WKWebView
+// on those OS versions inherits) that fails with
+// "undefined is not a function". The polyfill is spec-shape
+// and idempotent — installed at first PdfView mount, no-op
+// on modern engines. Reference: whatwg/streams spec + the
+// widely-shared MDN example.
+function installReadableStreamAsyncIteratorPolyfill(): void {
+  if (typeof ReadableStream === "undefined") return;
+  const proto = ReadableStream.prototype as unknown as Record<PropertyKey, unknown>;
+  if (Symbol.asyncIterator in proto) return;
+  proto[Symbol.asyncIterator] = async function* (
+    this: ReadableStream<unknown>,
+  ): AsyncGenerator<unknown, void, void> {
+    const reader = this.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+}
+
 // Lazy singleton — pdfjs-dist's `getDocument` needs the worker
 // URL set once at module scope, not per-invocation.
 let pdfjsModulePromise: Promise<typeof import("pdfjs-dist")> | null = null;
@@ -80,6 +109,7 @@ let pdfjsModulePromise: Promise<typeof import("pdfjs-dist")> | null = null;
 function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
   if (pdfjsModulePromise === null) {
     pdfjsModulePromise = (async () => {
+      installReadableStreamAsyncIteratorPolyfill();
       const mod = await import("pdfjs-dist");
       mod.GlobalWorkerOptions.workerSrc = PdfWorkerUrl;
       return mod;
