@@ -23,11 +23,24 @@ vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({
 
 const mockGetDocument = vi.fn();
 
+// TextLayer is a stub — we only assert it's constructed +
+// `.render()` is called. jsdom doesn't paint the spans
+// anyway, so search highlight visuals aren't exercised here.
+class MockTextLayer {
+  constructor(_opts: unknown) {
+    void _opts;
+  }
+  render(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: { workerSrc: "" },
   getDocument: (options: unknown): { promise: Promise<unknown> } => ({
     promise: mockGetDocument(options) as Promise<unknown>,
   }),
+  TextLayer: MockTextLayer,
 }));
 
 // Imported after the mock so PdfView's dynamic import resolves
@@ -36,7 +49,7 @@ import { PdfView } from "./PdfView";
 
 // ── Fixtures ───────────────────────────────────────────────
 
-function makeMockPage() {
+function makeMockPage(text: string = "") {
   return {
     getViewport: ({ scale }: { scale: number }) => ({
       width: 100 * scale,
@@ -46,13 +59,21 @@ function makeMockPage() {
       promise: Promise.resolve(),
       cancel: vi.fn(),
     }),
+    // M11.3: search extracts text from every page. Return one
+    // item so `text` shows up in the flat pageText string.
+    getTextContent: () =>
+      Promise.resolve({
+        items: text === "" ? [] : [{ str: text }],
+      }),
   };
 }
 
-function makeMockDoc(numPages: number) {
+function makeMockDoc(numPages: number, pageTexts: readonly string[] = []) {
   return {
     numPages,
-    getPage: vi.fn().mockResolvedValue(makeMockPage()),
+    getPage: vi
+      .fn()
+      .mockImplementation((n: number) => Promise.resolve(makeMockPage(pageTexts[n - 1] ?? ""))),
     cleanup: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -176,5 +197,156 @@ describe("PdfView", () => {
     });
     expect(screen.getByTestId("pdf-view-error")).toBeInTheDocument();
     expect(screen.getByTestId("pdf-view-error")).toHaveTextContent(/corrupt file/);
+  });
+
+  // ── M11.3 search ─────────────────────────────────────────
+
+  async function loadWithPages(pages: readonly string[]): Promise<void> {
+    mockGetDocument.mockResolvedValue(makeMockDoc(pages.length, pages));
+    render(<PdfView bytes={new Uint8Array([0x25, 0x50, 0x44, 0x46])} />);
+    // Wait for load + text extraction to settle.
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+  }
+
+  it("⌘F opens the search bar and focuses its input", async () => {
+    await loadWithPages(["hello world", "goodbye world"]);
+    expect(screen.queryByTestId("pdf-search-bar")).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId<HTMLInputElement>("pdf-search-input");
+    expect(input).toBeInTheDocument();
+    // queueMicrotask defers focus; flush it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("shows hit count and 'no matches' for empty results", async () => {
+    await loadWithPages(["hello world"]);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId<HTMLInputElement>("pdf-search-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "zz" } });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("0");
+  });
+
+  it("counts hits across pages", async () => {
+    // Distinct non-overlapping queries per page — avoids
+    // accidental matches inside other words (e.g. "the" in
+    // "another").
+    await loadWithPages(["alpha bravo", "alpha charlie", "delta alpha echo"]);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId<HTMLInputElement>("pdf-search-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "alpha" } });
+      await Promise.resolve();
+    });
+    // Three "alpha" occurrences across three pages.
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("1 of 3");
+  });
+
+  it("Next / Prev buttons cycle through matches (wrapping)", async () => {
+    await loadWithPages(["foo one", "foo two", "foo three"]);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId<HTMLInputElement>("pdf-search-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "foo" } });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("1 of 3");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pdf-search-next"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("2 of 3");
+
+    // Wrap forward: 3 → 1.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pdf-search-next"));
+      fireEvent.click(screen.getByTestId("pdf-search-next"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("1 of 3");
+
+    // Wrap backward: 1 → 3.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pdf-search-prev"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent("3 of 3");
+  });
+
+  it("Next advances to the page containing the next match", async () => {
+    await loadWithPages(["page one nothing", "page two contains needle", "page three nothing"]);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId<HTMLInputElement>("pdf-search-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "needle" } });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The only match is on page 2 → currentPage should have
+    // jumped there.
+    expect(screen.getByTestId("pdf-page-indicator")).toHaveTextContent("2 / 3");
+  });
+
+  it("Esc closes the search bar", async () => {
+    await loadWithPages(["hello world"]);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-bar")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("pdf-search-bar")).toBeNull();
+  });
+
+  it("shows 'Indexing…' while text extraction is in flight", async () => {
+    // Delay every page's getTextContent so extraction hangs.
+    const delayedDoc = {
+      numPages: 1,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 100 * scale,
+          height: 130 * scale,
+        }),
+        render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
+        getTextContent: () => new Promise(() => undefined),
+      }),
+      cleanup: vi.fn().mockResolvedValue(undefined),
+    };
+    mockGetDocument.mockResolvedValue(delayedDoc);
+    render(<PdfView bytes={new Uint8Array([0x25, 0x50, 0x44, 0x46])} />);
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("pdf-search-count")).toHaveTextContent(/indexing/i);
   });
 });
