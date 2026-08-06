@@ -384,19 +384,25 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
   // 500-page PDF takes a couple of seconds. The search UI
   // shows an "Indexing…" hint while pageTexts is null.
   //
-  // Reset pageTexts to null when the doc changes so a fresh
-  // bytes prop retriggers extraction.
+  // Deps are `[loadedDoc, loadedPageCount]`, NOT `[state]`.
+  // Depending on the whole state object re-fired extraction
+  // on every page navigation — and since the search-jump
+  // effect (which flips currentPage when a match lives on
+  // another page) fires once extraction completes, a
+  // completed extraction would restart itself in an
+  // infinite loop. `state.doc` reference is stable across
+  // page navigations; only a new document changes it.
+  const loadedDoc = state.kind === "loaded" ? state.doc : null;
+  const loadedPageCount = state.kind === "loaded" ? state.pageCount : 0;
   useEffect(() => {
-    if (state.kind !== "loaded") return;
-    const doc = state.doc;
-    const pageCount = state.pageCount;
+    if (loadedDoc === null) return;
     let cancelled = false;
     setPageTexts(null);
     void (async () => {
       const texts: string[] = [];
-      for (let i = 1; i <= pageCount; i++) {
+      for (let i = 1; i <= loadedPageCount; i++) {
         if (cancelled) return;
-        const page = await doc.getPage(i);
+        const page = await loadedDoc.getPage(i);
         if (cancelled) return;
         const content = await page.getTextContent();
         // Concatenate every text item with a space between; the
@@ -417,7 +423,7 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [state]);
+  }, [loadedDoc, loadedPageCount]);
 
   // M11.3: match computation. Case-insensitive substring
   // search over each page's flat text. `null` when query is
