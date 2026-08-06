@@ -302,10 +302,13 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
   //
   // `pageTexts[i]` is page (i+1)'s flat, whitespace-normalised
   // text. `null` while background extraction is in flight.
-  // Extraction runs once after document load; we don't
-  // re-extract on page navigation because the whole doc is
-  // extracted upfront.
+  // `extractionError` is set when a page's getPage /
+  // getTextContent throws — search then reports "Search
+  // unavailable" instead of eternal "Indexing…". Extraction
+  // runs once per loaded document.
   const [pageTexts, setPageTexts] = useState<string[] | null>(null);
+  const [extractionProgress, setExtractionProgress] = useState(0);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
@@ -398,27 +401,45 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
     if (loadedDoc === null) return;
     let cancelled = false;
     setPageTexts(null);
+    setExtractionProgress(0);
+    setExtractionError(null);
     void (async () => {
       const texts: string[] = [];
-      for (let i = 1; i <= loadedPageCount; i++) {
+      try {
+        for (let i = 1; i <= loadedPageCount; i++) {
+          if (cancelled) return;
+          const page = await loadedDoc.getPage(i);
+          if (cancelled) return;
+          const content = await page.getTextContent();
+          if (cancelled) return;
+          // Concatenate every text item with a space between;
+          // the exact whitespace shape doesn't matter for
+          // substring search, only that adjacent items don't
+          // glue together (which would let `foo` fail to
+          // match `fooBAR` split into two items).
+          const flat = content.items
+            .map((it) =>
+              typeof (it as { str?: unknown }).str === "string" ? (it as { str: string }).str : "",
+            )
+            .filter((s) => s.length > 0)
+            .join(" ");
+          texts.push(flat);
+          setExtractionProgress(i);
+        }
         if (cancelled) return;
-        const page = await loadedDoc.getPage(i);
+        setPageTexts(texts);
+      } catch (err) {
         if (cancelled) return;
-        const content = await page.getTextContent();
-        // Concatenate every text item with a space between; the
-        // exact whitespace shape doesn't matter for substring
-        // search, only that adjacent items don't glue together
-        // (which would let `foo` match across `foo bar` boundary
-        // in the wrong direction — actually the opposite: it'd
-        // fail to match `fooBAR` split into two items).
-        const flat = content.items
-          .map((it) => ("str" in it ? it.str : ""))
-          .filter((s) => s.length > 0)
-          .join(" ");
-        texts.push(flat);
+        // Silent-failure was the M11.3 bug that stuck the
+        // indexer at "Indexing…" forever: a single-page
+        // throw ended the loop and no state was ever set.
+        // Now we surface it — the search UI shows "Search
+        // unavailable" and the console carries the detail.
+        console.warn("[PdfView] text extraction failed:", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setExtractionError(message);
+        setPageTexts([]);
       }
-      if (cancelled) return;
-      setPageTexts(texts);
     })();
     return () => {
       cancelled = true;
@@ -819,14 +840,22 @@ export function PdfView({ bytes }: PdfViewProps): React.ReactElement {
             spellCheck={false}
             autoComplete="off"
           />
-          <span style={SEARCH_COUNT} data-testid="pdf-search-count">
-            {pageTexts === null
-              ? "Indexing…"
-              : searchQuery.trim().length < 2
-                ? "type ≥ 2 chars"
-                : matches.length === 0
-                  ? "0"
-                  : `${searchIndex + 1} of ${matches.length}`}
+          <span
+            style={SEARCH_COUNT}
+            data-testid="pdf-search-count"
+            title={extractionError ?? undefined}
+          >
+            {extractionError !== null
+              ? "unavailable"
+              : pageTexts === null
+                ? loadedPageCount > 0
+                  ? `Indexing ${extractionProgress}/${loadedPageCount}…`
+                  : "Indexing…"
+                : searchQuery.trim().length < 2
+                  ? "type ≥ 2 chars"
+                  : matches.length === 0
+                    ? "0"
+                    : `${searchIndex + 1} of ${matches.length}`}
           </span>
           <button
             type="button"
