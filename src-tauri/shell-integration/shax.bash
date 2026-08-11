@@ -95,12 +95,6 @@ _shax_preexec() {
   printf '\033]133;C;%s\007' "$_cmd"
 }
 
-# Chain into PROMPT_COMMAND without clobbering anything the user already has.
-# The `${PROMPT_COMMAND:+; $PROMPT_COMMAND}` form is a no-op when PROMPT_COMMAND
-# is unset, otherwise prepends our hook with a `;` separator.
-PROMPT_COMMAND="_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
-trap '_shax_preexec' DEBUG
-
 # ── M12.2 always-assertive hardening (spec §18 D2) ────────────────────────
 #
 # Runs after the user's rc has been sourced. Unconditional: bare PS1 (Shax
@@ -112,8 +106,16 @@ trap '_shax_preexec' DEBUG
 # bash has no analog to zsh-syntax-highlighting or zsh-vi-mode worth
 # handling specially; the line editor is readline in either mode. Vi
 # support here is `set -o vi`, which is minimal but functional.
+#
+# ORDER MATTERS: this block runs BEFORE the DEBUG trap is installed
+# below. Bash fires DEBUG for each simple command including assignments
+# and `set` builtins, so if we ran PS1='...' / PS2='...' / set -o emacs
+# after the trap was in place, `_shax_preexec` would emit a phantom
+# OSC 133 C for each, opening a bogus block that ate the shell's
+# startup output. Running assertive setup first keeps DEBUG safely
+# scoped to user commands.
 if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
-  # Bare PS1: single OSC 133 B marker. Precmd above already emits A with
+  # Bare PS1: single OSC 133 B marker. Precmd below already emits A with
   # cwd + branch on every prompt cycle; PS1 carries only B to close the
   # "prompt-rendering" region so anything after it is user typing.
   # Wrapped in \[...\] so readline's column math ignores it.
@@ -129,3 +131,9 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
     set -o emacs 2>/dev/null
   fi
 fi
+
+# Chain into PROMPT_COMMAND without clobbering anything the user already has.
+# The `${PROMPT_COMMAND:+; $PROMPT_COMMAND}` form is a no-op when PROMPT_COMMAND
+# is unset, otherwise prepends our hook with a `;` separator.
+PROMPT_COMMAND="_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+trap '_shax_preexec' DEBUG

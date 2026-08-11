@@ -1614,6 +1614,23 @@ mod tests {
             shim.contains("set -o emacs"),
             "shax.bash emacs branch must set emacs mode",
         );
+        // ORDER CONSTRAINT (regression guard). The always-assertive block
+        // must run BEFORE the DEBUG trap is installed. If the trap is
+        // already in place when we run PS1=/PS2=/set -o, bash fires
+        // `_shax_preexec` for each assignment / builtin, emitting a
+        // phantom OSC 133 C that opens a bogus block and eats the
+        // shell's startup output. See git blame + the fix commit.
+        let assertive_pos = shim
+            .find(r"PS1='\[\e]133;B\a\]'")
+            .expect("PS1 reset must exist");
+        let trap_pos = shim
+            .find("trap '_shax_preexec' DEBUG")
+            .expect("DEBUG trap install must exist");
+        assert!(
+            assertive_pos < trap_pos,
+            "shax.bash assertive block (PS1 / PS2 / set -o) must run BEFORE the DEBUG trap install \
+             to avoid a phantom-block regression on macOS bash 3.2",
+        );
     }
 
     #[test]
