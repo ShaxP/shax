@@ -136,8 +136,18 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
 
     # Emit OSC 133;M on every keymap change so the frontend statusline
     # can drive the vi sub-chip (INSERT / NORMAL / VISUAL). We chain
-    # onto any existing zle-keymap-select widget (zsh-vi-mode installs
-    # one for cursor shape) so their setup still runs.
+    # onto any existing zle-keymap-select widget so the plugin's setup
+    # (cursor shape, etc.) still runs.
+    #
+    # Caveat this handles: zsh-vi-mode's *visual* mode does NOT change
+    # $KEYMAP — the plugin stays in the vicmd keymap and tracks
+    # visual state internally via $ZVM_MODE. So zle-keymap-select
+    # alone misses visual entry / exit. We register a second signal
+    # further down that hooks zvm's own mode-select callback and
+    # emits with the resolved zvm mode — that's the one that catches
+    # visual reliably. When both fire (mode transitions that cross
+    # keymap boundaries too, like normal ↔ insert), the zvm hook
+    # fires SECOND, so its emission wins.
     _shax_original_keymap_select="${widgets[zle-keymap-select]#user:}"
     if [[ "$_shax_original_keymap_select" == "$widgets[zle-keymap-select]" ]]; then
       _shax_original_keymap_select=""
@@ -150,6 +160,29 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
       printf '\033]133;M;%s\007' "$KEYMAP"
     }
     zle -N zle-keymap-select _shax_emit_keymap
+
+    # zsh-vi-mode integration: hook its `zvm_after_select_vi_mode`
+    # callback so visual mode (which the plugin implements without
+    # a KEYMAP switch) reaches the frontend. Runs after any keymap
+    # signal above, so its emit is what the frontend lands on.
+    #
+    # The plugin's mode codes are single-letter tokens (`i` insert,
+    # `n` normal, `v` visual, `vl` visual-line, `r` replace). Map
+    # to the standard zsh keymap names the frontend already
+    # understands (viins / vicmd / visual). Visual-line collapses
+    # into `visual` — no separate frontend label. Replace falls
+    # under `vicmd` (the frontend renders NORMAL).
+    if (( ${+zvm_after_select_vi_mode_commands} )); then
+      _shax_emit_zvm_mode() {
+        case "$ZVM_MODE" in
+          "$ZVM_MODE_INSERT") printf '\033]133;M;%s\007' viins ;;
+          "$ZVM_MODE_NORMAL") printf '\033]133;M;%s\007' vicmd ;;
+          "$ZVM_MODE_VISUAL"|"$ZVM_MODE_VISUAL_LINE") printf '\033]133;M;%s\007' visual ;;
+          "$ZVM_MODE_REPLACE") printf '\033]133;M;%s\007' vicmd ;;
+        esac
+      }
+      zvm_after_select_vi_mode_commands+=(_shax_emit_zvm_mode)
+    fi
 
     # Prime the frontend on the very first prompt with the starting
     # keymap so the pill isn't blank until the user first switches

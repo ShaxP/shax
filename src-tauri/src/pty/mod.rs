@@ -1559,6 +1559,20 @@ mod tests {
             shim.contains("zle -N zle-keymap-select"),
             "shax.zsh vi branch must register a zle-keymap-select widget",
         );
+        // zsh-vi-mode's visual mode doesn't switch $KEYMAP — it tracks
+        // state via $ZVM_MODE. So the vi branch also hooks the plugin's
+        // own `zvm_after_select_vi_mode_commands` callback array to
+        // catch visual entry/exit. Without this, VISUAL never shows in
+        // the sub-chip.
+        assert!(
+            shim.contains("zvm_after_select_vi_mode_commands"),
+            "shax.zsh vi branch must hook zsh-vi-mode's mode-select callback \
+             so visual mode reaches the frontend",
+        );
+        assert!(
+            shim.contains("_shax_emit_zvm_mode"),
+            "shax.zsh vi branch must define the zvm-mode emit helper",
+        );
         // Emacs branch: force via source-time bindkey, precmd re-force,
         // and zle-line-init override — defence in depth against
         // zsh-vi-mode's deferred init.
@@ -1604,10 +1618,15 @@ mod tests {
 
     #[test]
     fn build_shell_command_sets_line_editing_env_var() {
-        // M12.2: the shim reads $SHAX_LINE_EDITING to branch. In the
-        // test sandbox `preferences::load()` finds no file and falls
-        // back to Preferences::default() — emacs — so the env var
-        // must land with the "emacs" value.
+        // M12.2: the shim reads $SHAX_LINE_EDITING to branch. The
+        // value must be one of the two documented tokens the shim
+        // knows how to match; whichever one lands here depends on
+        // what `preferences::load()` finds on disk on the machine
+        // running the test (fresh install → emacs; developer with
+        // a persisted vi pick → vi). Asserting the exact value
+        // would fail in the second case, so we assert the surface
+        // contract instead: the var is set to one of the two known
+        // tokens.
         let opts = SpawnOpts {
             rows: 24,
             cols: 80,
@@ -1619,7 +1638,10 @@ mod tests {
             .get_env("SHAX_LINE_EDITING")
             .and_then(|s| s.to_str())
             .expect("SHAX_LINE_EDITING must be set");
-        assert_eq!(mode, "emacs");
+        assert!(
+            mode == "emacs" || mode == "vi",
+            "SHAX_LINE_EDITING must be `emacs` or `vi`, got {mode:?}",
+        );
     }
 
     #[test]
