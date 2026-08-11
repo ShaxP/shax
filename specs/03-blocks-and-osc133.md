@@ -48,6 +48,8 @@ Shax ships integration snippets for zsh, bash, and fish that emit the markers:
 
 The scripts must be idempotent and safe to source twice, must not clobber a user's existing hooks (chain, do not overwrite), and must degrade to a plain terminal if Shax is not the host. Installation is offered on first run and documented; the scripts live with the app and are sourced from the user's shell rc.
 
+**Carve-out (M12.2, `18-prompt-overhaul.md` §D2):** the `appearance.shell_integration` preference (`"assertive"` default / `"cooperative"`) opens a narrow, deliberate exception to the "chain, do not overwrite" rule for three specific overrides in assertive mode: (a) `bindkey -e` / `set -o emacs` forced after the user rc runs, so the strip's emacs-style key bindings aren't fighting vi-mode; (b) `PROMPT` / `PS1` reset to a bare A+B OSC 133 marker pair so Shax owns the visible prompt real-estate (M12.4); (c) `zsh-syntax-highlighting` unloaded when detected, so it doesn't compete with Shax's client-side tokenizer (M12.5). Cooperative mode is the escape hatch — it restores today's chain-only behavior verbatim. The OSC 133 emission itself, the `precmd` / `preexec` / `PROMPT_COMMAND` chaining, and the ZDOTDIR / rcfile tempdir plumbing all remain non-destructive in both modes. The user's dotfiles are never edited.
+
 ## Alternate screen
 
 Independently of OSC 133, the backend watches for `?1049h` and `?1049l` to know when a program has taken the alternate screen, so the frontend stays in raw passthrough for that pane. See `02`.

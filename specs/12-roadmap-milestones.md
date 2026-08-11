@@ -301,6 +301,22 @@ M10.3 wired `appearance.font_size` to xterm and CodeMirror only. Nine other mono
 
 Detail in `17-pdf-viewer.md`. Sliced M11.1 – M11.3 (detection + routing, pdf.js render + navigation, text search).
 
+## M12 Prompt overhaul
+
+**Goal:** the prompt strip becomes worthy of a daily driver — multi-line editing, focus-on-click, an honest three-mode indicator, a Shax-owned prompt header rich enough to replace what starship / p10k gave up, and per-token syntax highlighting on the input line. **Lead:** frontend, with core for the shell-integration hardening.
+
+- Focus-on-click and mode-pill three-way (`COMMAND` for prompt focus, `CHAT` for assistant focus, `BLOCK` for block-focus mode); onboarding shortcut chips become real buttons.
+- Shell integration hardening: shim resets PS1 / `PROMPT` to a bare OSC 133 A+B marker, forces `bindkey -e` / `set -o emacs`, and unloads `zsh-syntax-highlighting` in the new `appearance.shell_integration = "assertive"` default. Cooperative mode is the escape hatch (restores today's chain-only behavior). Fish is out of scope for the hardening.
+- Multi-line prompt input: `\n` grows a row in the mirror renderer, `Shift+Enter` sends `\` + `\n` for shell PS2 continuation, bracketed-paste always on, large-paste (`≥ 5 lines OR ≥ 500 bytes`) gated behind a confirmation modal.
+- Custom prompt header: `user@host · cwd · ⎇ branch ↑n ↓n` on the left, live `HH:MM:SS` on the right, ticking from a single App-level interval.
+- Client-side syntax highlighting on the input line via a hand-rolled POSIX tokenizer (command / subcommand / flag / operator / string / variable / comment); colors from new `--syntax-*` theme tokens.
+
+**Exit:** clicking anywhere in the pane background focuses the prompt; the pill accurately reflects one of three surfaces; a default install lands on a bare Shax-owned prompt with no starship / p10k paint; `Shift+Enter` composes multi-line commands; the header renders enriched content that ticks; commands color as you type; every path has a cooperative-mode / fallback escape hatch.
+
+**Explicitly out of scope:** a local line editor (history / completion / kill-ring in-strip — we keep mirroring the shell), full-grammar argv-aware tokenization, prompt fidelity inside SSH / `docker exec` / nested subshells, per-cluster header preferences, editing the user's dotfiles.
+
+Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.5 (focus + mode pill, shell integration hardening, multi-line input, custom header, syntax highlighting).
+
 ## Post-M8 candidates
 
 Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M12→M13+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
