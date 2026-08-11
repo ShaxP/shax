@@ -428,31 +428,21 @@ describe("PromptStrip / paste handling (M12.3)", () => {
     expect(screen.getByTestId("confirm-paste-modal")).toBeInTheDocument();
   });
 
-  it("confirming a large paste with toggle-on backslash-continues embedded newlines", () => {
+  it("confirming a large paste sends the payload wrapped in bracketed-paste with raw LFs", () => {
+    // The modal no longer has a toggle — bracketed-paste + raw LFs is
+    // the only path. Shell's bracketed-paste handling inserts the
+    // payload into the buffer as multi-line text; user hits Enter to
+    // submit. See ConfirmPasteModal docblock for why the earlier
+    // `\`-prefix toggle was removed.
     const onInput = vi.fn();
     render(<PromptStrip cwd={null} branch={null} line={emptyPromptLine} onInput={onInput} />);
     firePaste(screen.getByTestId("prompt-strip"), "a\nb\nc\nd\ne");
-    // Confirm with the toggle default-on.
     fireEvent.click(screen.getByTestId("confirm-paste-confirm"));
     expect(onInput).toHaveBeenCalledTimes(1);
     const bytes = onInput.mock.calls[0]?.[0] as Uint8Array;
     const s = new TextDecoder().decode(bytes);
-    // Every embedded LF got \-prefixed so the shell sees one command
-    // joined by backslash-continuation.
-    expect(s).toBe(`${BRACKETED_START}a\\\nb\\\nc\\\nd\\\ne${BRACKETED_END}`);
-    // Modal disappears after confirm.
-    expect(screen.queryByTestId("confirm-paste-modal")).toBeNull();
-  });
-
-  it("confirming with toggle-off sends the payload with raw newlines", () => {
-    const onInput = vi.fn();
-    render(<PromptStrip cwd={null} branch={null} line={emptyPromptLine} onInput={onInput} />);
-    firePaste(screen.getByTestId("prompt-strip"), "a\nb\nc\nd\ne");
-    fireEvent.click(screen.getByTestId("confirm-paste-one-command")); // uncheck
-    fireEvent.click(screen.getByTestId("confirm-paste-confirm"));
-    const bytes = onInput.mock.calls[0]?.[0] as Uint8Array;
-    const s = new TextDecoder().decode(bytes);
     expect(s).toBe(`${BRACKETED_START}a\nb\nc\nd\ne${BRACKETED_END}`);
+    expect(screen.queryByTestId("confirm-paste-modal")).toBeNull();
   });
 
   it("cancelling a large paste sends nothing to the shell", () => {

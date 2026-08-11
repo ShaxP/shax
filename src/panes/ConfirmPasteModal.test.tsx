@@ -40,25 +40,16 @@ describe("ConfirmPasteModal", () => {
     expect(container.textContent).toContain("Paste 3 lines");
   });
 
-  it("Paste-as-one-command toggle defaults to on", () => {
-    render(<ConfirmPasteModal payload="a\nb" onConfirm={noop} onCancel={noop} />);
-    const toggle = screen.getByTestId<HTMLInputElement>("confirm-paste-one-command");
-    expect(toggle.checked).toBe(true);
-  });
-
-  it("clicking Paste fires onConfirm with the toggle state (default true)", () => {
+  it("clicking Paste fires onConfirm (no toggle in the simplified modal)", () => {
     const onConfirm = vi.fn();
     render(<ConfirmPasteModal payload="a\nb" onConfirm={onConfirm} onCancel={noop} />);
+    // Historical "Paste as one command" toggle removed — the modal is
+    // just Cancel / Paste. The shell's bracketed-paste handling
+    // already provides the multi-line safety layer.
+    expect(screen.queryByTestId("confirm-paste-one-command")).toBeNull();
     fireEvent.click(screen.getByTestId("confirm-paste-confirm"));
-    expect(onConfirm).toHaveBeenCalledWith(true);
-  });
-
-  it("unchecking the toggle before Paste fires onConfirm(false)", () => {
-    const onConfirm = vi.fn();
-    render(<ConfirmPasteModal payload="a\nb" onConfirm={onConfirm} onCancel={noop} />);
-    fireEvent.click(screen.getByTestId("confirm-paste-one-command"));
-    fireEvent.click(screen.getByTestId("confirm-paste-confirm"));
-    expect(onConfirm).toHaveBeenCalledWith(false);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledWith();
   });
 
   it("clicking Cancel fires onCancel", () => {
@@ -75,11 +66,11 @@ describe("ConfirmPasteModal", () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
-  it("Enter fires onConfirm with the current toggle state", () => {
+  it("Enter fires onConfirm", () => {
     const onConfirm = vi.fn();
     render(<ConfirmPasteModal payload="a\nb" onConfirm={onConfirm} onCancel={noop} />);
     fireEvent.keyDown(window, { key: "Enter" });
-    expect(onConfirm).toHaveBeenCalledWith(true);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
   it("clicking the backdrop cancels (Cancel-outside gesture)", () => {

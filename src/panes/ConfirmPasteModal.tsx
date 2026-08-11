@@ -8,31 +8,30 @@
  * a shell command from a shady stackoverflow answer and it ran instantly"
  * accidents.
  *
- * The "Paste as one command" toggle governs how embedded LFs are treated
- * before the payload is sent:
+ * Confirming the paste sends the payload wrapped in bracketed-paste
+ * markers (`\e[200~ … \e[201~`) with **raw LFs**. Every shell we support
+ * (zsh, bash 4.4+, fish) with bracketed-paste enabled inserts the payload
+ * into its line-editor buffer as multi-line text and waits for Enter
+ * before executing anything — that's the safety layer. The user reviews
+ * the pasted content in the strip and hits Enter when ready.
  *
- *   - toggle ON (default): each embedded LF is prefixed with `\`,
- *     turning the payload into one shell command joined by
- *     backslash-continuation. Safe default — nothing runs until the
- *     user hits Enter afterwards.
- *   - toggle OFF: the payload is sent unchanged. Every LF the shell
- *     sees is treated as an end-of-line and executes whatever line came
- *     before it — the pre-M12.3 behaviour.
+ * (An earlier revision offered a "Paste as one command" toggle that
+ * `\`-prefixed embedded LFs to fold the payload into one
+ * backslash-continued command. That was based on a wrong mental model of
+ * backslash-continuation semantics — POSIX `\<LF>` collapses the
+ * newline to nothing rather than preserving it, so pasted scripts came
+ * out as `echo oneecho twoecho three…` with concatenated words. Deleted.)
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 
 export interface ConfirmPasteModalProps {
   /** The raw clipboard text (with LF line endings, CRLF already
    *  normalised by the caller). Rendered as-is in the preview area. */
   payload: string;
-  /**
-   * User confirmed — send the bytes. `pasteAsOneCommand` reflects the
-   * toggle at confirmation time; the caller decides whether to
-   * `\`-prefix embedded LFs.
-   */
-  onConfirm: (pasteAsOneCommand: boolean) => void;
+  /** User confirmed — send the bytes. */
+  onConfirm: () => void;
   onCancel: () => void;
 }
 
@@ -91,15 +90,6 @@ const PREVIEW_WRAPPER: CSSProperties = {
   whiteSpace: "pre",
 };
 
-const TOGGLE_ROW: CSSProperties = {
-  padding: "8px 20px",
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  fontSize: 12,
-  color: "var(--fg-dim)",
-};
-
 const ACTIONS: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
@@ -134,7 +124,6 @@ export function ConfirmPasteModal({
 }: ConfirmPasteModalProps): React.ReactElement {
   useModalLayer("confirm-paste-modal");
   const panelRef = useRef<HTMLDivElement>(null);
-  const [pasteAsOneCommand, setPasteAsOneCommand] = useState(true);
 
   const stats = useMemo(() => {
     const lines = payload.split("\n").length;
@@ -159,12 +148,12 @@ export function ConfirmPasteModal({
         // Shift+Enter multi-line composition elsewhere.
         e.preventDefault();
         e.stopImmediatePropagation();
-        onConfirm(pasteAsOneCommand);
+        onConfirm();
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [onCancel, onConfirm, pasteAsOneCommand]);
+  }, [onCancel, onConfirm]);
 
   return (
     <div
@@ -178,27 +167,12 @@ export function ConfirmPasteModal({
         <div style={HEADER}>
           <div style={HEADLINE}>Paste {stats.lines} lines?</div>
           <div style={SUBLINE}>
-            {stats.bytes.toLocaleString()} bytes. Review before sending to the shell.
+            {stats.bytes.toLocaleString()} bytes. The shell will insert the payload into its
+            line-editor buffer; press Enter afterwards to submit.
           </div>
         </div>
         <div style={PREVIEW_WRAPPER} data-testid="confirm-paste-preview">
           {payload}
-        </div>
-        <div style={TOGGLE_ROW}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              data-testid="confirm-paste-one-command"
-              checked={pasteAsOneCommand}
-              onChange={(e) => setPasteAsOneCommand(e.target.checked)}
-            />
-            <span>
-              Paste as one command
-              <span style={{ color: "var(--fg-faint)", marginLeft: 6 }}>
-                (backslash-continue embedded newlines)
-              </span>
-            </span>
-          </label>
         </div>
         <div style={ACTIONS}>
           <button
@@ -213,7 +187,7 @@ export function ConfirmPasteModal({
             type="button"
             data-testid="confirm-paste-confirm"
             style={BUTTON_CONFIRM}
-            onClick={() => onConfirm(pasteAsOneCommand)}
+            onClick={() => onConfirm()}
           >
             Paste
           </button>

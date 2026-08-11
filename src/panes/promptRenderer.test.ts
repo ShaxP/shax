@@ -140,6 +140,122 @@ describe("promptRenderer / LF appends a new row (M12.3 multi-line)", () => {
   });
 });
 
+// ── M12.3 fix: multi-row cursor motions + LF-reuse + erase-display ──
+
+describe("promptRenderer / multi-row cursor motions", () => {
+  it("CSI A moves the cursor up N rows (clamped to 0)", () => {
+    let r = feed(emptyPromptLine, bytes("one"));
+    r = feed(r, new Uint8Array([0x0a])); // LF → append row 1
+    r = feed(r, bytes("two"));
+    r = feed(r, new Uint8Array([0x0a])); // LF → append row 2
+    r = feed(r, bytes("three"));
+    expect(r.cursorRow).toBe(2);
+    r = feed(r, bytes("\x1b[2A"));
+    expect(r.cursorRow).toBe(0);
+    r = feed(r, bytes("\x1b[9A"));
+    expect(r.cursorRow).toBe(0);
+  });
+
+  it("CSI B moves the cursor down N rows (clamped to last existing row)", () => {
+    let r = feed(emptyPromptLine, bytes("one"));
+    r = feed(r, new Uint8Array([0x0a]));
+    r = feed(r, bytes("two"));
+    r = feed(r, new Uint8Array([0x0a]));
+    r = feed(r, bytes("three"));
+    r = feed(r, bytes("\x1b[2A")); // up 2 → row 0
+    r = feed(r, bytes("\x1b[1B")); // down 1 → row 1
+    expect(r.cursorRow).toBe(1);
+    r = feed(r, bytes("\x1b[9B")); // clamp
+    expect(r.cursorRow).toBe(2);
+  });
+
+  it("LF advances into an existing row instead of appending a new one", () => {
+    // Build a 3-row buffer, cursor at end of last row.
+    let r = feed(emptyPromptLine, bytes("one\ntwo\nthree"));
+    expect(r.rows).toHaveLength(3);
+    // Go back to row 0.
+    r = feed(r, bytes("\x1b[2A\r"));
+    expect(r.cursorRow).toBe(0);
+    expect(r.cursorCol).toBe(0);
+    // Overwrite row 0.
+    r = feed(r, bytes("ONE"));
+    // LF should advance to the existing row 1, NOT append row 3.
+    r = feed(r, new Uint8Array([0x0a]));
+    expect(r.rows).toHaveLength(3);
+    expect(r.cursorRow).toBe(1);
+    expect(rowTexts(r)).toEqual(["ONE", "two", "three"]);
+  });
+
+  it("LF at the last row still appends a new empty row (single-line-shell backward compat)", () => {
+    let r = feed(emptyPromptLine, bytes("hello"));
+    expect(r.rows).toHaveLength(1);
+    r = feed(r, new Uint8Array([0x0a]));
+    expect(r.rows).toHaveLength(2);
+    expect(r.cursorRow).toBe(1);
+    expect(r.cursorCol).toBe(0);
+  });
+});
+
+describe("promptRenderer / CSI J erase display (M12.3 redraw handling)", () => {
+  it("CSI J default (0) truncates current row from cursor and deletes rows below", () => {
+    let r = feed(emptyPromptLine, bytes("one\ntwo\nthree"));
+    // Move to (row 1, col 1) — middle of "two".
+    r = feed(r, bytes("\x1b[1A")); // up 1 → row 1
+    r = feed(r, bytes("\x1b[2G")); // absolute col 2 (1-indexed → col 1)
+    r = feed(r, bytes("\x1b[J"));
+    expect(rowTexts(r)).toEqual(["one", "t"]);
+  });
+
+  it("CSI 2 J collapses to a single empty row", () => {
+    let r = feed(emptyPromptLine, bytes("one\ntwo\nthree"));
+    r = feed(r, bytes("\x1b[2J"));
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]?.text).toBe("");
+    expect(r.cursorRow).toBe(0);
+    expect(r.cursorCol).toBe(0);
+  });
+
+  it("CSI 1 J erases rows above cursor and replaces start-of-row-with-spaces", () => {
+    let r = feed(emptyPromptLine, bytes("one\ntwo\nthree"));
+    r = feed(r, bytes("\x1b[1A")); // row 1
+    r = feed(r, bytes("\x1b[3G")); // col 2
+    r = feed(r, bytes("\x1b[1J"));
+    expect(r.rows[0]?.text).toBe("");
+    expect(r.rows[1]?.text).toBe("  o");
+    expect(r.rows[2]?.text).toBe("three");
+  });
+
+  it("CSI 3 J is a scrollback signal — the renderer leaves rows alone", () => {
+    // The pane's VT parser handles the scrollback-cleared event at
+    // the block-list level; the strip's row stack must not be touched
+    // by a stray CSI 3 J in prompt bytes.
+    let r = feed(emptyPromptLine, bytes("one\ntwo"));
+    r = feed(r, bytes("\x1b[3J"));
+    expect(rowTexts(r)).toEqual(["one", "two"]);
+  });
+
+  it("a full shell-style multi-line redraw lands in-place without accumulating rows", () => {
+    // Simulate: shell built a 3-row buffer, then redrew it entirely
+    // with slightly different content. The classic redraw dance:
+    // \r + \e[NA (up to first line) + \e[J (erase) + rewrite.
+    let r = feed(emptyPromptLine, bytes("aaa\nbbb\nccc"));
+    expect(r.rows).toHaveLength(3);
+    // Redraw sequence — cursor is at (row 2, col 3).
+    r = feed(r, bytes("\r"));
+    r = feed(r, bytes("\x1b[2A"));
+    r = feed(r, bytes("\x1b[J"));
+    // Now cursor at (0, 0), rows collapsed to [""]
+    expect(r.rows).toHaveLength(1);
+    r = feed(r, bytes("ONE"));
+    r = feed(r, bytes("\r\n"));
+    r = feed(r, bytes("TWO"));
+    r = feed(r, bytes("\r\n"));
+    r = feed(r, bytes("THREE"));
+    expect(r.rows).toHaveLength(3);
+    expect(rowTexts(r)).toEqual(["ONE", "TWO", "THREE"]);
+  });
+});
+
 describe("promptRenderer / CSI cursor moves", () => {
   it("CSI C moves the cursor forward N within the current row (clamped)", () => {
     let r = feed(emptyPromptLine, bytes("abcdef"));

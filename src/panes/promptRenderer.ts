@@ -30,10 +30,17 @@
  *    single "styled" boolean. Good enough for the autosuggestion case
  *    and any other dim/grey hint; full SGR rendering lands with M4's
  *    formatter system.
- *  - Cursor motions that CROSS rows. CSI cursor moves (C / D / G / H)
- *    stay within the current row. BS at column 0 stays at column 0
- *    rather than wrapping to the previous row's end — the strip mirrors
- *    what the shell echoes, and the shell won't ask us to wrap.
+ *  - Cursor motions within a row: CSI C / D / G / H stay in the current
+ *    row. BS at column 0 stays at column 0 rather than wrapping to the
+ *    previous row's end — the shell won't ask us to wrap.
+ *  - Cursor motions across rows: CSI A (up) / B (down) move the cursor
+ *    between existing rows. LF advances to the next existing row OR
+ *    appends a new one if the cursor was already on the last row.
+ *    CSI J (erase in display) truncates rows from the cursor to the
+ *    end of the buffer so a shell redraw of a shrunk buffer collapses
+ *    correctly. These are the minimum needed to let a shell's
+ *    bracketed-paste redraw (up + erase + rewrite) land in-place
+ *    without accumulating stale rows.
  *  - Scrolling, alternate screen, arbitrary DECPAM.
  *
  * This module is pure: feed(state, bytes) returns the new state. The
@@ -176,16 +183,23 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
       continue;
     }
     if (b === LF) {
-      // Multi-row renderer: LF appends a fresh row and moves the cursor
-      // to column 0 of that row. Previous rows stay put. The SGR state
-      // (styled / selected) carries over so a run spanning the newline
-      // continues to inherit its attribute.
-      line = {
-        ...line,
-        rows: [...line.rows, EMPTY_ROW],
-        cursorRow: line.rows.length,
-        cursorCol: 0,
-      };
+      // Multi-row renderer: LF advances the cursor to column 0 of the
+      // next row. If the next row already exists (e.g. after a CSI A
+      // sent the cursor back up during a shell redraw), we reuse it —
+      // otherwise we append a fresh empty row. Previous rows stay put.
+      // The SGR state (styled / selected) carries over so a run
+      // spanning the newline continues to inherit its attribute.
+      const nextRow = line.cursorRow + 1;
+      if (nextRow < line.rows.length) {
+        line = { ...line, cursorRow: nextRow, cursorCol: 0 };
+      } else {
+        line = {
+          ...line,
+          rows: [...line.rows, EMPTY_ROW],
+          cursorRow: nextRow,
+          cursorCol: 0,
+        };
+      }
       i++;
       continue;
     }
@@ -287,6 +301,22 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
       };
       return withCurrentRow(state, nextRow);
     }
+    case 0x41: {
+      // 'A' — cursor up N. Clamped to row 0. Shells emit this at the
+      // start of a multi-line buffer redraw to move back to the top
+      // of the visible prompt before repainting.
+      const count = Math.max(1, n);
+      return { ...state, cursorRow: Math.max(0, state.cursorRow - count) };
+    }
+    case 0x42: {
+      // 'B' — cursor down N. Clamped to the last existing row so a
+      // stray cursor-down can't run off the end of our row stack.
+      const count = Math.max(1, n);
+      return {
+        ...state,
+        cursorRow: Math.min(state.rows.length - 1, state.cursorRow + count),
+      };
+    }
     case 0x43: {
       // 'C' — cursor forward N (within the current row).
       const count = Math.max(1, n);
@@ -308,6 +338,48 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
       // stack. Only the column applies.
       const col = Math.max(0, (args[1] ?? 1) - 1);
       return { ...state, cursorCol: col };
+    }
+    case 0x4a: {
+      // 'J' — erase in display. Scoped to the strip's row stack so a
+      // shell redraw of a shrunk multi-line buffer collapses correctly.
+      //
+      //   n = 0 (default): from cursor to end — truncate current row
+      //     at cursorCol, delete rows below cursorRow.
+      //   n = 1: from start of display to cursor — replace rows above
+      //     cursorRow with empty rows, replace start of current row
+      //     with spaces up to cursorCol.
+      //   n = 2: erase entire display — collapse to a single empty row.
+      //   n = 3: erase saved lines (scrollback) — not our concern; the
+      //     pane's VT parser handles this at the block-list level.
+      if (n === 3) return state;
+      if (n === 2) {
+        return { ...state, rows: [EMPTY_ROW], cursorRow: 0, cursorCol: 0 };
+      }
+      if (n === 1) {
+        const emptyAbove = new Array<PromptRow>(state.cursorRow).fill(EMPTY_ROW);
+        const blanksBefore = " ".repeat(state.cursorCol);
+        const blanksStyled = new Array<boolean>(state.cursorCol).fill(false);
+        const blanksSelected = new Array<boolean>(state.cursorCol).fill(false);
+        const rewrittenCurrent: PromptRow = {
+          text: blanksBefore + currentRow.text.slice(state.cursorCol),
+          styled: [...blanksStyled, ...currentRow.styled.slice(state.cursorCol)],
+          selected: [...blanksSelected, ...currentRow.selected.slice(state.cursorCol)],
+        };
+        return {
+          ...state,
+          rows: [...emptyAbove, rewrittenCurrent, ...state.rows.slice(state.cursorRow + 1)],
+        };
+      }
+      // n === 0 (default): from cursor to end of display.
+      const truncatedCurrent: PromptRow = {
+        text: currentRow.text.slice(0, state.cursorCol),
+        styled: currentRow.styled.slice(0, state.cursorCol),
+        selected: currentRow.selected.slice(0, state.cursorCol),
+      };
+      return {
+        ...state,
+        rows: [...state.rows.slice(0, state.cursorRow), truncatedCurrent],
+      };
     }
     case 0x4b: {
       // 'K' — erase in line (current row).

@@ -61,12 +61,15 @@ const CONFIRM_PASTE_MIN_BYTES = 500;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 
-/** Build the byte payload for a paste. Wraps in bracketed-paste
- *  markers; optionally `\`-prefixes every embedded LF so the shell
- *  reads the paste as one backslash-continued command. */
-function encodePaste(text: string, pasteAsOneCommand: boolean): Uint8Array {
-  const body = pasteAsOneCommand ? text.replace(/\n/g, "\\\n") : text;
-  return TEXT_ENCODER.encode(BRACKETED_PASTE_START + body + BRACKETED_PASTE_END);
+/** Build the byte payload for a paste. Always wraps in bracketed-paste
+ *  markers with raw LFs — modern shells' bracketed-paste behaviour
+ *  inserts the payload into the line-editor buffer as multi-line text
+ *  and waits for Enter before executing anything. No client-side
+ *  `\`-prefix or `;`-substitution — those attempts to "help" produce
+ *  broken semantics (backslash-continuation folds newlines to nothing;
+ *  `;`-joining loses safety around comments). Delegate to the shell. */
+function encodePaste(text: string): Uint8Array {
+  return TEXT_ENCODER.encode(BRACKETED_PASTE_START + text + BRACKETED_PASTE_END);
 }
 
 /** Is this paste large enough to warrant the confirmation modal? */
@@ -323,11 +326,8 @@ function PromptStripInner(
       setPendingPaste(normalised);
       return;
     }
-    // Small paste: bracketed-paste-wrapped, straight through. Embedded
-    // newlines still execute their line — matches how a small paste
-    // has historically worked and how every terminal treats
-    // single-line pastes.
-    onInput(encodePaste(normalised, false));
+    // Small paste: bracketed-paste-wrapped, straight through.
+    onInput(encodePaste(normalised));
   };
 
   return (
@@ -358,8 +358,8 @@ function PromptStripInner(
         <ConfirmPasteModal
           payload={pendingPaste}
           onCancel={() => setPendingPaste(null)}
-          onConfirm={(pasteAsOneCommand) => {
-            onInput(encodePaste(pendingPaste, pasteAsOneCommand));
+          onConfirm={() => {
+            onInput(encodePaste(pendingPaste));
             setPendingPaste(null);
           }}
         />
