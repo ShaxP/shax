@@ -64,6 +64,13 @@ export function keyToBytes(e: KeyMapInput): Uint8Array | null {
   // example, ArrowLeft is never mistaken for a printable.
   switch (e.key) {
     case "Enter":
+      // M12.3: Shift+Enter enters a backslash-continuation instead of
+      // submitting the command. The shell sees `\` + LF, which every
+      // POSIX shell treats as "line-continuation, wait for more input"
+      // — dropping into PS2. Plain Enter is unchanged (CR, submits).
+      if (e.shiftKey && !e.ctrlKey && !e.altKey) {
+        return new Uint8Array([0x5c, 0x0a]);
+      }
       return new Uint8Array([0x0d]);
     case "Tab":
       return new Uint8Array([0x09]);

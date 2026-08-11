@@ -1,27 +1,35 @@
 /**
- * PromptStrip — the single-row prompt area at the bottom of the pane.
+ * PromptStrip — the prompt area at the bottom of the pane. Grew to
+ * N rows in M12.3 so multi-line command composition (unclosed quotes,
+ * backslash continuation) shows the whole in-progress command, not
+ * just the current row.
  *
- * M1.9 slice 1.9b: the strip now *owns input*. A focusable container
- * captures keydown events, maps them to PTY bytes via the keyToBytes
- * helper, and forwards them through the `onInput` callback. xterm.js no
- * longer captures keystrokes in the resting state (only when the
- * alternate screen is active and xterm is revealed).
+ * M1.9 slice 1.9b: the strip owns input. A focusable container captures
+ * keydown events, maps them to PTY bytes via the keyToBytes helper, and
+ * forwards them through the `onInput` callback. xterm.js no longer
+ * captures keystrokes in the resting state (only when the alternate
+ * screen is active and xterm is revealed).
  *
- * The visible cursor + line text are still driven by the renderer fed
- * with `prompt_chunk` events from the shell's echo. We deliberately do
- * not render local echo here: the line the user sees is what the shell
- * has actually committed, which keeps history navigation, completion,
- * and readline shortcuts in lockstep with the strip.
+ * The visible cursor + line text are driven by the renderer fed with
+ * `prompt_chunk` events from the shell's echo. We deliberately do not
+ * render local echo here: the line the user sees is what the shell has
+ * actually committed, which keeps history navigation, completion, and
+ * readline shortcuts in lockstep with the strip.
  *
- * Layout follows the design at `/design/Shax Main Shell.dc.html`:
+ * Layout:
  *
- *   [ cwd ]  [ ⎇ branch ]  ❯  <prompt text + blinking cursor>
+ *   [ cwd ]  [ ⎇ branch ]  ❯  first row + cursor
+ *                             second row (indented to align with input)
+ *                             third row
+ *
+ * Continuation rows reserve the chrome column via `visibility: hidden`
+ * so alignment matches automatically even when the cwd is long.
  *
  * The wrapper is exposed via a forwarded ref so the parent can move
  * focus into / out of the strip when alt-screen mode toggles.
  */
 
-import { forwardRef } from "react";
+import { forwardRef, useState } from "react";
 import type {
   ClipboardEvent as ReactClipboardEvent,
   CSSProperties,
@@ -31,10 +39,43 @@ import type {
 import { useAssistantDocked } from "../lib/AssistantDockContext";
 import { useHomeDir } from "../lib/HomeDirContext";
 import { compactCwd } from "./blockFormat";
-import type { PromptLine } from "./promptRenderer";
+import type { PromptLine, PromptRow } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
+import { ConfirmPasteModal } from "./ConfirmPasteModal";
 
 const TEXT_ENCODER = new TextEncoder();
+
+/** M12.3 paste-safety thresholds. Above either one, the paste routes
+ *  through {@link ConfirmPasteModal} instead of going straight to the
+ *  shell. Small pastes (single-line snippets, short commands) skip
+ *  the modal so the common case stays frictionless. */
+const CONFIRM_PASTE_MIN_LINES = 5;
+const CONFIRM_PASTE_MIN_BYTES = 500;
+
+/** Bracketed-paste start/end sequences (xterm convention, required by
+ *  bracketed-paste mode `\e[?2004h`). Wrapping every paste in these
+ *  tells the shell "the bytes between these markers are a paste" so it
+ *  can suppress its own interpretation of embedded newlines / control
+ *  chars. All shells we support (zsh, bash 4.4+, fish) enable bracketed
+ *  paste by default. */
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
+/** Build the byte payload for a paste. Wraps in bracketed-paste
+ *  markers; optionally `\`-prefixes every embedded LF so the shell
+ *  reads the paste as one backslash-continued command. */
+function encodePaste(text: string, pasteAsOneCommand: boolean): Uint8Array {
+  const body = pasteAsOneCommand ? text.replace(/\n/g, "\\\n") : text;
+  return TEXT_ENCODER.encode(BRACKETED_PASTE_START + body + BRACKETED_PASTE_END);
+}
+
+/** Is this paste large enough to warrant the confirmation modal? */
+function isLargePaste(text: string): boolean {
+  if (text.length >= CONFIRM_PASTE_MIN_BYTES) return true;
+  // `split("\n").length` counts lines-of-text (empty trailing after
+  // a final LF becomes an empty entry — same as file line count).
+  return text.split("\n").length >= CONFIRM_PASTE_MIN_LINES;
+}
 
 export interface PromptStripProps {
   /** The current working directory, sourced from OSC 133 A. */
@@ -64,10 +105,12 @@ export interface PromptStripProps {
   assistantDocked?: boolean;
 }
 
-const ROW: CSSProperties = {
+/** Outer wrapper — a flex column so continuation rows stack below
+ *  row 0. Border + padding + font settings apply to the whole strip,
+ *  not per row. */
+const WRAPPER: CSSProperties = {
   display: "flex",
-  alignItems: "center",
-  gap: 11,
+  flexDirection: "column",
   padding: "10px 18px",
   borderTop: "1px solid var(--border)",
   background: "var(--pane)",
@@ -80,6 +123,17 @@ const ROW: CSSProperties = {
   flexShrink: 0,
   minHeight: 40,
   outline: "none",
+};
+
+/** One row inside the strip — a horizontal flex containing the chrome
+ *  column on the left and the mirrored input on the right. Row 0
+ *  paints the chrome; continuation rows reserve the same width with
+ *  `visibility: hidden` so alignment holds regardless of cwd length. */
+const ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 11,
+  minHeight: 22,
 };
 
 const META_GROUP: CSSProperties = {
@@ -203,7 +257,7 @@ function PromptStripInner(
   { cwd, branch, line, onInput, assistantDocked: assistantDockedProp }: PromptStripProps,
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
-  const hasTyping = line.text.length > 0;
+  const hasTyping = line.rows.some((r) => r.text.length > 0);
   const home = useHomeDir();
   const contextDocked = useAssistantDocked();
   // Prop wins over context for tests that render the strip in
@@ -226,7 +280,8 @@ function PromptStripInner(
       !event.ctrlKey &&
       !event.altKey &&
       !hasTyping &&
-      line.cursor === 0 &&
+      line.cursorRow === 0 &&
+      line.cursorCol === 0 &&
       !assistantDocked;
     if (isBareQuestion) {
       event.preventDefault();
@@ -244,6 +299,12 @@ function PromptStripInner(
     onInput(bytes);
   };
 
+  // M12.3: large pastes (≥ CONFIRM_PASTE_MIN_LINES lines OR
+  // ≥ CONFIRM_PASTE_MIN_BYTES bytes) are held in `pendingPaste` state
+  // and rendered through `ConfirmPasteModal` so the user can review
+  // before the bytes hit the shell. Small pastes bypass the modal.
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+
   const handlePaste = (event: ReactClipboardEvent<HTMLDivElement>): void => {
     // Read text from the clipboard and send it through to the shell as
     // if the user had typed each character. The browser would otherwise
@@ -258,27 +319,16 @@ function PromptStripInner(
     // looks like an Enter and prematurely submits whichever line
     // contains it).
     const normalised = text.replace(/\r\n?/g, "\n");
-    onInput(TEXT_ENCODER.encode(normalised));
+    if (isLargePaste(normalised)) {
+      setPendingPaste(normalised);
+      return;
+    }
+    // Small paste: bracketed-paste-wrapped, straight through. Embedded
+    // newlines still execute their line — matches how a small paste
+    // has historically worked and how every terminal treats
+    // single-line pastes.
+    onInput(encodePaste(normalised, false));
   };
-
-  // Group consecutive chars sharing both flags (styled + selected) into
-  // runs so the strip can render styled chunks (zsh-autosuggestions ghost
-  // text) in a faint colour, selected chunks (vi visual / emacs region)
-  // with an accent background, and committed input at full contrast.
-  // Defensive against callers (mostly tests) that pass a partial
-  // PromptLine without the styled / selected fields.
-  const lineStyled = line.styled ?? [];
-  const lineSelected = line.selected ?? [];
-  const beforeRuns = styledRuns(
-    line.text.slice(0, line.cursor),
-    lineStyled.slice(0, line.cursor),
-    lineSelected.slice(0, line.cursor),
-  );
-  const afterRuns = styledRuns(
-    line.text.slice(line.cursor),
-    lineStyled.slice(line.cursor),
-    lineSelected.slice(line.cursor),
-  );
 
   return (
     <div
@@ -289,36 +339,106 @@ function PromptStripInner(
       aria-label="Shell prompt"
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
-      style={ROW}
+      style={WRAPPER}
     >
-      <span style={META_GROUP}>
-        <span style={CWD_LABEL} data-testid="prompt-cwd">
-          {displayCwd}
+      {line.rows.map((row, rowIdx) => (
+        <PromptRowView
+          key={rowIdx}
+          rowIdx={rowIdx}
+          row={row}
+          isFirst={rowIdx === 0}
+          cwd={displayCwd}
+          branch={branch}
+          cursorCol={rowIdx === line.cursorRow ? line.cursorCol : null}
+          showPlaceholder={rowIdx === 0 && !hasTyping}
+          assistantDocked={assistantDocked}
+        />
+      ))}
+      {pendingPaste !== null && (
+        <ConfirmPasteModal
+          payload={pendingPaste}
+          onCancel={() => setPendingPaste(null)}
+          onConfirm={(pasteAsOneCommand) => {
+            onInput(encodePaste(pendingPaste, pasteAsOneCommand));
+            setPendingPaste(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One rendered row of the strip. Row 0 paints the chrome (cwd, branch,
+ *  `❯`); continuation rows reserve the same width via `visibility: hidden`
+ *  so the input column aligns automatically. Only the row containing the
+ *  cursor renders the cursor bar. Only row 0 renders the placeholder
+ *  hint (and only when nothing has been typed anywhere). */
+function PromptRowView({
+  rowIdx,
+  row,
+  isFirst,
+  cwd,
+  branch,
+  cursorCol,
+  showPlaceholder,
+  assistantDocked,
+}: {
+  rowIdx: number;
+  row: PromptRow;
+  isFirst: boolean;
+  cwd: string;
+  branch: string | null;
+  /** Column the cursor sits at within this row, or `null` if the cursor
+   *  is on a different row. */
+  cursorCol: number | null;
+  showPlaceholder: boolean;
+  assistantDocked: boolean;
+}): React.ReactElement {
+  const chromeStyle: CSSProperties = isFirst ? {} : { visibility: "hidden" };
+  const beforeText = cursorCol !== null ? row.text.slice(0, cursorCol) : row.text;
+  const afterText = cursorCol !== null ? row.text.slice(cursorCol) : "";
+  const beforeRuns = styledRuns(
+    beforeText,
+    row.styled.slice(0, beforeText.length),
+    row.selected.slice(0, beforeText.length),
+  );
+  const afterRuns = styledRuns(
+    afterText,
+    row.styled.slice(beforeText.length),
+    row.selected.slice(beforeText.length),
+  );
+  return (
+    <div style={ROW} data-testid={`prompt-row-${rowIdx}`}>
+      <span style={{ ...META_GROUP, ...chromeStyle }}>
+        <span
+          style={CWD_LABEL}
+          data-testid={isFirst ? "prompt-cwd" : undefined}
+          aria-hidden={!isFirst}
+        >
+          {cwd}
         </span>
-        <span style={BRANCH_LABEL} data-testid="prompt-branch">
+        <span
+          style={BRANCH_LABEL}
+          data-testid={isFirst ? "prompt-branch" : undefined}
+          aria-hidden={!isFirst}
+        >
           <span style={{ fontSize: 11 }}>⎇</span>
           {branch ?? "—"}
         </span>
       </span>
-      <span style={PROMPT_GLYPH}>❯</span>
-      <span style={LINE_AREA} data-testid="prompt-line">
-        {/*
-         * Cursor is always rendered so the user has a visible insertion
-         * point from the moment the strip mounts. In the empty state it
-         * sits at column 0 with the placeholder hint trailing after.
-         * Styled chars (any non-default-fg SGR — e.g., zsh-autosuggestions
-         * ghost text) render in `--fg-faint` so the user can tell what
-         * the shell suggested vs. what they actually typed.
-         */}
-        <span data-testid="prompt-line-text">
+      <span style={{ ...PROMPT_GLYPH, ...chromeStyle }} aria-hidden={!isFirst}>
+        ❯
+      </span>
+      <span style={LINE_AREA} data-testid={isFirst ? "prompt-line" : undefined} data-row={rowIdx}>
+        <span data-testid={isFirst ? "prompt-line-text" : undefined}>
           {beforeRuns.map((run, idx) => (
             <span key={`before-${idx}`} style={runStyle(run)}>
               {run.text}
             </span>
           ))}
         </span>
-        <span style={CURSOR_BAR} data-testid="prompt-cursor" />
-        {hasTyping ? (
+        {cursorCol !== null && <span style={CURSOR_BAR} data-testid="prompt-cursor" />}
+        {row.text.length > 0 || cursorCol !== null ? (
           <span>
             {afterRuns.map((run, idx) => (
               <span key={`after-${idx}`} style={runStyle(run)}>
@@ -326,7 +446,8 @@ function PromptStripInner(
               </span>
             ))}
           </span>
-        ) : (
+        ) : null}
+        {showPlaceholder && (
           <span style={LINE_TEXT_PLACEHOLDER}>
             {" "}
             {assistantDocked ? (

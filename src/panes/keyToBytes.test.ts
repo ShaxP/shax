@@ -45,6 +45,22 @@ describe("keyToBytes / special keys", () => {
     expect(keyToBytes(ev({ key: "Enter" }))).toEqual(new Uint8Array([0x0d]));
   });
 
+  it("Shift+Enter sends backslash + LF (M12.3 line continuation)", () => {
+    // Backslash-continuation: shell sees `\` then LF, drops to PS2
+    // without submitting. Enables multi-line composition without
+    // pressing Enter to trigger the command.
+    expect(keyToBytes(ev({ key: "Enter", shiftKey: true }))).toEqual(new Uint8Array([0x5c, 0x0a]));
+  });
+
+  it("Ctrl+Enter is NOT reinterpreted as Shift+Enter", () => {
+    // Ctrl+Enter should keep the bare-Enter semantics — the multi-line
+    // shortcut is deliberately Shift-only to avoid clashing with
+    // Ctrl+chord shell bindings.
+    expect(keyToBytes(ev({ key: "Enter", ctrlKey: true, shiftKey: true }))).not.toEqual(
+      new Uint8Array([0x5c, 0x0a]),
+    );
+  });
+
   it("Backspace sends DEL (0x7f), not BS (0x08)", () => {
     expect(keyToBytes(ev({ key: "Backspace" }))).toEqual(new Uint8Array([0x7f]));
   });

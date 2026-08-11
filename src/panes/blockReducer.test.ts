@@ -9,6 +9,25 @@
 import { describe, it, expect } from "vitest";
 import { blockReducer, initialBlockState } from "./blockReducer";
 import type { BlockState, UiBlock } from "./blockReducer";
+import { emptyPromptLine } from "./promptRenderer";
+import type { PromptLine } from "./promptRenderer";
+
+/** Test helper — build a single-row PromptLine from a text string. */
+function singleRow(text: string, cursorCol = text.length): PromptLine {
+  return {
+    rows: [
+      {
+        text,
+        styled: new Array<boolean>(text.length).fill(false),
+        selected: new Array<boolean>(text.length).fill(false),
+      },
+    ],
+    cursorRow: 0,
+    cursorCol,
+    currentStyled: false,
+    currentSelected: false,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,14 +65,7 @@ describe("blockReducer / seed", () => {
       blocks: [makeBlock({ id: "old" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -67,14 +79,7 @@ describe("blockReducer / seed", () => {
       blocks: [],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -137,14 +142,7 @@ describe("blockReducer / started", () => {
       blocks: [makeBlock({ id: "first" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -186,14 +184,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "target", command: "ls" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -230,14 +221,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "running" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -263,14 +247,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "known" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -294,14 +271,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "a" }), makeBlock({ id: "b" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -327,14 +297,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "x" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -365,14 +328,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "cd-block", cwd: "/start", git_branch: "main" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -402,14 +358,7 @@ describe("blockReducer / completed", () => {
       blocks: [makeBlock({ id: "cd-tmp", cwd: "/repo", git_branch: "main" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -444,14 +393,7 @@ describe("blockReducer / alt_screen", () => {
       blocks: [],
       altScreen: true,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -464,14 +406,7 @@ describe("blockReducer / alt_screen", () => {
       blocks: [makeBlock()],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -487,14 +422,7 @@ describe("blockReducer / alt_screen", () => {
       blocks: [makeBlock({ id: "vim-block" })],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -510,14 +438,7 @@ describe("blockReducer / alt_screen", () => {
       ],
       altScreen: false,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -533,14 +454,7 @@ describe("blockReducer / alt_screen", () => {
       blocks: [makeBlock({ interactive: true })],
       altScreen: true,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -566,14 +480,7 @@ describe("blockReducer / block_chunk", () => {
       blocks: [],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -594,14 +501,7 @@ describe("blockReducer / block_chunk", () => {
         ["a", new Uint8Array([1])],
         ["b", otherBytes],
       ]),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -622,14 +522,7 @@ describe("blockReducer / block_chunk", () => {
       blocks: [],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1])]]),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -648,14 +541,7 @@ describe("blockReducer / block_chunk", () => {
       blocks: [],
       altScreen: true,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -679,7 +565,9 @@ describe("blockReducer / prompt_chunk", () => {
       type: "prompt_chunk",
       bytes: new TextEncoder().encode("hello"),
     });
-    expect(next.promptLine).toMatchObject({ text: "hello", cursor: 5 });
+    expect(next.promptLine.rows[0]?.text).toBe("hello");
+    expect(next.promptLine.cursorCol).toBe(5);
+    expect(next.promptLine.cursorRow).toBe(0);
   });
 
   it("accumulates across chunks", () => {
@@ -691,7 +579,9 @@ describe("blockReducer / prompt_chunk", () => {
       type: "prompt_chunk",
       bytes: new TextEncoder().encode("bar"),
     });
-    expect(b.promptLine).toMatchObject({ text: "foo bar", cursor: 7 });
+    expect(b.promptLine.rows[0]?.text).toBe("foo bar");
+    expect(b.promptLine.cursorCol).toBe(7);
+    expect(b.promptLine.cursorRow).toBe(0);
   });
 
   it("resets the prompt line when a new block starts", () => {
@@ -699,7 +589,7 @@ describe("blockReducer / prompt_chunk", () => {
       type: "prompt_chunk",
       bytes: new TextEncoder().encode("ls -la"),
     });
-    expect(prompt.promptLine.text).toBe("ls -la");
+    expect(prompt.promptLine.rows[0]?.text).toBe("ls -la");
 
     const started = blockReducer(prompt, {
       type: "started",
@@ -709,7 +599,7 @@ describe("blockReducer / prompt_chunk", () => {
       git_branch: null,
       started_at_ms: 1000,
     });
-    expect(started.promptLine).toMatchObject({ text: "", cursor: 0 });
+    expect(started.promptLine).toBe(emptyPromptLine);
   });
 });
 
@@ -723,14 +613,7 @@ describe("blockReducer / reset", () => {
       blocks: [makeBlock({ id: "stale" })],
       altScreen: true,
       liveOutputs: new Map([["stale", new Uint8Array([1, 2, 3])]]),
-      promptLine: {
-        text: "old",
-        styled: [],
-        selected: [],
-        cursor: 3,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: singleRow("old"),
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -749,14 +632,7 @@ describe("blockReducer / scrollback_cleared", () => {
       blocks: [makeBlock({ id: "a" }), makeBlock({ id: "b" })],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1, 2])]]),
-      promptLine: {
-        text: "> ",
-        styled: [],
-        selected: [],
-        cursor: 2,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: singleRow("> "),
       selectedBlockId: "a",
       inspectedBlock: makeBlock({ id: "history" }),
     };
@@ -772,14 +648,7 @@ describe("blockReducer / scrollback_cleared", () => {
       blocks: [makeBlock({ id: "a" })],
       altScreen: true,
       liveOutputs: new Map(),
-      promptLine: {
-        text: "current",
-        styled: [],
-        selected: [],
-        cursor: 7,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: singleRow("current"),
       selectedBlockId: null,
       inspectedBlock: null,
     };
@@ -793,14 +662,7 @@ describe("blockReducer / scrollback_cleared", () => {
       blocks: [makeBlock({ id: "a" })],
       altScreen: false,
       liveOutputs: new Map([["a", new Uint8Array([1])]]),
-      promptLine: {
-        text: "",
-        styled: [],
-        selected: [],
-        cursor: 0,
-        currentStyled: false,
-        currentSelected: false,
-      },
+      promptLine: emptyPromptLine,
       selectedBlockId: "a",
       inspectedBlock: null,
     };

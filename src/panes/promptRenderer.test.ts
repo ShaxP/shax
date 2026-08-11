@@ -1,293 +1,331 @@
 /**
- * Unit tests for the tiny single-line VT renderer that drives the
- * M1.9 PromptStrip.
+ * Unit tests for the tiny multi-row VT renderer that drives the
+ * PromptStrip.
  *
  * Each test feeds a hand-crafted byte stream (the same shape the shell
- * would emit) and verifies the resulting line buffer + cursor position.
+ * would emit) and verifies the resulting row stack + cursor position.
  * The renderer is pure, so tests run without any DOM or async wait.
  */
 
 import { describe, it, expect } from "vitest";
 import { feed, emptyPromptLine } from "./promptRenderer";
+import type { PromptLine } from "./promptRenderer";
 
 function bytes(s: string): Uint8Array {
   return new TextEncoder().encode(s);
 }
 
+/** Extract just the visible text of every row — collapse test output
+ *  to something readable. */
+function rowTexts(line: PromptLine): string[] {
+  return line.rows.map((r) => r.text);
+}
+
 describe("promptRenderer / printable text", () => {
   it("appends printable ASCII characters", () => {
     const r = feed(emptyPromptLine, bytes("hello"));
-    expect(r).toMatchObject({ text: "hello", cursor: 5 });
+    expect(rowTexts(r)).toEqual(["hello"]);
+    expect(r.cursorRow).toBe(0);
+    expect(r.cursorCol).toBe(5);
   });
 
   it("handles UTF-8 multi-byte characters", () => {
     const r = feed(emptyPromptLine, bytes("héllo ✦"));
-    expect(r.text).toBe("héllo ✦");
-    expect(r.cursor).toBe(r.text.length);
+    expect(rowTexts(r)).toEqual(["héllo ✦"]);
+    expect(r.cursorRow).toBe(0);
+    expect(r.cursorCol).toBe("héllo ✦".length);
   });
 
-  it("REPLACE semantics: writing at a mid-line cursor overwrites existing chars", () => {
+  it("REPLACE semantics: writing at a mid-row cursor overwrites existing chars", () => {
     let r = feed(emptyPromptLine, bytes("abcdef"));
     r = feed(r, new Uint8Array([0x08, 0x08, 0x08])); // BS BS BS
-    expect(r).toMatchObject({ text: "abcdef", cursor: 3 });
+    expect(r.cursorCol).toBe(3);
     r = feed(r, bytes("XYZ"));
-    expect(r).toMatchObject({ text: "abcXYZ", cursor: 6 });
+    expect(rowTexts(r)).toEqual(["abcXYZ"]);
+    expect(r.cursorCol).toBe(6);
   });
 
-  it("extends the line when overwrite runs past the end", () => {
+  it("extends the row when overwrite runs past the end", () => {
     let r = feed(emptyPromptLine, bytes("abc"));
     r = feed(r, new Uint8Array([0x08])); // BS
     r = feed(r, bytes("XY")); // cursor was 2, write XY → "abXY"
-    expect(r).toMatchObject({ text: "abXY", cursor: 4 });
+    expect(rowTexts(r)).toEqual(["abXY"]);
+    expect(r.cursorCol).toBe(4);
   });
 });
 
 describe("promptRenderer / cursor controls", () => {
-  it("CR resets cursor to column 0 without clearing text", () => {
+  it("CR resets cursor to column 0 of the current row without clearing text", () => {
     const r = feed(emptyPromptLine, bytes("hello\r"));
-    expect(r).toMatchObject({ text: "hello", cursor: 0 });
+    expect(rowTexts(r)).toEqual(["hello"]);
+    expect(r.cursorRow).toBe(0);
+    expect(r.cursorCol).toBe(0);
   });
 
-  it("LF clears the line and resets the cursor (single-line)", () => {
-    const r = feed(emptyPromptLine, bytes("hello\n"));
-    expect(r).toMatchObject({ text: "", cursor: 0 });
-  });
-
-  it("BS moves the cursor left; clamps at 0", () => {
-    let r = feed(emptyPromptLine, bytes("ab"));
-    r = feed(r, new Uint8Array([0x08, 0x08, 0x08, 0x08])); // BS x4
-    expect(r.cursor).toBe(0);
+  it("BS moves the cursor left within the row; clamps at 0", () => {
+    let r = feed(emptyPromptLine, bytes("abc"));
+    r = feed(r, new Uint8Array([0x08, 0x08, 0x08, 0x08, 0x08])); // 5x BS
+    expect(r.cursorCol).toBe(0);
+    // BS at column 0 does NOT wrap to the previous row (v1 scope note in
+    // the renderer's docblock).
+    expect(r.cursorRow).toBe(0);
   });
 
   it("DEL (0x7f) is treated as a backspace", () => {
     let r = feed(emptyPromptLine, bytes("abc"));
     r = feed(r, new Uint8Array([0x7f]));
-    expect(r.cursor).toBe(2);
+    expect(r.cursorCol).toBe(2);
+    expect(rowTexts(r)).toEqual(["abc"]);
   });
 
   it("BEL is ignored", () => {
-    const r = feed(emptyPromptLine, new Uint8Array([0x07]));
-    expect(r).toMatchObject({ text: "", cursor: 0 });
+    const r = feed(emptyPromptLine, new Uint8Array([0x07, 0x07, 0x07]));
+    expect(rowTexts(r)).toEqual([""]);
+    expect(r.cursorCol).toBe(0);
+  });
+});
+
+// ── M12.3: multi-row semantics ────────────────────────────────────────
+
+describe("promptRenderer / LF appends a new row (M12.3 multi-line)", () => {
+  it("LF appends a fresh row and moves cursor to column 0 of it", () => {
+    let r = feed(emptyPromptLine, bytes("first"));
+    r = feed(r, new Uint8Array([0x0a])); // LF
+    expect(rowTexts(r)).toEqual(["first", ""]);
+    expect(r.cursorRow).toBe(1);
+    expect(r.cursorCol).toBe(0);
+  });
+
+  it("typing after LF fills the new row without touching the previous one", () => {
+    let r = feed(emptyPromptLine, bytes('echo "hello'));
+    r = feed(r, new Uint8Array([0x0a])); // Enter → shell drops to PS2
+    r = feed(r, bytes("world"));
+    expect(rowTexts(r)).toEqual(['echo "hello', "world"]);
+    expect(r.cursorRow).toBe(1);
+    expect(r.cursorCol).toBe(5);
+  });
+
+  it("multiple LFs stack rows deep", () => {
+    let r = feed(emptyPromptLine, bytes("a"));
+    r = feed(r, new Uint8Array([0x0a])); // LF
+    r = feed(r, bytes("b"));
+    r = feed(r, new Uint8Array([0x0a])); // LF
+    r = feed(r, bytes("c"));
+    expect(rowTexts(r)).toEqual(["a", "b", "c"]);
+    expect(r.cursorRow).toBe(2);
+    expect(r.cursorCol).toBe(1);
+  });
+
+  it("LF preserves SGR state so a styled run continues on the next row", () => {
+    // Enter dim run, write on row 0, LF (dim still active), write on
+    // row 1. The dim run must carry across the newline.
+    let r = feed(emptyPromptLine, bytes("\x1b[90mfirst"));
+    r = feed(r, new Uint8Array([0x0a])); // LF while dim is active
+    r = feed(r, bytes("second\x1b[39m"));
+    expect(rowTexts(r)).toEqual(["first", "second"]);
+    expect(r.rows[0]?.styled).toEqual([true, true, true, true, true]);
+    expect(r.rows[1]?.styled).toEqual([true, true, true, true, true, true]);
+  });
+
+  it("cursor motion (BS / CR / CSI D) stays within the current row after an LF", () => {
+    let r = feed(emptyPromptLine, bytes("first"));
+    r = feed(r, new Uint8Array([0x0a])); // LF → new row
+    r = feed(r, bytes("second"));
+    r = feed(r, new Uint8Array([0x08, 0x08, 0x08])); // BS x3 — stays in row 1
+    expect(r.cursorRow).toBe(1);
+    expect(r.cursorCol).toBe(3);
+    r = feed(r, bytes("\r")); // CR → col 0 of the CURRENT row
+    expect(r.cursorRow).toBe(1);
+    expect(r.cursorCol).toBe(0);
   });
 });
 
 describe("promptRenderer / CSI cursor moves", () => {
-  it("CSI C moves the cursor forward N (clamped to text length)", () => {
-    let r = feed(emptyPromptLine, bytes("hello"));
-    r = feed(r, bytes("\r")); // cursor=0
-    r = feed(r, bytes("\x1b[2C"));
-    expect(r.cursor).toBe(2);
-    r = feed(r, bytes("\x1b[99C"));
-    expect(r.cursor).toBe(5);
+  it("CSI C moves the cursor forward N within the current row (clamped)", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, new Uint8Array([0x08, 0x08, 0x08])); // BS BS BS
+    r = feed(r, bytes("\x1b[2C")); // forward 2
+    expect(r.cursorCol).toBe(5);
+    r = feed(r, bytes("\x1b[9C")); // forward past end → clamp
+    expect(r.cursorCol).toBe(6);
   });
 
-  it("CSI D moves the cursor backward N (clamped to 0)", () => {
-    let r = feed(emptyPromptLine, bytes("hello"));
-    r = feed(r, bytes("\x1b[2D"));
-    expect(r.cursor).toBe(3);
-    r = feed(r, bytes("\x1b[99D"));
-    expect(r.cursor).toBe(0);
+  it("CSI D moves the cursor backward N within the current row (clamped to 0)", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, bytes("\x1b[3D"));
+    expect(r.cursorCol).toBe(3);
+    r = feed(r, bytes("\x1b[9D"));
+    expect(r.cursorCol).toBe(0);
   });
 
-  it("CSI G sets the cursor to an absolute column (1-indexed)", () => {
-    let r = feed(emptyPromptLine, bytes("hello"));
+  it("CSI G sets the cursor to an absolute column of the current row (1-indexed)", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
     r = feed(r, bytes("\x1b[3G"));
-    expect(r.cursor).toBe(2);
+    expect(r.cursorCol).toBe(2); // 1-indexed
   });
 });
 
 describe("promptRenderer / erase line", () => {
-  it("CSI K (default) erases from cursor to end of line", () => {
-    let r = feed(emptyPromptLine, bytes("hello world"));
-    r = feed(r, bytes("\r\x1b[5C")); // cursor=5 (between "hello" and " world")
+  it("CSI K (default) erases from cursor to end of the current row", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, bytes("\x1b[3D")); // cursor to col 3
     r = feed(r, bytes("\x1b[K"));
-    expect(r).toMatchObject({ text: "hello", cursor: 5 });
+    expect(rowTexts(r)).toEqual(["abc"]);
   });
 
-  it("CSI 1 K erases from start of line to cursor (replacing with spaces)", () => {
-    let r = feed(emptyPromptLine, bytes("hello world"));
-    r = feed(r, bytes("\r\x1b[6C")); // cursor=6
+  it("CSI 1 K erases from start of the current row to cursor (replacing with spaces)", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, bytes("\x1b[3D"));
     r = feed(r, bytes("\x1b[1K"));
-    expect(r.text).toBe("      world");
-    expect(r.cursor).toBe(6);
+    expect(rowTexts(r)).toEqual(["   def"]);
   });
 
-  it("CSI 2 K erases the entire line, leaving the cursor in place", () => {
-    let r = feed(emptyPromptLine, bytes("hello"));
+  it("CSI 2 K erases the entire current row, leaving the cursor in place", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, bytes("\x1b[3D"));
     r = feed(r, bytes("\x1b[2K"));
-    expect(r).toMatchObject({ text: "", cursor: 5 });
+    expect(rowTexts(r)).toEqual([""]);
+    expect(r.cursorCol).toBe(3);
   });
 });
 
 describe("promptRenderer / insert/delete", () => {
-  it("CSI @ inserts N blank characters at cursor", () => {
-    let r = feed(emptyPromptLine, bytes("ab"));
-    r = feed(r, bytes("\x1b[1D\x1b[2@")); // cursor=1, then insert 2 spaces
-    expect(r.text).toBe("a  b");
-    expect(r.cursor).toBe(1);
-  });
-
-  it("CSI P deletes N characters at cursor", () => {
+  it("CSI @ inserts N blanks at the cursor of the current row", () => {
     let r = feed(emptyPromptLine, bytes("abcdef"));
-    r = feed(r, bytes("\r\x1b[2C\x1b[2P")); // cursor=2, delete 2
-    expect(r).toMatchObject({ text: "abef", cursor: 2 });
+    r = feed(r, bytes("\x1b[3D")); // cursor at 3
+    r = feed(r, bytes("\x1b[2@"));
+    expect(rowTexts(r)).toEqual(["abc  def"]);
+    expect(r.cursorCol).toBe(3);
+  });
+
+  it("CSI P deletes N chars at the cursor of the current row", () => {
+    let r = feed(emptyPromptLine, bytes("abcdef"));
+    r = feed(r, bytes("\x1b[3D"));
+    r = feed(r, bytes("\x1b[2P"));
+    expect(rowTexts(r)).toEqual(["abcf"]);
+    expect(r.cursorCol).toBe(3);
   });
 });
 
-describe("promptRenderer / ignored sequences", () => {
-  it("SGR (color) sequences are consumed without affecting text", () => {
-    const r = feed(emptyPromptLine, bytes("\x1b[31mred\x1b[0m"));
-    expect(r).toMatchObject({ text: "red", cursor: 3 });
+describe("promptRenderer / OSC + partial CSI safety", () => {
+  it("OSC is swallowed without leaving artifacts on the row", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b]0;title\x07visible"));
+    expect(rowTexts(r)).toEqual(["visible"]);
   });
 
-  it("OSC sequences (title, hyperlinks) are ignored", () => {
-    const r = feed(emptyPromptLine, bytes("\x1b]0;window title\x07after"));
-    expect(r).toMatchObject({ text: "after", cursor: 5 });
-  });
-
-  it("unknown CSI finals are consumed but do not crash or corrupt text", () => {
-    const r = feed(emptyPromptLine, bytes("\x1b[5Sabc"));
-    expect(r).toMatchObject({ text: "abc", cursor: 3 });
+  it("partial CSI at end of buffer is dropped without corrupting state", () => {
+    // ESC [ with no final byte — half-parsed. Renderer must NOT append
+    // ESC or bracket as text.
+    const r = feed(emptyPromptLine, bytes("hi\x1b[2"));
+    expect(rowTexts(r)).toEqual(["hi"]);
+    expect(r.cursorCol).toBe(2);
   });
 });
 
-describe("promptRenderer / shell-typing flows", () => {
-  it("typing a command then pressing Backspace (CSI K style) drops the last char", () => {
-    // User types "ls -la", then presses Backspace. Readline's redisplay
-    // moves the cursor left, then erases to end of line.
-    let r = feed(emptyPromptLine, bytes("ls -la"));
-    r = feed(r, bytes("\x1b[1D\x1b[K"));
-    expect(r).toMatchObject({ text: "ls -l", cursor: 5 });
-  });
-
-  it("history navigation: CR + new text + CSI K reshapes the line", () => {
-    // Shell shows "echo hi", user presses ↑, shell rewrites with the
-    // previous command "ls -la" using CR + write + erase-to-end.
-    let r = feed(emptyPromptLine, bytes("echo hi"));
-    r = feed(r, bytes("\rls -la\x1b[K"));
-    expect(r).toMatchObject({ text: "ls -la", cursor: 6 });
-  });
-
-  it("Tab completion: writing more chars at the end extends the line", () => {
-    let r = feed(emptyPromptLine, bytes("cd src/"));
-    r = feed(r, bytes("panes/"));
-    expect(r).toMatchObject({ text: "cd src/panes/", cursor: 13 });
-  });
-});
-
-describe("promptRenderer / per-character styling", () => {
-  it("plain text has all styled=false", () => {
-    const r = feed(emptyPromptLine, bytes("ls"));
-    expect(r.styled).toEqual([false, false]);
-  });
-
-  it("marks chars emitted under a non-default fg SGR as styled (autosuggestions)", () => {
-    // zsh-autosuggestions ghost text: ESC[38;5;8m<hint>ESC[39m
-    const r = feed(emptyPromptLine, bytes("ls\x1b[38;5;8m -la\x1b[39m"));
-    expect(r.text).toBe("ls -la");
-    expect(r.styled).toEqual([false, false, true, true, true, true]);
-  });
-
-  it("syntax-highlighting colours (red, green, …) do NOT mark styled", () => {
-    // zsh-syntax-highlighting paints commands and errors in standard
-    // palette colours; we deliberately don't dim those — they're real
-    // semantic colour, not autosuggestion-style hints.
-    const r = feed(emptyPromptLine, bytes("\x1b[31merr\x1b[0m"));
-    expect(r.styled).toEqual([false, false, false]);
-  });
-
-  it("SGR 0 resets the styled flag", () => {
+describe("promptRenderer / styled foreground (autosuggestion heuristic)", () => {
+  it("SGR 38;5;8 marks the styled flag on subsequent chars", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[38;5;8ma\x1b[0mb"));
-    expect(r.text).toBe("ab");
-    expect(r.styled).toEqual([true, false]);
+    expect(rowTexts(r)).toEqual(["ab"]);
+    expect(r.rows[0]?.styled).toEqual([true, false]);
   });
 
   it("SGR 39 resets the styled flag", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[38;5;8mab\x1b[39mcd"));
-    expect(r.styled).toEqual([true, true, false, false]);
+    expect(r.rows[0]?.styled).toEqual([true, true, false, false]);
   });
 
   it("dim greyscale-ramp palette indices (232-245) also mark styled", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[38;5;240mhi\x1b[39m"));
-    expect(r.styled).toEqual([true, true]);
+    expect(r.rows[0]?.styled).toEqual([true, true]);
   });
 
   it("brighter palette indices (e.g. 250, 255) do NOT mark styled", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[38;5;250mhi\x1b[39m"));
-    expect(r.styled).toEqual([false, false]);
+    expect(r.rows[0]?.styled).toEqual([false, false]);
   });
 
   it("SGR 90 (bright black / dark grey) marks styled — the 16-color form of fg=8", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[90mhint\x1b[39m"));
-    expect(r.styled).toEqual([true, true, true, true]);
+    expect(r.rows[0]?.styled).toEqual([true, true, true, true]);
   });
 
   it("other bright-palette colours (91-97) do NOT mark styled", () => {
-    // Bright red — a common syntax-highlighting "error" colour. Must
-    // stay at full contrast.
     const r = feed(emptyPromptLine, bytes("\x1b[91merr\x1b[39m"));
-    expect(r.styled).toEqual([false, false, false]);
+    expect(r.rows[0]?.styled).toEqual([false, false, false]);
   });
 
   it("attribute-only SGR (bold/italic) does not flip styled on its own", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[1mab\x1b[0m"));
-    expect(r.styled).toEqual([false, false]);
+    expect(r.rows[0]?.styled).toEqual([false, false]);
   });
 
   it("currentStyled state persists across feed calls", () => {
     let r = feed(emptyPromptLine, bytes("\x1b[38;5;8m"));
     expect(r.currentStyled).toBe(true);
     r = feed(r, bytes("more"));
-    expect(r.styled).toEqual([true, true, true, true]);
+    expect(r.rows[0]?.styled).toEqual([true, true, true, true]);
     r = feed(r, bytes("\x1b[39m"));
     expect(r.currentStyled).toBe(false);
   });
 });
 
-// ── M12.2: selection (SGR 7 / 27) ────────────────────────────────────
+// ── M12.2: selection (SGR 7 / bg colour) ─────────────────────────────
 
 describe("promptRenderer / selection via SGR 7", () => {
   it("empty state has no selection and currentSelected is false", () => {
-    expect(emptyPromptLine.selected).toEqual([]);
+    expect(emptyPromptLine.rows[0]?.selected).toEqual([]);
     expect(emptyPromptLine.currentSelected).toBe(false);
   });
 
   it("SGR 7 marks subsequent chars as selected", () => {
     const r = feed(emptyPromptLine, bytes("ab\x1b[7mcd\x1b[27mef"));
-    expect(r.text).toBe("abcdef");
-    expect(r.selected).toEqual([false, false, true, true, false, false]);
-    // The dim heuristic is a separate concern — reverse must not
-    // accidentally flip styled.
-    expect(r.styled).toEqual([false, false, false, false, false, false]);
+    expect(rowTexts(r)).toEqual(["abcdef"]);
+    expect(r.rows[0]?.selected).toEqual([false, false, true, true, false, false]);
+    expect(r.rows[0]?.styled).toEqual([false, false, false, false, false, false]);
   });
 
   it("SGR 27 clears the selection state", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[7mab\x1b[27mcd"));
-    expect(r.selected).toEqual([true, true, false, false]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false, false]);
   });
 
   it("SGR 0 clears both styled and selected", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[7m\x1b[90mab\x1b[0mcd"));
-    expect(r.styled).toEqual([true, true, false, false]);
-    expect(r.selected).toEqual([true, true, false, false]);
+    expect(r.rows[0]?.styled).toEqual([true, true, false, false]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false, false]);
   });
 
   it("currentSelected persists across feed calls", () => {
     let r = feed(emptyPromptLine, bytes("\x1b[7m"));
     expect(r.currentSelected).toBe(true);
     r = feed(r, bytes("ab"));
-    expect(r.selected).toEqual([true, true]);
+    expect(r.rows[0]?.selected).toEqual([true, true]);
     r = feed(r, bytes("\x1b[27m"));
     expect(r.currentSelected).toBe(false);
   });
 
-  it("colour spec params do not accidentally trip the selection bit", () => {
+  it("fg-colour spec params do not accidentally trip the selection bit", () => {
     // A 24-bit fg spec that HAPPENS to include a 7 in its parameter
-    // stream. Naive parsing would treat the 7 as SGR 7 and paint the
-    // selection. We deliberately skip the 4 trailing args of an
-    // `SGR 38;2;R;G;B` (a foreground spec doesn't imply selection).
+    // stream. SGR 38 is fg, doesn't imply selection.
     const r = feed(emptyPromptLine, bytes("\x1b[38;2;7;7;7mx"));
-    expect(r.selected).toEqual([false]);
+    expect(r.rows[0]?.selected).toEqual([false]);
+  });
+
+  it("selection survives cursor motion and REPLACE writes preserve their own cell flags", () => {
+    let r = feed(emptyPromptLine, bytes("\x1b[7mAB\x1b[27m"));
+    expect(r.rows[0]?.selected).toEqual([true, true]);
+    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
+    r = feed(r, bytes("xy"));
+    expect(rowTexts(r)).toEqual(["xy"]);
+    expect(r.rows[0]?.selected).toEqual([false, false]);
+  });
+
+  it("CSI K (default) truncates selection to match truncated text", () => {
+    let r = feed(emptyPromptLine, bytes("\x1b[7mabcd\x1b[27m"));
+    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
+    r = feed(r, bytes("\x1b[K"));
+    expect(rowTexts(r)).toEqual(["ab"]);
+    expect(r.rows[0]?.selected).toEqual([true, true]);
   });
 
   it("24-bit background colour marks selection — zsh-vi-mode's default paint", () => {
@@ -295,62 +333,27 @@ describe("promptRenderer / selection via SGR 7", () => {
     // zsh translates to `\e[48;2;204;0;0m`. That's a highlighted
     // region; the strip must render it.
     const r = feed(emptyPromptLine, bytes("\x1b[48;2;204;0;0mab\x1b[49mc"));
-    expect(r.text).toBe("abc");
-    expect(r.selected).toEqual([true, true, false]);
+    expect(rowTexts(r)).toEqual(["abc"]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false]);
   });
 
   it("256-palette background colour marks selection", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[48;5;12mab\x1b[49mc"));
-    expect(r.selected).toEqual([true, true, false]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false]);
   });
 
   it("standard palette background colours (40-47) mark selection", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mc"));
-    expect(r.selected).toEqual([true, true, false]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false]);
   });
 
   it("bright palette background colours (100-107) mark selection", () => {
     const r = feed(emptyPromptLine, bytes("\x1b[101mab\x1b[49mc"));
-    expect(r.selected).toEqual([true, true, false]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false]);
   });
 
   it("SGR 49 (default bg) clears selection independently of SGR 27", () => {
-    // A shell that painted with bg colour rather than reverse video
-    // uses SGR 49 to reset. Both must clear selection so nothing
-    // trails past the highlighted region.
     const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mcd"));
-    expect(r.selected).toEqual([true, true, false, false]);
-  });
-
-  it("selection survives cursor motion and REPLACE writes preserve their own cell flags", () => {
-    // Write two selected cells, back up, and overwrite them with non-
-    // selected text. The overwritten cells inherit the new (unselected)
-    // state; nothing else is touched.
-    let r = feed(emptyPromptLine, bytes("\x1b[7mAB\x1b[27m"));
-    expect(r.selected).toEqual([true, true]);
-    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
-    r = feed(r, bytes("xy"));
-    expect(r.text).toBe("xy");
-    expect(r.selected).toEqual([false, false]);
-  });
-
-  it("LF clears the selection array but preserves currentSelected for the next line", () => {
-    // A shell that keeps reverse active across a redraw should have
-    // the next line's characters continue as selected.
-    let r = feed(emptyPromptLine, bytes("\x1b[7mab"));
-    expect(r.selected).toEqual([true, true]);
-    r = feed(r, new Uint8Array([0x0a])); // LF
-    expect(r.selected).toEqual([]);
-    expect(r.currentSelected).toBe(true);
-    r = feed(r, bytes("cd"));
-    expect(r.selected).toEqual([true, true]);
-  });
-
-  it("CSI K (default) truncates selection to match truncated text", () => {
-    let r = feed(emptyPromptLine, bytes("\x1b[7mabcd\x1b[27m"));
-    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
-    r = feed(r, bytes("\x1b[K"));
-    expect(r.text).toBe("ab");
-    expect(r.selected).toEqual([true, true]);
+    expect(r.rows[0]?.selected).toEqual([true, true, false, false]);
   });
 });

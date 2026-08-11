@@ -1,63 +1,74 @@
 /**
- * Tiny single-line VT renderer for the M1.9 PromptStrip.
+ * Tiny multi-row VT renderer for the M1.9 PromptStrip.
  *
  * The shell renders its current prompt line (PS1 + typing + history nav +
- * Tab completion) using a small set of VT escape sequences. To mirror what
- * the shell is drawing we need just enough of a VT engine to apply those
- * sequences to a one-line buffer with a cursor — full xterm.js would be
- * overkill (every command's output would have to run through it too) and
- * would re-implement xterm's invariants we don't need here.
+ * Tab completion + PS2 continuation) using a small set of VT escape
+ * sequences. To mirror what the shell is drawing we need just enough of
+ * a VT engine to apply those sequences to a stack of rows with a cursor
+ * — full xterm.js would be overkill (every command's output would have
+ * to run through it too) and would re-implement xterm's invariants we
+ * don't need here.
  *
  * Scope:
- *  - Single line. LF clears the line and resets the cursor.
+ *  - N rows (M12.3 grew this from single-line). LF advances the cursor
+ *    to a fresh row; the previous row stays put. Users composing
+ *    multi-line commands (unclosed quotes, backslash continuation) see
+ *    the whole composition, not just the current row.
  *  - REPLACE semantics for printable chars (xterm default).
- *  - Cursor: position within the line, 0 ≤ cursor ≤ text.length.
+ *  - Cursor: (row, col) position, 0 ≤ cursorCol ≤ rows[cursorRow].text.length.
  *  - Per-character styling: we track whether each char arrived under a
  *    non-default foreground SGR. The PromptStrip renders those chars in
  *    a faint colour to distinguish hints (zsh-autosuggestions ghost text,
  *    syntax-highlighted command parts, etc.) from committed input.
- *  - Per-character selection: SGR 7 (reverse video) marks a char as part
- *    of the active region. Both zsh's `region_highlight` and bash's
- *    readline `active-region-*-color` paint the mark/region with reverse
- *    by default, so this catches vi visual mode + emacs mark-and-region
- *    without a shell-specific integration. SGR 27 or SGR 0 clears the
- *    selection state.
+ *  - Per-character selection: SGR 7 (reverse video) or any non-default
+ *    background colour marks a char as part of the active region — vi
+ *    visual mode + emacs mark-and-region both flow through this path.
+ *    SGR 0 / 27 / 49 clear the selection state.
  *
  * Out of scope:
  *  - Multiple fg colour shades — we collapse "any non-default fg" to a
  *    single "styled" boolean. Good enough for the autosuggestion case
  *    and any other dim/grey hint; full SGR rendering lands with M4's
  *    formatter system.
- *  - Selection painted with a background-color SGR (`\e[48;…m`) instead
- *    of reverse. The default shell behaviour is reverse, so this covers
- *    the common case; users with custom `region_highlight bg=…` see no
- *    highlight in the strip (they still see it in xterm's hidden grid).
- *  - Scrolling, alternate screen, multi-line edits.
+ *  - Cursor motions that CROSS rows. CSI cursor moves (C / D / G / H)
+ *    stay within the current row. BS at column 0 stays at column 0
+ *    rather than wrapping to the previous row's end — the strip mirrors
+ *    what the shell echoes, and the shell won't ask us to wrap.
+ *  - Scrolling, alternate screen, arbitrary DECPAM.
  *
- * This module is pure: feed(state, bytes) returns the new state.
+ * This module is pure: feed(state, bytes) returns the new state. The
+ * consumer (blockReducer) resets to `emptyPromptLine` whenever a new
+ * command starts (OSC 133 C fires) so cross-prompt state can't leak.
  */
 
-export interface PromptLine {
-  /** The visible text of the current prompt line. */
+/** One row of the mirrored prompt buffer. */
+export interface PromptRow {
+  /** The visible text of this row. */
   text: string;
   /**
    * Per-character "styled" flag — same length as `text`. `true` means the
    * char arrived under a non-default foreground SGR; the strip renders
-   * these in a faint colour. Empty (and `false` entries) means default
-   * foreground.
+   * these in a faint colour. `false` means default foreground.
    */
   styled: boolean[];
   /**
    * Per-character "selected" flag — same length as `text`. `true` means
-   * the char arrived under SGR 7 (reverse video), which zsh /
-   * bash-readline both use by default to paint the mark/region during
-   * vi visual mode and emacs mark-and-region. The strip renders these
-   * cells with an accent background. Empty (and `false` entries) means
-   * the cell isn't part of an active selection.
+   * the char arrived under SGR 7 (reverse video) or any non-default
+   * background colour, which zsh / bash-readline / zsh-vi-mode use to
+   * paint the mark/region during vi visual mode and emacs
+   * mark-and-region. The strip renders these cells with an accent
+   * background.
    */
   selected: boolean[];
-  /** 0-based column where the cursor is. May equal text.length (at end). */
-  cursor: number;
+}
+
+export interface PromptLine {
+  /** All rows in the current prompt composition. Always ≥ 1 row. */
+  rows: PromptRow[];
+  /** 0-based row the cursor is currently on. `0 ≤ cursorRow < rows.length`. */
+  cursorRow: number;
+  /** 0-based column within `rows[cursorRow].text`. May equal `text.length` (at end). */
+  cursorCol: number;
   /**
    * Persistent SGR state across feeds: `true` while a non-default fg is
    * active (between `ESC[..m` setting fg and the matching reset `ESC[0m`
@@ -66,17 +77,18 @@ export interface PromptLine {
   currentStyled: boolean;
   /**
    * Persistent SGR state across feeds: `true` while SGR 7 (reverse
-   * video) is active. New characters inherit this value. Cleared by
-   * SGR 27 or SGR 0.
+   * video) is active OR a non-default background is set. New characters
+   * inherit this value. Cleared by SGR 0 / 27 / 49.
    */
   currentSelected: boolean;
 }
 
+const EMPTY_ROW: PromptRow = { text: "", styled: [], selected: [] };
+
 export const emptyPromptLine: PromptLine = {
-  text: "",
-  styled: [],
-  selected: [],
-  cursor: 0,
+  rows: [EMPTY_ROW],
+  cursorRow: 0,
+  cursorCol: 0,
   currentStyled: false,
   currentSelected: false,
 };
@@ -147,7 +159,7 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
       continue;
     }
     if (b === BS || b === DEL) {
-      if (line.cursor > 0) line = { ...line, cursor: line.cursor - 1 };
+      if (line.cursorCol > 0) line = { ...line, cursorCol: line.cursorCol - 1 };
       i++;
       continue;
     }
@@ -159,16 +171,21 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
       continue;
     }
     if (b === CR) {
-      line = { ...line, cursor: 0 };
+      line = { ...line, cursorCol: 0 };
       i++;
       continue;
     }
     if (b === LF) {
-      // Single-line renderer: a newline means the shell is moving past
-      // the current line. Treat it as "start fresh" — clear everything
-      // except the SGR state (so a styled fg / active reverse in
-      // progress carries over).
-      line = { ...line, text: "", styled: [], selected: [], cursor: 0 };
+      // Multi-row renderer: LF appends a fresh row and moves the cursor
+      // to column 0 of that row. Previous rows stay put. The SGR state
+      // (styled / selected) carries over so a run spanning the newline
+      // continues to inherit its attribute.
+      line = {
+        ...line,
+        rows: [...line.rows, EMPTY_ROW],
+        cursorRow: line.rows.length,
+        cursorCol: 0,
+      };
       i++;
       continue;
     }
@@ -196,44 +213,54 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
   return line;
 }
 
+/** Replace the row at `cursorRow` with a new one, leaving other rows
+ *  untouched. Returns a new PromptLine — never mutates. */
+function withCurrentRow(state: PromptLine, row: PromptRow): PromptLine {
+  const rows = state.rows.slice();
+  rows[state.cursorRow] = row;
+  return { ...state, rows };
+}
+
 /**
- * Write `segment` at the cursor, replacing any characters that previously
- * sat at those positions. Extends `text` if the segment runs past the end.
- * Records each new char's styled + selected flags from the current SGR
- * state.
+ * Write `segment` at the cursor on the current row, replacing any
+ * characters that previously sat at those positions. Extends the row
+ * if the segment runs past the end. Records each new char's styled +
+ * selected flags from the current SGR state.
  */
 function writeOver(state: PromptLine, segment: string): PromptLine {
-  const { text, styled, selected, cursor, currentStyled, currentSelected } = state;
+  const currentRow = state.rows[state.cursorRow] ?? EMPTY_ROW;
+  const { text, styled, selected } = currentRow;
+  const { cursorCol, currentStyled, currentSelected } = state;
   const segLen = segment.length;
   const segStyled = new Array<boolean>(segLen).fill(currentStyled);
   const segSelected = new Array<boolean>(segLen).fill(currentSelected);
-  if (cursor === text.length) {
-    return {
-      ...state,
+  let nextRow: PromptRow;
+  if (cursorCol === text.length) {
+    nextRow = {
       text: text + segment,
       styled: [...styled, ...segStyled],
       selected: [...selected, ...segSelected],
-      cursor: cursor + segLen,
+    };
+  } else {
+    const headText = text.slice(0, cursorCol);
+    const tailText = text.slice(cursorCol + segLen);
+    const headStyled = styled.slice(0, cursorCol);
+    const tailStyled = styled.slice(cursorCol + segLen);
+    const headSelected = selected.slice(0, cursorCol);
+    const tailSelected = selected.slice(cursorCol + segLen);
+    nextRow = {
+      text: headText + segment + tailText,
+      styled: [...headStyled, ...segStyled, ...tailStyled],
+      selected: [...headSelected, ...segSelected, ...tailSelected],
     };
   }
-  const headText = text.slice(0, cursor);
-  const tailText = text.slice(cursor + segLen);
-  const headStyled = styled.slice(0, cursor);
-  const tailStyled = styled.slice(cursor + segLen);
-  const headSelected = selected.slice(0, cursor);
-  const tailSelected = selected.slice(cursor + segLen);
-  return {
-    ...state,
-    text: headText + segment + tailText,
-    styled: [...headStyled, ...segStyled, ...tailStyled],
-    selected: [...headSelected, ...segSelected, ...tailSelected],
-    cursor: cursor + segLen,
-  };
+  return { ...withCurrentRow(state, nextRow), cursorCol: cursorCol + segLen };
 }
 
 function applyCsi(state: PromptLine, params: string, final: number): PromptLine {
   const args = params === "" ? [] : params.split(";").map((s) => parseInt(s, 10) || 0);
   const n = args[0] ?? 0;
+  const currentRow = state.rows[state.cursorRow] ?? EMPTY_ROW;
 
   switch (final) {
     case 0x40: {
@@ -242,85 +269,93 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
       const blanks = " ".repeat(count);
       const blanksStyled = new Array<boolean>(count).fill(state.currentStyled);
       const blanksSelected = new Array<boolean>(count).fill(state.currentSelected);
-      return {
-        ...state,
-        text: state.text.slice(0, state.cursor) + blanks + state.text.slice(state.cursor),
+      const nextRow: PromptRow = {
+        text:
+          currentRow.text.slice(0, state.cursorCol) +
+          blanks +
+          currentRow.text.slice(state.cursorCol),
         styled: [
-          ...state.styled.slice(0, state.cursor),
+          ...currentRow.styled.slice(0, state.cursorCol),
           ...blanksStyled,
-          ...state.styled.slice(state.cursor),
+          ...currentRow.styled.slice(state.cursorCol),
         ],
         selected: [
-          ...state.selected.slice(0, state.cursor),
+          ...currentRow.selected.slice(0, state.cursorCol),
           ...blanksSelected,
-          ...state.selected.slice(state.cursor),
+          ...currentRow.selected.slice(state.cursorCol),
         ],
       };
+      return withCurrentRow(state, nextRow);
     }
     case 0x43: {
-      // 'C' — cursor forward N.
+      // 'C' — cursor forward N (within the current row).
       const count = Math.max(1, n);
-      return { ...state, cursor: Math.min(state.text.length, state.cursor + count) };
+      return { ...state, cursorCol: Math.min(currentRow.text.length, state.cursorCol + count) };
     }
     case 0x44: {
-      // 'D' — cursor backward N.
+      // 'D' — cursor backward N (within the current row).
       const count = Math.max(1, n);
-      return { ...state, cursor: Math.max(0, state.cursor - count) };
+      return { ...state, cursorCol: Math.max(0, state.cursorCol - count) };
     }
     case 0x47: {
-      // 'G' — cursor horizontal absolute, 1-indexed.
+      // 'G' — cursor horizontal absolute, 1-indexed. Stays on current row.
       const col = Math.max(0, (n || 1) - 1);
-      return { ...state, cursor: col };
+      return { ...state, cursorCol: col };
     }
     case 0x48: {
-      // 'H' / 'f' — CUP. Row ignored in single-line.
+      // 'H' / 'f' — CUP. Row ignored — the strip's rows are ours to
+      // arrange; the shell's row addressing doesn't map to our row
+      // stack. Only the column applies.
       const col = Math.max(0, (args[1] ?? 1) - 1);
-      return { ...state, cursor: col };
+      return { ...state, cursorCol: col };
     }
     case 0x4b: {
-      // 'K' — erase in line.
+      // 'K' — erase in line (current row).
       if (n === 1) {
         // From start to cursor (inclusive): replace with spaces.
-        const blanks = " ".repeat(state.cursor);
-        const blanksStyled = new Array<boolean>(state.cursor).fill(false);
-        const blanksSelected = new Array<boolean>(state.cursor).fill(false);
-        return {
-          ...state,
-          text: blanks + state.text.slice(state.cursor),
-          styled: [...blanksStyled, ...state.styled.slice(state.cursor)],
-          selected: [...blanksSelected, ...state.selected.slice(state.cursor)],
+        const blanks = " ".repeat(state.cursorCol);
+        const blanksStyled = new Array<boolean>(state.cursorCol).fill(false);
+        const blanksSelected = new Array<boolean>(state.cursorCol).fill(false);
+        const nextRow: PromptRow = {
+          text: blanks + currentRow.text.slice(state.cursorCol),
+          styled: [...blanksStyled, ...currentRow.styled.slice(state.cursorCol)],
+          selected: [...blanksSelected, ...currentRow.selected.slice(state.cursorCol)],
         };
+        return withCurrentRow(state, nextRow);
       }
       if (n === 2) {
-        return { ...state, text: "", styled: [], selected: [] };
+        return withCurrentRow(state, EMPTY_ROW);
       }
       // 0 (default): from cursor to end.
-      return {
-        ...state,
-        text: state.text.slice(0, state.cursor),
-        styled: state.styled.slice(0, state.cursor),
-        selected: state.selected.slice(0, state.cursor),
+      const nextRow: PromptRow = {
+        text: currentRow.text.slice(0, state.cursorCol),
+        styled: currentRow.styled.slice(0, state.cursorCol),
+        selected: currentRow.selected.slice(0, state.cursorCol),
       };
+      return withCurrentRow(state, nextRow);
     }
     case 0x50: {
       // 'P' — delete N characters at cursor.
       const count = Math.max(1, n);
-      return {
-        ...state,
-        text: state.text.slice(0, state.cursor) + state.text.slice(state.cursor + count),
+      const nextRow: PromptRow = {
+        text:
+          currentRow.text.slice(0, state.cursorCol) +
+          currentRow.text.slice(state.cursorCol + count),
         styled: [
-          ...state.styled.slice(0, state.cursor),
-          ...state.styled.slice(state.cursor + count),
+          ...currentRow.styled.slice(0, state.cursorCol),
+          ...currentRow.styled.slice(state.cursorCol + count),
         ],
         selected: [
-          ...state.selected.slice(0, state.cursor),
-          ...state.selected.slice(state.cursor + count),
+          ...currentRow.selected.slice(0, state.cursorCol),
+          ...currentRow.selected.slice(state.cursorCol + count),
         ],
       };
+      return withCurrentRow(state, nextRow);
     }
     case 0x6d: {
-      // 'm' — SGR. Track foreground-style + reverse state so subsequent
-      // writes inherit both. Empty SGR is equivalent to SGR 0 (reset all).
+      // 'm' — SGR. Track foreground-style + reverse/bg state so
+      // subsequent writes inherit both. Empty SGR is equivalent to
+      // SGR 0 (reset all).
       return {
         ...state,
         currentStyled: applySgr(state.currentStyled, args),
