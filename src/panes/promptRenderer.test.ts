@@ -285,9 +285,41 @@ describe("promptRenderer / selection via SGR 7", () => {
     // A 24-bit fg spec that HAPPENS to include a 7 in its parameter
     // stream. Naive parsing would treat the 7 as SGR 7 and paint the
     // selection. We deliberately skip the 4 trailing args of an
-    // `SGR 38;2;R;G;B` (and `48;2;R;G;B`).
+    // `SGR 38;2;R;G;B` (a foreground spec doesn't imply selection).
     const r = feed(emptyPromptLine, bytes("\x1b[38;2;7;7;7mx"));
     expect(r.selected).toEqual([false]);
+  });
+
+  it("24-bit background colour marks selection — zsh-vi-mode's default paint", () => {
+    // zsh-vi-mode's default visual highlight sets `bg=#cc0000`, which
+    // zsh translates to `\e[48;2;204;0;0m`. That's a highlighted
+    // region; the strip must render it.
+    const r = feed(emptyPromptLine, bytes("\x1b[48;2;204;0;0mab\x1b[49mc"));
+    expect(r.text).toBe("abc");
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("256-palette background colour marks selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[48;5;12mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("standard palette background colours (40-47) mark selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("bright palette background colours (100-107) mark selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[101mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("SGR 49 (default bg) clears selection independently of SGR 27", () => {
+    // A shell that painted with bg colour rather than reverse video
+    // uses SGR 49 to reset. Both must clear selection so nothing
+    // trails past the highlighted region.
+    const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mcd"));
+    expect(r.selected).toEqual([true, true, false, false]);
   });
 
   it("selection survives cursor motion and REPLACE writes preserve their own cell flags", () => {

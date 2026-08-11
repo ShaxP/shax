@@ -418,20 +418,37 @@ function applySgr(currentStyled: boolean, args: number[]): boolean {
 }
 
 /**
- * Parse a sequence of SGR parameters and return the new "reverse video
- * active" flag (M12.2 selection support).
+ * Parse a sequence of SGR parameters and return the new "this cell is
+ * part of a highlighted region" flag (M12.2 selection support).
  *
- * We only care about three SGR params here:
+ * Two ways a shell paints a highlighted region:
  *
- *   SGR 0   → reset all → selected = false
- *   SGR 7   → reverse video on → selected = true
- *   SGR 27  → reverse video off → selected = false
+ *   1. SGR 7 (reverse video). What bash-readline's active-region-*
+ *      defaults to and what zsh's `region_highlight standout` produces.
+ *   2. A non-default background colour. What `zsh-vi-mode` uses by
+ *      default (`bg=#cc0000` → `\e[48;2;204;0;0m`), and what
+ *      `region_highlight bg=…` produces in general.
  *
- * Everything else is skipped, including colour specs (SGR 38 / 48 with
- * their 5/2 mode + trailing indices) so we don't misread a colour
- * parameter as a reverse command. Keeping this separate from the
- * dim-heuristic `applySgr` means each pass has one job and the existing
- * autosuggestion detection stays untouched.
+ * We treat both as selection because in assertive mode the shell's own
+ * prompt / theme / syntax-highlighter has been silenced, so the only
+ * remaining sources of bg colour in the strip's byte stream are the
+ * mark/region highlights. False-positive risk is minimal in practice.
+ *
+ * Handled tokens:
+ *
+ *   SGR 0            → reset all → selected = false
+ *   SGR 7            → reverse video on → selected = true
+ *   SGR 27           → reverse video off → selected = false
+ *   SGR 40-47        → standard palette bg → selected = true
+ *   SGR 49           → default bg → selected = false
+ *   SGR 100-107      → bright palette bg → selected = true
+ *   SGR 48;5;N       → 256-palette bg → selected = true
+ *   SGR 48;2;R;G;B   → 24-bit bg → selected = true
+ *   SGR 38           → foreground colour spec — skipped
+ *
+ * Keeping this separate from the dim-heuristic `applySgr` means each
+ * pass has one job and the existing autosuggestion detection stays
+ * untouched.
  */
 function applySgrSelected(currentSelected: boolean, args: number[]): boolean {
   if (args.length === 0) return false;
@@ -439,18 +456,36 @@ function applySgrSelected(currentSelected: boolean, args: number[]): boolean {
   let i = 0;
   while (i < args.length) {
     const a = args[i] ?? 0;
-    if (a === 0) {
+    if (a === 0 || a === 49 || a === 27) {
+      // SGR 0 (reset all), SGR 27 (no reverse), SGR 49 (default bg) —
+      // all three signal "this cell is not part of a highlight anymore".
       selected = false;
       i++;
     } else if (a === 7) {
       selected = true;
       i++;
-    } else if (a === 27) {
-      selected = false;
+    } else if ((a >= 40 && a <= 47) || (a >= 100 && a <= 107)) {
+      // Standard / bright palette bg — non-default bg means the shell
+      // painted a highlight.
+      selected = true;
       i++;
-    } else if (a === 38 || a === 48) {
-      // Colour spec — skip mode + trailing parameters so we don't mis-
-      // read them as SGR opcodes. Mirrors the skip pattern in applySgr.
+    } else if (a === 48) {
+      // Extended bg colour spec (256-palette or 24-bit RGB). Both count
+      // as highlight. Skip past the mode + trailing parameters so we
+      // don't misread them as SGR opcodes.
+      const mode = args[i + 1];
+      if (mode === 5) {
+        selected = true;
+        i += 3;
+      } else if (mode === 2) {
+        selected = true;
+        i += 5;
+      } else {
+        i += 1;
+      }
+    } else if (a === 38) {
+      // Foreground colour spec — skip mode + trailing parameters.
+      // Doesn't affect selection. Mirrors the skip pattern in applySgr.
       const mode = args[i + 1];
       if (mode === 5) i += 3;
       else if (mode === 2) i += 5;
