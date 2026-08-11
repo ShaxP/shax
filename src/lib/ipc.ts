@@ -107,6 +107,17 @@ export type PtyEvent =
       kind: "prompt_ready";
       cwd: string | null;
       git_branch: string | null;
+    }
+  | {
+      /**
+       * The shell's line-editor keymap changed (M12.2). Emitted from the
+       * OSC 133;M marker the zsh shim produces when the user picked Vi.
+       * The frontend uses `keymap` to drive the statusline's two-chip
+       * pill sub-mode. Values seen in practice: `main`, `emacs`, `viins`,
+       * `vicmd`, `visual`.
+       */
+      kind: "keymap_changed";
+      keymap: string;
     };
 
 /**

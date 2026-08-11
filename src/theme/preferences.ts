@@ -29,6 +29,21 @@ export const MAX_FONT_SIZE = 24;
 export const DEFAULT_FONT_SIZE = 13;
 
 /**
+ * The user's chosen line-editing mode for the shell prompt
+ * (M12.2, spec §18 D2).
+ *
+ * - `"emacs"` (default) — the shim forces emacs bindings against
+ *   any plugin that tries to install vi keys.
+ * - `"vi"` — the shim sources the bundled `zsh-vi-mode` when the
+ *   user's rc hasn't already loaded it, and registers a
+ *   `zle-keymap-select` widget so the statusline can render a
+ *   two-chip pill (COMMAND · INSERT / NORMAL / VISUAL).
+ *
+ * Mirrors `LineEditing` in `src-tauri/src/preferences.rs`.
+ */
+export type LineEditing = "emacs" | "vi";
+
+/**
  * Appearance sub-block introduced in M10.1. Mirrors
  * `AppearancePreferences` in `src-tauri/src/preferences.rs`.
  * A pre-M10 `preferences.json` without this block deserialises
@@ -41,6 +56,8 @@ export interface AppearancePreferences {
   font_family: string | null;
   font_size: number;
   ligatures: boolean;
+  /** M12.2: how the user wants to edit the shell prompt line. */
+  line_editing: LineEditing;
 }
 
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
@@ -49,6 +66,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   font_family: null,
   font_size: DEFAULT_FONT_SIZE,
   ligatures: true,
+  line_editing: "emacs",
 };
 
 export interface Preferences {

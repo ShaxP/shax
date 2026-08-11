@@ -694,6 +694,11 @@ export default function App(): React.ReactElement {
   // in block-focus in the pane behind the assistant dock).
   const [assistantInputFocused, setAssistantInputFocused] = useState(false);
   const [activePaneInBlockFocus, setActivePaneInBlockFocus] = useState(false);
+  // M12.2: the active pane's vi keymap (viins / vicmd / visual /
+  // main / emacs). Non-null only when the user picked Vi and the
+  // shim has emitted at least one OSC 133;M. Drives the pill's
+  // sub-chip alongside COMMAND.
+  const [activePaneViKeymap, setActivePaneViKeymap] = useState<string | null>(null);
   useEffect(() => {
     const onFocus = (e: Event): void => {
       const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
@@ -703,11 +708,17 @@ export default function App(): React.ReactElement {
       const detail = (e as CustomEvent<{ blockFocus?: boolean }>).detail;
       setActivePaneInBlockFocus(detail?.blockFocus === true);
     };
+    const onViKeymap = (e: Event): void => {
+      const detail = (e as CustomEvent<{ keymap?: string | null }>).detail;
+      setActivePaneViKeymap(detail?.keymap ?? null);
+    };
     window.addEventListener("shax:assistant-input-focus", onFocus);
     window.addEventListener("shax:block-focus-changed", onBlockFocus);
+    window.addEventListener("shax:vi-keymap-changed", onViKeymap);
     return () => {
       window.removeEventListener("shax:assistant-input-focus", onFocus);
       window.removeEventListener("shax:block-focus-changed", onBlockFocus);
+      window.removeEventListener("shax:vi-keymap-changed", onViKeymap);
     };
   }, []);
   // Closing the dock unmounts the textarea; the browser usually
@@ -1241,6 +1252,7 @@ export default function App(): React.ReactElement {
             }
             branch={activeFocused?.branch ?? null}
             mode={assistantInputFocused ? "CHAT" : activePaneInBlockFocus ? "BLOCK" : "COMMAND"}
+            viKeymap={activePaneViKeymap}
             assistantActive={assistantOpen}
             approvalsPending={approvalsPending}
           />

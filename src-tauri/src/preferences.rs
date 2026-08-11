@@ -65,6 +65,51 @@ fn default_theme_dark() -> String {
     DEFAULT_DARK_THEME_ID.to_string()
 }
 
+/// The user's chosen line-editing mode for the shell prompt
+/// (M12.2, spec §18 D2).
+///
+/// - `Emacs` (default) — the shim forces emacs bindings against
+///   any plugin that tries to install vi keys. `bindkey -e` at
+///   source time plus a defence-in-depth pair: precmd hook +
+///   `zle-line-init` widget that overrides deferred-init
+///   plugins like `zsh-vi-mode`.
+/// - `Vi` — the shim sources the bundled `zsh-vi-mode` (v0.12.0)
+///   when the user's rc hasn't already loaded it, and registers
+///   a `zle-keymap-select` widget that emits `OSC 133;M;<keymap>`
+///   so the frontend statusline can render a two-chip pill
+///   (COMMAND · INSERT / NORMAL / VISUAL).
+///
+/// The always-on assertive parts of the shim (bare PS1,
+/// silenced `zsh-syntax-highlighting`) are unaffected by this
+/// preference — those are visual conflicts Shax owns; this
+/// preference is the user's editing philosophy, which they get
+/// to pick. The `SHAX_DISABLE_HARDENING=1` env var (undocumented
+/// safety valve) turns off everything for one shell if it's
+/// ever needed for debugging.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LineEditing {
+    #[default]
+    Emacs,
+    Vi,
+}
+
+impl LineEditing {
+    /// Value written into the `SHAX_LINE_EDITING` environment
+    /// variable that the shell shims branch on. Kept lowercase
+    /// so the shim can test with a simple string comparison.
+    pub fn as_env_str(&self) -> &'static str {
+        match self {
+            Self::Emacs => "emacs",
+            Self::Vi => "vi",
+        }
+    }
+}
+
+fn default_line_editing() -> LineEditing {
+    LineEditing::default()
+}
+
 /// Appearance (theme + font) preferences (M10.1).
 ///
 /// The `theme_light` and `theme_dark` fields carry
@@ -92,6 +137,12 @@ pub struct AppearancePreferences {
     pub font_size: u8,
     #[serde(default = "default_ligatures")]
     pub ligatures: bool,
+    /// The user's line-editing mode for the shell prompt
+    /// (M12.2). See [`LineEditing`] for behaviour details.
+    /// Missing field → emacs default (matches a fresh install
+    /// and matches every supported shell's own default).
+    #[serde(default = "default_line_editing")]
+    pub line_editing: LineEditing,
 }
 
 impl Default for AppearancePreferences {
@@ -102,6 +153,7 @@ impl Default for AppearancePreferences {
             font_family: None,
             font_size: DEFAULT_FONT_SIZE,
             ligatures: true,
+            line_editing: LineEditing::default(),
         }
     }
 }
@@ -301,6 +353,7 @@ mod tests {
         assert_eq!(a.font_family, None);
         assert_eq!(a.font_size, DEFAULT_FONT_SIZE);
         assert!(a.ligatures);
+        assert_eq!(a.line_editing, LineEditing::Emacs);
     }
 
     #[test]
@@ -312,6 +365,7 @@ mod tests {
                 font_family: Some("Fira Code".into()),
                 font_size: 15,
                 ligatures: false,
+                line_editing: LineEditing::Vi,
             },
             ..Preferences::default()
         };
@@ -322,6 +376,49 @@ mod tests {
         assert_eq!(back.appearance.font_family.as_deref(), Some("Fira Code"));
         assert_eq!(back.appearance.font_size, 15);
         assert!(!back.appearance.ligatures);
+        assert_eq!(back.appearance.line_editing, LineEditing::Vi);
+    }
+
+    // ── M12.2 line-editing mode ─────────────────────────────
+
+    #[test]
+    fn default_line_editing_is_emacs() {
+        let a = AppearancePreferences::default();
+        assert_eq!(a.line_editing, LineEditing::Emacs);
+    }
+
+    #[test]
+    fn line_editing_env_str_is_lowercase() {
+        // The shim tests $SHAX_LINE_EDITING with a plain string
+        // comparison; casing has to be stable.
+        assert_eq!(LineEditing::Emacs.as_env_str(), "emacs");
+        assert_eq!(LineEditing::Vi.as_env_str(), "vi");
+    }
+
+    #[test]
+    fn line_editing_serialises_as_kebab_case() {
+        for mode in [LineEditing::Emacs, LineEditing::Vi] {
+            let p = Preferences {
+                appearance: AppearancePreferences {
+                    line_editing: mode,
+                    ..AppearancePreferences::default()
+                },
+                ..Preferences::default()
+            };
+            let json = serde_json::to_string(&p).unwrap();
+            assert!(json.contains(&format!(r#""line_editing":"{}""#, mode.as_env_str())));
+        }
+    }
+
+    #[test]
+    fn pre_m122_appearance_block_gets_emacs_default() {
+        // An appearance block written before M12.2 shipped had no
+        // line_editing field. #[serde(default)] populates it with
+        // Emacs — matches every supported shell's own default.
+        let old_json = r#"{"appearance":{"font_size":15}}"#;
+        let p: Preferences = serde_json::from_str(old_json).unwrap();
+        assert_eq!(p.appearance.font_size, 15);
+        assert_eq!(p.appearance.line_editing, LineEditing::Emacs);
     }
 
     #[test]

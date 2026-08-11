@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::{
     blocks::{BlockId, BlockMachine, BlockSummary},
     mux::Windows,
+    preferences,
     pty::error::PtyError,
     store::{PersistedBlock, Store},
     vt::{OscParser, VtMessage},
@@ -157,6 +158,13 @@ pub enum PtyEvent {
         cwd: Option<String>,
         git_branch: Option<String>,
     },
+    /// The shell's line-editor keymap changed (M12.2). Emitted from
+    /// the OSC 133;M marker that the zsh shim's `zle-keymap-select`
+    /// widget produces when the user picked Vi. The frontend uses
+    /// the keymap value (`viins` / `vicmd` / `visual`, or `main` /
+    /// `emacs` for insert-mode returns) to drive the statusline's
+    /// two-chip pill sub-mode.
+    KeymapChanged { keymap: String },
 }
 
 // ── Internal handle ────────────────────────────────────────────────────────────
@@ -818,6 +826,12 @@ fn persist_new_blocks(
 const SHAX_ZSH: &str = include_str!("../../shell-integration/shax.zsh");
 const SHAX_BASH: &str = include_str!("../../shell-integration/shax.bash");
 const SHAX_FISH: &str = include_str!("../../shell-integration/shax.fish");
+/// zsh-vi-mode plugin vendored at v0.12.0 (MIT, see
+/// `shell-integration/LICENSE-zsh-vi-mode`). The zsh shim
+/// sources this from the ZDOTDIR tempdir when the user has
+/// picked Vi in preferences and hasn't already loaded a copy
+/// via their own rc.
+const ZSH_VI_MODE: &str = include_str!("../../shell-integration/zsh-vi-mode.zsh");
 
 /// Build the shell `CommandBuilder` from spawn options.
 ///
@@ -849,6 +863,14 @@ fn build_shell_command(
     // Scoped to git on purpose — other pagers (man, explicit `less foo`)
     // still work through alt-screen passthrough.
     cmd.env("GIT_PAGER", "cat");
+
+    // M12.2: propagate the user's line-editing preference to the
+    // shell shim via env var. Pref-load failures fall back to the
+    // emacs default — same behaviour a fresh install gets.
+    let line_editing = preferences::load()
+        .map(|p| p.appearance.line_editing)
+        .unwrap_or_default();
+    cmd.env("SHAX_LINE_EDITING", line_editing.as_env_str());
 
     let cwd = opts.cwd.clone().or_else(|| std::env::var("HOME").ok());
     if let Some(ref cwd) = cwd {
@@ -935,6 +957,15 @@ fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, Pt
     // Write shax.zsh into the temp dir.
     fs::write(dir.join("shax.zsh"), SHAX_ZSH)
         .map_err(|e| PtyError::Spawn(format!("write shax.zsh: {e}")))?;
+
+    // Also vendor zsh-vi-mode alongside the shim (M12.2). The
+    // shim sources it by path when the user picked Vi and their
+    // rc hasn't already loaded a copy. Always writing it (even
+    // for emacs users) keeps this function preference-free — the
+    // shim decides at source time whether to actually use it.
+    // ~50 KB of zsh, cleaned up with the tempdir on pane close.
+    fs::write(dir.join("zsh-vi-mode.zsh"), ZSH_VI_MODE)
+        .map_err(|e| PtyError::Spawn(format!("write zsh-vi-mode.zsh: {e}")))?;
 
     // Each shim file temporarily switches ZDOTDIR to the user's real value
     // while sourcing the corresponding user dotfile, then restores ZDOTDIR
@@ -1463,12 +1494,171 @@ mod tests {
         let mut dummy_cmd = CommandBuilder::new("zsh");
         let tmpdir = create_zdotdir_shim(&mut dummy_cmd).expect("shim creation should succeed");
         let dir = tmpdir.path();
-        for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin", "shax.zsh"] {
+        // M12.2 adds `zsh-vi-mode.zsh` to the tempdir alongside the shim
+        // so `shax.zsh` can source it by path when the user picked Vi.
+        for name in [
+            ".zshenv",
+            ".zprofile",
+            ".zshrc",
+            ".zlogin",
+            "shax.zsh",
+            "zsh-vi-mode.zsh",
+        ] {
             assert!(
                 dir.join(name).exists(),
                 "expected shim file not found: {name}"
             );
         }
+        // Sanity: zsh-vi-mode is the vendored v0.12.0 script, not an
+        // empty file. Cheap check on the first line.
+        let zvm = std::fs::read_to_string(dir.join("zsh-vi-mode.zsh")).expect("read zvm");
+        assert!(
+            zvm.starts_with("# zsh-vi-mode.zsh"),
+            "zsh-vi-mode.zsh must be the vendored plugin, not a stub: {}",
+            &zvm[..zvm.len().min(80)],
+        );
+    }
+
+    #[test]
+    fn zsh_shim_has_line_editing_branches_and_always_assertive_block() {
+        let shim = SHAX_ZSH;
+        // Always-assertive block runs unconditionally except when the
+        // undocumented SHAX_DISABLE_HARDENING escape hatch is set.
+        assert!(
+            shim.contains(r#"SHAX_DISABLE_HARDENING" != "1""#),
+            "shax.zsh must gate the assertive block on SHAX_DISABLE_HARDENING",
+        );
+        // Always-on: silence highlighter, reset PROMPT, clear RPROMPT.
+        assert!(
+            shim.contains("_zsh_highlight() { : }"),
+            "shax.zsh must no-op zsh-syntax-highlighting unconditionally",
+        );
+        assert!(
+            shim.contains("_shax_reset_prompt"),
+            "shax.zsh must register the per-prompt PROMPT reset",
+        );
+        assert!(
+            shim.contains("RPROMPT=''"),
+            "shax.zsh must clear RPROMPT in the reset hook",
+        );
+        // Branched on SHAX_LINE_EDITING.
+        assert!(
+            shim.contains(r#"SHAX_LINE_EDITING" == "vi""#),
+            "shax.zsh must branch on SHAX_LINE_EDITING == vi",
+        );
+        // Vi branch: source bundled zvm if not loaded; emit keymap OSC.
+        assert!(
+            shim.contains(r#"source "$SHAX_INTEGRATION_DIR/zsh-vi-mode.zsh""#),
+            "shax.zsh vi branch must source the bundled zsh-vi-mode",
+        );
+        assert!(
+            shim.contains(r"'\033]133;M;%s\007'"),
+            "shax.zsh vi branch must emit OSC 133;M on keymap select",
+        );
+        assert!(
+            shim.contains("zle -N zle-keymap-select"),
+            "shax.zsh vi branch must register a zle-keymap-select widget",
+        );
+        // zsh-vi-mode's visual mode doesn't switch $KEYMAP — it tracks
+        // state via $ZVM_MODE. So the vi branch also hooks the plugin's
+        // own `zvm_after_select_vi_mode_commands` callback array to
+        // catch visual entry/exit. Without this, VISUAL never shows in
+        // the sub-chip.
+        assert!(
+            shim.contains("zvm_after_select_vi_mode_commands"),
+            "shax.zsh vi branch must hook zsh-vi-mode's mode-select callback \
+             so visual mode reaches the frontend",
+        );
+        assert!(
+            shim.contains("_shax_emit_zvm_mode"),
+            "shax.zsh vi branch must define the zvm-mode emit helper",
+        );
+        // Emacs branch: force via source-time bindkey, precmd re-force,
+        // and zle-line-init override — defence in depth against
+        // zsh-vi-mode's deferred init.
+        assert!(
+            shim.contains("bindkey -e"),
+            "shax.zsh emacs branch must force emacs keybindings",
+        );
+        assert!(
+            shim.contains("_shax_reforce_emacs"),
+            "shax.zsh emacs branch must register a per-prompt bindkey -e re-force",
+        );
+        assert!(
+            shim.contains("_shax_force_emacs_line_init"),
+            "shax.zsh emacs branch must chain a zle-line-init widget",
+        );
+    }
+
+    #[test]
+    fn bash_shim_has_line_editing_branches_and_always_assertive_block() {
+        let shim = SHAX_BASH;
+        assert!(
+            shim.contains(r#"SHAX_DISABLE_HARDENING" != "1""#),
+            "shax.bash must gate the assertive block on SHAX_DISABLE_HARDENING",
+        );
+        assert!(
+            shim.contains(r"PS1='\[\e]133;B\a\]'"),
+            "shax.bash must reset PS1 to a bare OSC 133 B marker",
+        );
+        assert!(shim.contains("PS2=''"), "shax.bash must clear PS2",);
+        assert!(
+            shim.contains(r#"SHAX_LINE_EDITING" == "vi""#),
+            "shax.bash must branch on SHAX_LINE_EDITING",
+        );
+        assert!(
+            shim.contains("set -o vi"),
+            "shax.bash vi branch must set vi mode",
+        );
+        assert!(
+            shim.contains("set -o emacs"),
+            "shax.bash emacs branch must set emacs mode",
+        );
+        // ORDER CONSTRAINT (regression guard). The always-assertive block
+        // must run BEFORE the DEBUG trap is installed. If the trap is
+        // already in place when we run PS1=/PS2=/set -o, bash fires
+        // `_shax_preexec` for each assignment / builtin, emitting a
+        // phantom OSC 133 C that opens a bogus block and eats the
+        // shell's startup output. See git blame + the fix commit.
+        let assertive_pos = shim
+            .find(r"PS1='\[\e]133;B\a\]'")
+            .expect("PS1 reset must exist");
+        let trap_pos = shim
+            .find("trap '_shax_preexec' DEBUG")
+            .expect("DEBUG trap install must exist");
+        assert!(
+            assertive_pos < trap_pos,
+            "shax.bash assertive block (PS1 / PS2 / set -o) must run BEFORE the DEBUG trap install \
+             to avoid a phantom-block regression on macOS bash 3.2",
+        );
+    }
+
+    #[test]
+    fn build_shell_command_sets_line_editing_env_var() {
+        // M12.2: the shim reads $SHAX_LINE_EDITING to branch. The
+        // value must be one of the two documented tokens the shim
+        // knows how to match; whichever one lands here depends on
+        // what `preferences::load()` finds on disk on the machine
+        // running the test (fresh install → emacs; developer with
+        // a persisted vi pick → vi). Asserting the exact value
+        // would fail in the second case, so we assert the surface
+        // contract instead: the var is set to one of the two known
+        // tokens.
+        let opts = SpawnOpts {
+            rows: 24,
+            cols: 80,
+            cwd: None,
+            env: None,
+        };
+        let (cmd, _tmpdir) = build_shell_command(&opts).expect("build should succeed");
+        let mode = cmd
+            .get_env("SHAX_LINE_EDITING")
+            .and_then(|s| s.to_str())
+            .expect("SHAX_LINE_EDITING must be set");
+        assert!(
+            mode == "emacs" || mode == "vi",
+            "SHAX_LINE_EDITING must be `emacs` or `vi`, got {mode:?}",
+        );
     }
 
     #[test]

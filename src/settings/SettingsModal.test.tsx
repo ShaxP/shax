@@ -101,6 +101,7 @@ beforeEach(() => {
       font_family: null,
       font_size: 13,
       ligatures: true,
+      line_editing: "emacs",
     },
   });
   mockSavePreferences.mockResolvedValue(undefined);
@@ -451,5 +452,37 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
       await Promise.resolve();
     });
     expect(lastSaved().appearance.ligatures).toBe(false);
+  });
+
+  // M12.2 — line-editing radio
+  it("emacs is the visible default and marked active", async () => {
+    await open();
+    const emacs = screen.getByTestId("settings-line-editing-emacs");
+    const vi = screen.getByTestId("settings-line-editing-vi");
+    expect(emacs).toHaveAttribute("data-active", "true");
+    expect(vi).toHaveAttribute("data-active", "false");
+    expect(emacs).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("clicking Vi persists line_editing: vi", async () => {
+    await open();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("settings-line-editing-vi"));
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.line_editing).toBe("vi");
+  });
+
+  it("clicking Emacs after Vi restores emacs", async () => {
+    await open();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("settings-line-editing-vi"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("settings-line-editing-emacs"));
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.line_editing).toBe("emacs");
   });
 });

@@ -243,3 +243,114 @@ describe("promptRenderer / per-character styling", () => {
     expect(r.currentStyled).toBe(false);
   });
 });
+
+// ── M12.2: selection (SGR 7 / 27) ────────────────────────────────────
+
+describe("promptRenderer / selection via SGR 7", () => {
+  it("empty state has no selection and currentSelected is false", () => {
+    expect(emptyPromptLine.selected).toEqual([]);
+    expect(emptyPromptLine.currentSelected).toBe(false);
+  });
+
+  it("SGR 7 marks subsequent chars as selected", () => {
+    const r = feed(emptyPromptLine, bytes("ab\x1b[7mcd\x1b[27mef"));
+    expect(r.text).toBe("abcdef");
+    expect(r.selected).toEqual([false, false, true, true, false, false]);
+    // The dim heuristic is a separate concern — reverse must not
+    // accidentally flip styled.
+    expect(r.styled).toEqual([false, false, false, false, false, false]);
+  });
+
+  it("SGR 27 clears the selection state", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[7mab\x1b[27mcd"));
+    expect(r.selected).toEqual([true, true, false, false]);
+  });
+
+  it("SGR 0 clears both styled and selected", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[7m\x1b[90mab\x1b[0mcd"));
+    expect(r.styled).toEqual([true, true, false, false]);
+    expect(r.selected).toEqual([true, true, false, false]);
+  });
+
+  it("currentSelected persists across feed calls", () => {
+    let r = feed(emptyPromptLine, bytes("\x1b[7m"));
+    expect(r.currentSelected).toBe(true);
+    r = feed(r, bytes("ab"));
+    expect(r.selected).toEqual([true, true]);
+    r = feed(r, bytes("\x1b[27m"));
+    expect(r.currentSelected).toBe(false);
+  });
+
+  it("colour spec params do not accidentally trip the selection bit", () => {
+    // A 24-bit fg spec that HAPPENS to include a 7 in its parameter
+    // stream. Naive parsing would treat the 7 as SGR 7 and paint the
+    // selection. We deliberately skip the 4 trailing args of an
+    // `SGR 38;2;R;G;B` (a foreground spec doesn't imply selection).
+    const r = feed(emptyPromptLine, bytes("\x1b[38;2;7;7;7mx"));
+    expect(r.selected).toEqual([false]);
+  });
+
+  it("24-bit background colour marks selection — zsh-vi-mode's default paint", () => {
+    // zsh-vi-mode's default visual highlight sets `bg=#cc0000`, which
+    // zsh translates to `\e[48;2;204;0;0m`. That's a highlighted
+    // region; the strip must render it.
+    const r = feed(emptyPromptLine, bytes("\x1b[48;2;204;0;0mab\x1b[49mc"));
+    expect(r.text).toBe("abc");
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("256-palette background colour marks selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[48;5;12mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("standard palette background colours (40-47) mark selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("bright palette background colours (100-107) mark selection", () => {
+    const r = feed(emptyPromptLine, bytes("\x1b[101mab\x1b[49mc"));
+    expect(r.selected).toEqual([true, true, false]);
+  });
+
+  it("SGR 49 (default bg) clears selection independently of SGR 27", () => {
+    // A shell that painted with bg colour rather than reverse video
+    // uses SGR 49 to reset. Both must clear selection so nothing
+    // trails past the highlighted region.
+    const r = feed(emptyPromptLine, bytes("\x1b[41mab\x1b[49mcd"));
+    expect(r.selected).toEqual([true, true, false, false]);
+  });
+
+  it("selection survives cursor motion and REPLACE writes preserve their own cell flags", () => {
+    // Write two selected cells, back up, and overwrite them with non-
+    // selected text. The overwritten cells inherit the new (unselected)
+    // state; nothing else is touched.
+    let r = feed(emptyPromptLine, bytes("\x1b[7mAB\x1b[27m"));
+    expect(r.selected).toEqual([true, true]);
+    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
+    r = feed(r, bytes("xy"));
+    expect(r.text).toBe("xy");
+    expect(r.selected).toEqual([false, false]);
+  });
+
+  it("LF clears the selection array but preserves currentSelected for the next line", () => {
+    // A shell that keeps reverse active across a redraw should have
+    // the next line's characters continue as selected.
+    let r = feed(emptyPromptLine, bytes("\x1b[7mab"));
+    expect(r.selected).toEqual([true, true]);
+    r = feed(r, new Uint8Array([0x0a])); // LF
+    expect(r.selected).toEqual([]);
+    expect(r.currentSelected).toBe(true);
+    r = feed(r, bytes("cd"));
+    expect(r.selected).toEqual([true, true]);
+  });
+
+  it("CSI K (default) truncates selection to match truncated text", () => {
+    let r = feed(emptyPromptLine, bytes("\x1b[7mabcd\x1b[27m"));
+    r = feed(r, new Uint8Array([0x08, 0x08])); // BS BS
+    r = feed(r, bytes("\x1b[K"));
+    expect(r.text).toBe("ab");
+    expect(r.selected).toEqual([true, true]);
+  });
+});

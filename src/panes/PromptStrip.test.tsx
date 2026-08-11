@@ -22,7 +22,14 @@ describe("PromptStrip / layout", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={noop}
       />,
     );
@@ -36,7 +43,14 @@ describe("PromptStrip / layout", () => {
       <PromptStrip
         cwd="/tmp"
         branch="main"
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={noop}
       />,
     );
@@ -54,8 +68,10 @@ describe("PromptStrip / layout", () => {
         line={{
           text: "ls -la",
           styled: [false, false, false, false, false, false],
+          selected: [false, false, false, false, false, false],
           cursor: 6,
           currentStyled: false,
+          currentSelected: false,
         }}
         onInput={noop}
       />,
@@ -72,8 +88,10 @@ describe("PromptStrip / layout", () => {
         line={{
           text: "abcdef",
           styled: [false, false, false, false, false, false],
+          selected: [false, false, false, false, false, false],
           cursor: 3,
           currentStyled: false,
+          currentSelected: false,
         }}
         onInput={noop}
       />,
@@ -87,7 +105,14 @@ describe("PromptStrip / layout", () => {
       <PromptStrip
         cwd="/Users/ada/dev/shax"
         branch="feat/x"
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={noop}
       />,
     );
@@ -103,7 +128,14 @@ describe("PromptStrip / input ownership", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -118,7 +150,14 @@ describe("PromptStrip / input ownership", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -132,7 +171,14 @@ describe("PromptStrip / input ownership", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -146,7 +192,14 @@ describe("PromptStrip / input ownership", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -159,7 +212,14 @@ describe("PromptStrip / input ownership", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={noop}
       />,
     );
@@ -176,7 +236,14 @@ describe("PromptStrip / M7.6 additions", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -198,8 +265,10 @@ describe("PromptStrip / M7.6 additions", () => {
         line={{
           text: "grep",
           styled: [false, false, false, false],
+          selected: [false, false, false, false],
           cursor: 4,
           currentStyled: false,
+          currentSelected: false,
         }}
         onInput={onInput}
       />,
@@ -222,7 +291,14 @@ describe("PromptStrip / M7.6 additions", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
       />,
     );
@@ -240,7 +316,14 @@ describe("PromptStrip / M7.6 additions", () => {
         <PromptStrip
           cwd="/Users/ada/dev/shax"
           branch="main"
-          line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+          line={{
+            text: "",
+            styled: [],
+            selected: [],
+            cursor: 0,
+            currentStyled: false,
+            currentSelected: false,
+          }}
           onInput={noop}
         />
       </HomeDirProvider>,
@@ -255,7 +338,14 @@ describe("PromptStrip / M7.7b assistant-dock integration", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={noop}
         assistantDocked
       />,
@@ -275,7 +365,14 @@ describe("PromptStrip / M7.7b assistant-dock integration", () => {
       <PromptStrip
         cwd={null}
         branch={null}
-        line={{ text: "", styled: [], cursor: 0, currentStyled: false }}
+        line={{
+          text: "",
+          styled: [],
+          selected: [],
+          cursor: 0,
+          currentStyled: false,
+          currentSelected: false,
+        }}
         onInput={onInput}
         assistantDocked
       />,
@@ -284,5 +381,93 @@ describe("PromptStrip / M7.7b assistant-dock integration", () => {
     expect(listener).not.toHaveBeenCalled();
     expect(onInput).toHaveBeenCalledTimes(1);
     window.removeEventListener("shax:assistant-open", listener);
+  });
+});
+
+// ── M12.2: selection rendering ────────────────────────────────────────
+
+describe("PromptStrip / selection rendering (M12.2)", () => {
+  it("paints a selected run with an accent background", () => {
+    // "abcdef" with cells 2..4 (`cde`) marked as selected — vi visual
+    // mode extends the mark from the cursor.
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{
+          text: "abcdef",
+          styled: [false, false, false, false, false, false],
+          selected: [false, false, true, true, true, false],
+          cursor: 6,
+          currentStyled: false,
+          currentSelected: false,
+        }}
+        onInput={noop}
+      />,
+    );
+    // The strip should have at least one span with an accent-soft
+    // background painted on the selected run.
+    const promptLine = screen.getByTestId("prompt-line-text");
+    const selectedSpans = Array.from(promptLine.querySelectorAll("span")).filter(
+      (span) => span.style.background !== "" && span.style.background.includes("--accent-soft"),
+    );
+    expect(selectedSpans.length).toBeGreaterThan(0);
+    // The concatenated text of all selected spans equals the selected
+    // sub-range (`cde`).
+    const selectedText = selectedSpans.map((s) => s.textContent).join("");
+    expect(selectedText).toBe("cde");
+  });
+
+  it("does not paint a background when no cell is selected", () => {
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{
+          text: "abcdef",
+          styled: [false, false, false, false, false, false],
+          selected: [false, false, false, false, false, false],
+          cursor: 6,
+          currentStyled: false,
+          currentSelected: false,
+        }}
+        onInput={noop}
+      />,
+    );
+    const promptLine = screen.getByTestId("prompt-line-text");
+    const withBg = Array.from(promptLine.querySelectorAll("span")).filter(
+      (span) => span.style.background !== "" && span.style.background.includes("--accent-soft"),
+    );
+    expect(withBg.length).toBe(0);
+  });
+
+  it("selection background wins over the dim colour for a cell that is both styled and selected", () => {
+    // Edge case: shell has an autosuggestion (styled=true) that is
+    // then selected (e.g. vi visual over autosuggestion territory).
+    // The selection cue must win — dimming a selected run would
+    // erase the visible cue for the user.
+    render(
+      <PromptStrip
+        cwd={null}
+        branch={null}
+        line={{
+          text: "abc",
+          styled: [true, true, true],
+          selected: [true, true, true],
+          cursor: 3,
+          currentStyled: false,
+          currentSelected: false,
+        }}
+        onInput={noop}
+      />,
+    );
+    const promptLine = screen.getByTestId("prompt-line-text");
+    const spans = Array.from(promptLine.querySelectorAll("span"));
+    const selectedSpan = spans.find(
+      (s) => s.style.background !== "" && s.style.background.includes("--accent-soft"),
+    );
+    expect(selectedSpan).toBeDefined();
+    // The selected span must not also dim its foreground.
+    expect(selectedSpan?.style.color).not.toContain("--fg-faint");
   });
 });

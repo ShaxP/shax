@@ -16,12 +16,22 @@
  *    non-default foreground SGR. The PromptStrip renders those chars in
  *    a faint colour to distinguish hints (zsh-autosuggestions ghost text,
  *    syntax-highlighted command parts, etc.) from committed input.
+ *  - Per-character selection: SGR 7 (reverse video) marks a char as part
+ *    of the active region. Both zsh's `region_highlight` and bash's
+ *    readline `active-region-*-color` paint the mark/region with reverse
+ *    by default, so this catches vi visual mode + emacs mark-and-region
+ *    without a shell-specific integration. SGR 27 or SGR 0 clears the
+ *    selection state.
  *
  * Out of scope:
  *  - Multiple fg colour shades — we collapse "any non-default fg" to a
  *    single "styled" boolean. Good enough for the autosuggestion case
  *    and any other dim/grey hint; full SGR rendering lands with M4's
  *    formatter system.
+ *  - Selection painted with a background-color SGR (`\e[48;…m`) instead
+ *    of reverse. The default shell behaviour is reverse, so this covers
+ *    the common case; users with custom `region_highlight bg=…` see no
+ *    highlight in the strip (they still see it in xterm's hidden grid).
  *  - Scrolling, alternate screen, multi-line edits.
  *
  * This module is pure: feed(state, bytes) returns the new state.
@@ -37,6 +47,15 @@ export interface PromptLine {
    * foreground.
    */
   styled: boolean[];
+  /**
+   * Per-character "selected" flag — same length as `text`. `true` means
+   * the char arrived under SGR 7 (reverse video), which zsh /
+   * bash-readline both use by default to paint the mark/region during
+   * vi visual mode and emacs mark-and-region. The strip renders these
+   * cells with an accent background. Empty (and `false` entries) means
+   * the cell isn't part of an active selection.
+   */
+  selected: boolean[];
   /** 0-based column where the cursor is. May equal text.length (at end). */
   cursor: number;
   /**
@@ -45,13 +64,21 @@ export interface PromptLine {
    * or `ESC[39m`). New characters inherit this value.
    */
   currentStyled: boolean;
+  /**
+   * Persistent SGR state across feeds: `true` while SGR 7 (reverse
+   * video) is active. New characters inherit this value. Cleared by
+   * SGR 27 or SGR 0.
+   */
+  currentSelected: boolean;
 }
 
 export const emptyPromptLine: PromptLine = {
   text: "",
   styled: [],
+  selected: [],
   cursor: 0,
   currentStyled: false,
+  currentSelected: false,
 };
 
 const ESC = 0x1b;
@@ -139,8 +166,9 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
     if (b === LF) {
       // Single-line renderer: a newline means the shell is moving past
       // the current line. Treat it as "start fresh" — clear everything
-      // except the SGR state (so a styled fg in progress carries over).
-      line = { ...line, text: "", styled: [], cursor: 0 };
+      // except the SGR state (so a styled fg / active reverse in
+      // progress carries over).
+      line = { ...line, text: "", styled: [], selected: [], cursor: 0 };
       i++;
       continue;
     }
@@ -171,17 +199,20 @@ export function feed(state: PromptLine, bytes: Uint8Array): PromptLine {
 /**
  * Write `segment` at the cursor, replacing any characters that previously
  * sat at those positions. Extends `text` if the segment runs past the end.
- * Records each new char's styled flag from the current SGR state.
+ * Records each new char's styled + selected flags from the current SGR
+ * state.
  */
 function writeOver(state: PromptLine, segment: string): PromptLine {
-  const { text, styled, cursor, currentStyled } = state;
+  const { text, styled, selected, cursor, currentStyled, currentSelected } = state;
   const segLen = segment.length;
   const segStyled = new Array<boolean>(segLen).fill(currentStyled);
+  const segSelected = new Array<boolean>(segLen).fill(currentSelected);
   if (cursor === text.length) {
     return {
       ...state,
       text: text + segment,
       styled: [...styled, ...segStyled],
+      selected: [...selected, ...segSelected],
       cursor: cursor + segLen,
     };
   }
@@ -189,10 +220,13 @@ function writeOver(state: PromptLine, segment: string): PromptLine {
   const tailText = text.slice(cursor + segLen);
   const headStyled = styled.slice(0, cursor);
   const tailStyled = styled.slice(cursor + segLen);
+  const headSelected = selected.slice(0, cursor);
+  const tailSelected = selected.slice(cursor + segLen);
   return {
     ...state,
     text: headText + segment + tailText,
     styled: [...headStyled, ...segStyled, ...tailStyled],
+    selected: [...headSelected, ...segSelected, ...tailSelected],
     cursor: cursor + segLen,
   };
 }
@@ -207,6 +241,7 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
       const count = Math.max(1, n);
       const blanks = " ".repeat(count);
       const blanksStyled = new Array<boolean>(count).fill(state.currentStyled);
+      const blanksSelected = new Array<boolean>(count).fill(state.currentSelected);
       return {
         ...state,
         text: state.text.slice(0, state.cursor) + blanks + state.text.slice(state.cursor),
@@ -214,6 +249,11 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
           ...state.styled.slice(0, state.cursor),
           ...blanksStyled,
           ...state.styled.slice(state.cursor),
+        ],
+        selected: [
+          ...state.selected.slice(0, state.cursor),
+          ...blanksSelected,
+          ...state.selected.slice(state.cursor),
         ],
       };
     }
@@ -243,20 +283,23 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
         // From start to cursor (inclusive): replace with spaces.
         const blanks = " ".repeat(state.cursor);
         const blanksStyled = new Array<boolean>(state.cursor).fill(false);
+        const blanksSelected = new Array<boolean>(state.cursor).fill(false);
         return {
           ...state,
           text: blanks + state.text.slice(state.cursor),
           styled: [...blanksStyled, ...state.styled.slice(state.cursor)],
+          selected: [...blanksSelected, ...state.selected.slice(state.cursor)],
         };
       }
       if (n === 2) {
-        return { ...state, text: "", styled: [] };
+        return { ...state, text: "", styled: [], selected: [] };
       }
       // 0 (default): from cursor to end.
       return {
         ...state,
         text: state.text.slice(0, state.cursor),
         styled: state.styled.slice(0, state.cursor),
+        selected: state.selected.slice(0, state.cursor),
       };
     }
     case 0x50: {
@@ -269,12 +312,20 @@ function applyCsi(state: PromptLine, params: string, final: number): PromptLine 
           ...state.styled.slice(0, state.cursor),
           ...state.styled.slice(state.cursor + count),
         ],
+        selected: [
+          ...state.selected.slice(0, state.cursor),
+          ...state.selected.slice(state.cursor + count),
+        ],
       };
     }
     case 0x6d: {
-      // 'm' — SGR. Track foreground-style state so subsequent writes
-      // inherit it. Empty SGR is equivalent to SGR 0 (reset all).
-      return { ...state, currentStyled: applySgr(state.currentStyled, args) };
+      // 'm' — SGR. Track foreground-style + reverse state so subsequent
+      // writes inherit both. Empty SGR is equivalent to SGR 0 (reset all).
+      return {
+        ...state,
+        currentStyled: applySgr(state.currentStyled, args),
+        currentSelected: applySgrSelected(state.currentSelected, args),
+      };
     }
     // 'J' (erase display) and other unhandled finals: consume and continue.
     default:
@@ -364,4 +415,84 @@ function applySgr(currentStyled: boolean, args: number[]): boolean {
     }
   }
   return styled;
+}
+
+/**
+ * Parse a sequence of SGR parameters and return the new "this cell is
+ * part of a highlighted region" flag (M12.2 selection support).
+ *
+ * Two ways a shell paints a highlighted region:
+ *
+ *   1. SGR 7 (reverse video). What bash-readline's active-region-*
+ *      defaults to and what zsh's `region_highlight standout` produces.
+ *   2. A non-default background colour. What `zsh-vi-mode` uses by
+ *      default (`bg=#cc0000` → `\e[48;2;204;0;0m`), and what
+ *      `region_highlight bg=…` produces in general.
+ *
+ * We treat both as selection because in assertive mode the shell's own
+ * prompt / theme / syntax-highlighter has been silenced, so the only
+ * remaining sources of bg colour in the strip's byte stream are the
+ * mark/region highlights. False-positive risk is minimal in practice.
+ *
+ * Handled tokens:
+ *
+ *   SGR 0            → reset all → selected = false
+ *   SGR 7            → reverse video on → selected = true
+ *   SGR 27           → reverse video off → selected = false
+ *   SGR 40-47        → standard palette bg → selected = true
+ *   SGR 49           → default bg → selected = false
+ *   SGR 100-107      → bright palette bg → selected = true
+ *   SGR 48;5;N       → 256-palette bg → selected = true
+ *   SGR 48;2;R;G;B   → 24-bit bg → selected = true
+ *   SGR 38           → foreground colour spec — skipped
+ *
+ * Keeping this separate from the dim-heuristic `applySgr` means each
+ * pass has one job and the existing autosuggestion detection stays
+ * untouched.
+ */
+function applySgrSelected(currentSelected: boolean, args: number[]): boolean {
+  if (args.length === 0) return false;
+  let selected = currentSelected;
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i] ?? 0;
+    if (a === 0 || a === 49 || a === 27) {
+      // SGR 0 (reset all), SGR 27 (no reverse), SGR 49 (default bg) —
+      // all three signal "this cell is not part of a highlight anymore".
+      selected = false;
+      i++;
+    } else if (a === 7) {
+      selected = true;
+      i++;
+    } else if ((a >= 40 && a <= 47) || (a >= 100 && a <= 107)) {
+      // Standard / bright palette bg — non-default bg means the shell
+      // painted a highlight.
+      selected = true;
+      i++;
+    } else if (a === 48) {
+      // Extended bg colour spec (256-palette or 24-bit RGB). Both count
+      // as highlight. Skip past the mode + trailing parameters so we
+      // don't misread them as SGR opcodes.
+      const mode = args[i + 1];
+      if (mode === 5) {
+        selected = true;
+        i += 3;
+      } else if (mode === 2) {
+        selected = true;
+        i += 5;
+      } else {
+        i += 1;
+      }
+    } else if (a === 38) {
+      // Foreground colour spec — skip mode + trailing parameters.
+      // Doesn't affect selection. Mirrors the skip pattern in applySgr.
+      const mode = args[i + 1];
+      if (mode === 5) i += 3;
+      else if (mode === 2) i += 5;
+      else i += 1;
+    } else {
+      i++;
+    }
+  }
+  return selected;
 }
