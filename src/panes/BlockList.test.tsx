@@ -4,8 +4,8 @@
  * Verifies empty state, count header, and list rendering with mixed states.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { BlockList } from "./BlockList";
 import { blockReducer, initialBlockState } from "./blockReducer";
@@ -62,6 +62,28 @@ describe("BlockList", () => {
     expect(screen.getByTestId("block-list-empty-hint-search")).toHaveTextContent(/⌘F/);
     expect(screen.getByTestId("block-list-empty-hint-assistant")).toHaveTextContent(/⌘K/);
     expect(screen.getByTestId("block-list-empty-hint-settings")).toHaveTextContent(/⌘,/);
+  });
+
+  it("empty-state chips are real buttons that dispatch open events (M12.1)", () => {
+    render(<BlockList pty={null} blocks={[]} />);
+    const cases: Array<{ testid: string; event: string }> = [
+      { testid: "block-list-empty-hint-search", event: "shax:search-open" },
+      { testid: "block-list-empty-hint-assistant", event: "shax:assistant-open" },
+      { testid: "block-list-empty-hint-settings", event: "shax:settings-open" },
+    ];
+    for (const c of cases) {
+      const chip = screen.getByTestId(c.testid);
+      // Real <button>s so keyboard focus and screen readers work.
+      expect(chip.tagName).toBe("BUTTON");
+      const listener = vi.fn();
+      window.addEventListener(c.event, listener);
+      try {
+        fireEvent.click(chip);
+        expect(listener).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener(c.event, listener);
+      }
+    }
   });
 
   it("empty state hero has the shax mark and a 'Ready' heading (M7.5a)", () => {

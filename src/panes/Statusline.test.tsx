@@ -15,18 +15,40 @@ afterEach(() => {
 });
 
 describe("Statusline", () => {
-  it("renders the statusline wrapper and the NORMAL mode pill", () => {
+  it("renders the statusline wrapper and the COMMAND mode pill by default", () => {
     render(<Statusline cwd={null} branch={null} />);
     expect(screen.getByTestId("statusline")).toBeInTheDocument();
-    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("NORMAL");
+    const pill = screen.getByTestId("statusline-mode");
+    expect(pill).toHaveTextContent("COMMAND");
+    expect(pill).toHaveAttribute("data-mode", "COMMAND");
   });
 
-  // M7.7c — modal indicator
-  it("shows INSERT when the mode prop is INSERT", () => {
-    render(<Statusline cwd={null} branch={null} mode="INSERT" />);
+  // M12.1 — three-way modal indicator (COMMAND / CHAT / BLOCK)
+  it("shows CHAT when the mode prop is CHAT", () => {
+    render(<Statusline cwd={null} branch={null} mode="CHAT" />);
     const pill = screen.getByTestId("statusline-mode");
-    expect(pill).toHaveTextContent("INSERT");
-    expect(pill).toHaveAttribute("data-mode", "INSERT");
+    expect(pill).toHaveTextContent("CHAT");
+    expect(pill).toHaveAttribute("data-mode", "CHAT");
+  });
+
+  it("shows BLOCK when the mode prop is BLOCK", () => {
+    render(<Statusline cwd={null} branch={null} mode="BLOCK" />);
+    const pill = screen.getByTestId("statusline-mode");
+    expect(pill).toHaveTextContent("BLOCK");
+    expect(pill).toHaveAttribute("data-mode", "BLOCK");
+  });
+
+  it("uses a distinct amber background for BLOCK versus the accent used for COMMAND/CHAT", () => {
+    const { rerender } = render(<Statusline cwd={null} branch={null} mode="COMMAND" />);
+    const commandBg = screen.getByTestId("statusline-mode").style.background;
+    rerender(<Statusline cwd={null} branch={null} mode="CHAT" />);
+    const chatBg = screen.getByTestId("statusline-mode").style.background;
+    rerender(<Statusline cwd={null} branch={null} mode="BLOCK" />);
+    const blockBg = screen.getByTestId("statusline-mode").style.background;
+    // COMMAND and CHAT both signal "active surface with the accent" — same color.
+    expect(chatBg).toBe(commandBg);
+    // BLOCK is the odd surface out — must be visually distinct.
+    expect(blockBg).not.toBe(commandBg);
   });
 
   it("shows neutral fallbacks when cwd and branch are null", () => {

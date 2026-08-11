@@ -1,11 +1,8 @@
 /**
  * Statusline — the bottom chrome row of the Shax window.
  *
- * Renders a modal-indicator pill (visual NORMAL), a branch indicator with
- * cwd, and a right-side cluster (encoding placeholder, Ask Shax hint, app
- * status dot). Like the TitleBar this is visual-only at M1.5; modal editing
- * (NORMAL / INSERT) belongs to a later slice and the assistant lights up at
- * M6.
+ * Renders a modal-indicator pill, a branch indicator with cwd, and a
+ * right-side cluster (encoding placeholder, Ask Shax hint, app status dot).
  *
  * cwd and branch come from the active pane's latest OSC 133 A — passed in by
  * the parent so this stays a pure presentational component.
@@ -16,18 +13,27 @@
 
 import type { CSSProperties } from "react";
 
-export type StatuslineMode = "NORMAL" | "INSERT";
+/**
+ * The three surfaces that own the keyboard at rest (M12.1, spec §18):
+ *
+ *   - `COMMAND` — the prompt strip owns focus. The resting state of any
+ *     pane the user is typing into.
+ *   - `CHAT` — the assistant input owns focus.
+ *   - `BLOCK` — block-focus mode is engaged in the active pane (Ctrl+J
+ *     or click on a block).
+ *
+ * These are surface labels, not vim editor modes — `COMMAND` is not
+ * "press `i` to edit," it just names where the keys are going. Modal
+ * overlays (search, palette, viewer, safety gate, settings, confirm-close)
+ * do not change the pill; they own the keyboard while open but the pill
+ * reflects what will regain focus when they close.
+ */
+export type StatuslineMode = "COMMAND" | "CHAT" | "BLOCK";
 
 export interface StatuslineProps {
   cwd: string | null;
   branch: string | null;
-  /**
-   * Modal indicator (M7.7c). Flips to `INSERT` when the
-   * assistant input owns focus, `NORMAL` everywhere else. The
-   * assistant input is currently the only INSERT surface; more
-   * modal editors (block-focus vim-style, palette input) may
-   * feed this same slot later.
-   */
+  /** See {@link StatuslineMode}. */
   mode?: StatuslineMode;
   /**
    * True when the assistant dock is open (M7.7b). Adds a small "+
@@ -61,10 +67,20 @@ const MODE_PILL: CSSProperties = {
   alignItems: "center",
   height: "100%",
   padding: "0 13px",
-  background: "var(--accent)",
   color: "#fff",
   fontWeight: 700,
   letterSpacing: "0.08em",
+};
+
+/** Per-mode background color. `COMMAND` uses the primary accent (the
+ *  default surface for typing shell commands); `CHAT` uses the same
+ *  accent because entering the assistant is the intentional visual peak;
+ *  `BLOCK` gets a distinct amber tone so navigating scrollback with
+ *  hjkl-style motion doesn't look like the resting state. */
+const MODE_BACKGROUND: Record<StatuslineMode, string> = {
+  COMMAND: "var(--accent)",
+  CHAT: "var(--accent)",
+  BLOCK: "var(--amber)",
 };
 
 const BRANCH_GROUP: CSSProperties = {
@@ -96,13 +112,17 @@ const RIGHT_CELL: CSSProperties = {
 export function Statusline({
   cwd,
   branch,
-  mode = "NORMAL",
+  mode = "COMMAND",
   assistantActive = false,
   approvalsPending = 0,
 }: StatuslineProps): React.ReactElement {
   return (
     <div data-testid="statusline" style={ROW}>
-      <span style={MODE_PILL} data-testid="statusline-mode" data-mode={mode}>
+      <span
+        style={{ ...MODE_PILL, background: MODE_BACKGROUND[mode] }}
+        data-testid="statusline-mode"
+        data-mode={mode}
+      >
         {mode}
       </span>
       <span style={BRANCH_GROUP} data-testid="statusline-branch">

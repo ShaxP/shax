@@ -113,6 +113,31 @@ function isTauriContext(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * True when `el` is (or is inside) an element the user reasonably expects
+ * to accept focus on its own — form controls, buttons, links, anything
+ * marked `contenteditable`, or anything with an explicit tabindex.
+ *
+ * Used by the M12.1 "click on empty pane background → focus prompt"
+ * behaviour to bail early when the click landed on something focusable:
+ * we shouldn't yank focus off a button the user just pressed just
+ * because it happens to live in the pane chrome.
+ */
+function isNativelyFocusable(el: HTMLElement): boolean {
+  const focusableTag = /^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/;
+  const closest = el.closest<HTMLElement>(
+    "button, a[href], input, textarea, select, [contenteditable=''], [contenteditable='true'], [tabindex]",
+  );
+  if (closest === null) return false;
+  // `[tabindex="-1"]` opts an element OUT of tab-cycle focus but keeps
+  // it programmatically focusable. Don't count it as user-focusable
+  // for this heuristic — the prompt strip itself is `tabindex="0"`,
+  // so the check above already covers what we care about.
+  const tabindex = closest.getAttribute("tabindex");
+  if (tabindex === "-1" && !focusableTag.test(closest.tagName)) return false;
+  return true;
+}
+
 export interface TerminalPaneProps {
   /**
    * Stable id by which the parent (App, via LayoutRender) addresses
@@ -795,6 +820,27 @@ function TerminalPaneInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  // Publish the active pane's block-focus state to App so the
+  // Statusline pill can flip between COMMAND and BLOCK (M12.1, spec
+  // §18). Inactive panes stay silent — they cannot own the pill.
+  // Fires whenever `blockFocus` changes on the active pane, and
+  // whenever this pane transitions to active (so switching tabs
+  // updates the pill to reflect the newly-active pane's state).
+  // On unmount / going inactive, emits `blockFocus: false` so a
+  // pane closed mid-focus doesn't leave the pill stuck on BLOCK.
+  useEffect(() => {
+    if (!active) return;
+    window.dispatchEvent(new CustomEvent("shax:block-focus-changed", { detail: { blockFocus } }));
+    return () => {
+      // Component unmounting or `active` flipping to false: clear
+      // to COMMAND. If a sibling pane becomes active it will fire
+      // its own event with its own state right after.
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: false } }),
+      );
+    };
+  }, [active, blockFocus]);
+
   // Route clicks to a coherent block-focus state. Two bugs
   // this fixes:
   //   1. Ctrl+J engaged block-focus, then the user clicked the
@@ -840,6 +886,27 @@ function TerminalPaneInner({
         chordStateRef.current = INITIAL_KEY_STATE;
       }
       selectBlock(null);
+
+      // M12.1: focus the prompt when the user clicked something
+      // that isn't itself focusable. The prompt strip is a
+      // focusable div — clicking directly on it already focuses
+      // it via the browser's default handling. The empty-state
+      // hero, the meta chrome, the block-list background — none
+      // of those are focusable, so a click there lands focus on
+      // `<body>` and typing goes nowhere. Re-target the prompt.
+      //
+      // We skip the retarget if the click landed on any element
+      // inside the prompt strip (it will focus itself), inside
+      // the assistant dock (the assistant textarea should keep
+      // focus), or on a focusable element (buttons, inputs,
+      // links). Everything else — empty space, static text,
+      // decorative chrome — routes focus to the prompt.
+      const prompt = promptStripRef.current;
+      if (prompt === null) return;
+      if (prompt.contains(target)) return;
+      if (target.closest('[data-testid="assistant-overlay"]') !== null) return;
+      if (isNativelyFocusable(target)) return;
+      prompt.focus();
     };
     root.addEventListener("mousedown", onMouseDown, true);
     return () => root.removeEventListener("mousedown", onMouseDown, true);
