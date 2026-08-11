@@ -45,7 +45,8 @@ export type ModalLayerId =
   | "safety-gate"
   | "settings-modal"
   | "palette-overlay"
-  | "confirm-close-modal";
+  | "confirm-close-modal"
+  | "confirm-paste-modal";
 
 const stack: ModalLayerId[] = [];
 

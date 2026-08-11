@@ -342,14 +342,47 @@ fn parse_kv_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
 
 /// Reassemble the command string that lives in OSC 133;C;<cmd...> params.
 ///
-/// vte splits OSC parameters on `;`, so a command like `echo a;echo b` arrives
-/// as multiple params. We join them back with `;` and trim a single trailing
-/// CR or LF the shell may have included. An empty (or all-empty) tail returns
-/// `None`, matching the "bare C" case for shells without command capture.
+/// Two wire formats are supported:
+///
+///   1. `OSC 133;C;cmd=<base64>` — Shax's shim uses this since M12.3 so that
+///      multi-line commands (unclosed-quote continuations, heredocs, `\`-
+///      continuations) survive OSC transport. The vte OSC parser silently
+///      drops C0 control bytes inside OSC strings, so a raw multi-line
+///      command would otherwise arrive with its LFs stripped and the block
+///      header would show a mashed-together single line. Base64 is the same
+///      encoding we already use for `cwd=` / `branch=` on A and D.
+///   2. `OSC 133;C;<cmd>` — legacy / third-party form. vte splits OSC
+///      parameters on `;`, so `echo a;echo b` arrives as multiple params;
+///      we join them with `;` and trim a single trailing CR or LF. Multi-line
+///      values arrive already stripped by vte, which is acceptable for
+///      integrations that don't produce them.
+///
+/// An empty (or all-empty) tail returns `None`, matching the "bare C" case
+/// for shells without command capture.
 fn parse_command_param(tail: &[&[u8]]) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
     if tail.is_empty() {
         return None;
     }
+    // Preferred form: first param is `cmd=<base64>`. Base64 alphabet is
+    // ASCII-safe; a decode failure falls through to the legacy path so a
+    // corrupted or mixed-format stream still yields something.
+    if let Some(first) = tail.first() {
+        if let Some(b64) = first.strip_prefix(b"cmd=") {
+            if let Ok(bytes) = B64.decode(b64) {
+                if let Ok(s) = String::from_utf8(bytes) {
+                    let trimmed = s.trim_end_matches(['\r', '\n']);
+                    return if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_owned())
+                    };
+                }
+            }
+        }
+    }
+    // Legacy: rejoin all params with `;` and trim a trailing CR/LF.
     let mut parts: Vec<&str> = Vec::with_capacity(tail.len());
     for raw in tail {
         // Drop non-UTF-8 fragments rather than mangle them; in practice the
@@ -512,6 +545,45 @@ mod tests {
             events,
             vec![VtEvent::CommandStart {
                 command: Some("true".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_c_cmd_base64_carries_multi_line_command() {
+        // M12.3: multi-line commands (unclosed-quote continuations,
+        // heredocs, `\`-continued lines) need to survive OSC transport.
+        // Raw OSC strings have their C0 bytes (LF included) silently
+        // dropped by vte, so the shim base64-encodes the command in a
+        // `cmd=<b64>` param. The parser decodes it back to preserve the
+        // embedded LFs.
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let multiline = "echo \"hello\nworld\"";
+        let encoded = B64.encode(multiline);
+        let bytes = format!("\x1b]133;C;cmd={encoded}\x07");
+        let events = collect_events(bytes.as_bytes());
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandStart {
+                command: Some(multiline.into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_c_cmd_base64_falls_back_to_legacy_form_on_decode_failure() {
+        // A garbage `cmd=` value shouldn't lose the whole event —
+        // we fall through to the legacy form and try to reassemble
+        // the params.
+        let bytes = b"\x1b]133;C;cmd=@@@not-base64\x07";
+        let events = collect_events(bytes);
+        // The legacy path joins params with `;` and hands back the
+        // literal `cmd=@@@not-base64` string. Callers get *something*
+        // rather than a swallowed event.
+        assert_eq!(
+            events,
+            vec![VtEvent::CommandStart {
+                command: Some("cmd=@@@not-base64".into()),
             }]
         );
     }

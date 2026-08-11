@@ -49,9 +49,15 @@ _shax_precmd() {
 }
 
 _shax_preexec() {
-  # $1 is the command line as typed (preexec convention). Emit as OSC 133;C
-  # third parameter so the backend can attach it to the block.
-  printf '\033]133;C;%s\007' "$1"
+  # $1 is the command line as typed (preexec convention). Base64 the
+  # value so multi-line commands (unclosed-quote continuations, here-
+  # docs, `\`-continuations) survive OSC transport — the vte OSC parser
+  # silently drops C0 control bytes (LF, CR, etc.) inside OSC strings,
+  # so a raw multi-line command arrives at the backend with its LFs
+  # stripped and the block header shows a mashed-together single line.
+  # The `cmd=<b64>` form uses the same encoding as the cwd/branch
+  # params on A/D. Non-Shax OSC 133 receivers ignore unknown keys.
+  printf '\033]133;C;cmd=%s\007' "$(_shax_b64 "$1")"
 }
 
 autoload -Uz add-zsh-hook 2>/dev/null
