@@ -77,6 +77,10 @@ const EMPTY_CHIP_LIST: CSSProperties = {
 };
 
 const EMPTY_CHIP: CSSProperties = {
+  // M12.1: chip is a real <button> so it participates in keyboard
+  // focus and click activation. Overrides the ambient button
+  // browser defaults so the visual layout stays the same as when
+  // this was a <div>.
   display: "flex",
   alignItems: "center",
   gap: 12,
@@ -86,6 +90,10 @@ const EMPTY_CHIP: CSSProperties = {
   background: "var(--pane)",
   fontSize: 13,
   color: "var(--fg-dim)",
+  fontFamily: "inherit",
+  textAlign: "left",
+  cursor: "pointer",
+  width: "100%",
 };
 
 const KBD_STYLE: CSSProperties = {
@@ -321,18 +329,33 @@ export function BlockList({
                   select, format, and inspect.
                 </p>
                 <div style={EMPTY_CHIP_LIST}>
-                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-search">
+                  <button
+                    type="button"
+                    style={EMPTY_CHIP}
+                    data-testid="block-list-empty-hint-search"
+                    onClick={() => window.dispatchEvent(new CustomEvent("shax:search-open"))}
+                  >
                     <kbd style={KBD_STYLE}>⌘F</kbd>
                     <span>search everything you&rsquo;ve run</span>
-                  </div>
-                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-assistant">
+                  </button>
+                  <button
+                    type="button"
+                    style={EMPTY_CHIP}
+                    data-testid="block-list-empty-hint-assistant"
+                    onClick={() => window.dispatchEvent(new CustomEvent("shax:assistant-open"))}
+                  >
                     <kbd style={KBD_STYLE}>⌘K</kbd>
                     <span>ask the assistant</span>
-                  </div>
-                  <div style={EMPTY_CHIP} data-testid="block-list-empty-hint-settings">
+                  </button>
+                  <button
+                    type="button"
+                    style={EMPTY_CHIP}
+                    data-testid="block-list-empty-hint-settings"
+                    onClick={() => window.dispatchEvent(new CustomEvent("shax:settings-open"))}
+                  >
                     <kbd style={KBD_STYLE}>⌘,</kbd>
                     <span>theme &amp; preferences</span>
-                  </div>
+                  </button>
                 </div>
               </div>
             )

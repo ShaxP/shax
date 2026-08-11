@@ -225,6 +225,38 @@ describe("TerminalPane", () => {
     expect(screen.queryByTestId("title-bar")).toBeNull();
     expect(screen.queryByTestId("statusline")).toBeNull();
   });
+
+  // M12.1 — clicking the empty pane background focuses the prompt so
+  // typing goes somewhere honest instead of falling into <body>.
+  it("focuses the prompt strip when the user mousedowns on the empty-state hero", () => {
+    render(<TerminalPane />);
+    const prompt = screen.getByTestId("prompt-strip");
+    // Spy on the prompt's focus() so we can assert the handler
+    // called it, regardless of whether the mount-effect had already
+    // focused the strip.
+    const focusSpy = vi.spyOn(prompt, "focus");
+    focusSpy.mockClear();
+    const empty = screen.getByTestId("block-list-empty");
+    fireEvent.mouseDown(empty, { button: 0 });
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it("does not steal focus from a real button inside the pane (M12.1)", () => {
+    // Regression guard: the retarget bails on any natively
+    // focusable descendant so a chip click keeps its own focus /
+    // click semantics — the button's onClick still runs, and the
+    // prompt strip's focus() is NOT called by the handler.
+    render(<TerminalPane />);
+    const searchChip = screen.getByTestId("block-list-empty-hint-search");
+    // Sanity: the M12.1 chips are real <button>s.
+    expect(searchChip.tagName).toBe("BUTTON");
+    const prompt = screen.getByTestId("prompt-strip");
+    const focusSpy = vi.spyOn(prompt, "focus");
+    focusSpy.mockClear();
+    fireEvent.mouseDown(searchChip, { button: 0 });
+    // Our handler did not call prompt.focus() on this click.
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("TerminalPane / dead-shell handling (M2 slice 2.3b)", () => {

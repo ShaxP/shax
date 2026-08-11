@@ -767,3 +767,87 @@ describe("App / search overlay (M3 slice 3.1)", () => {
     expect(screen.queryByTestId("search-chip-cwd")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M12.1 — three-way statusline mode pill + open-event bus for chips.
+// ---------------------------------------------------------------------------
+
+describe("App / statusline mode pill (M12.1)", () => {
+  it("reads COMMAND at rest", () => {
+    render(<App />);
+    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("COMMAND");
+  });
+
+  it("flips to BLOCK when the active pane enters block-focus", () => {
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: true } }),
+      );
+    });
+    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("BLOCK");
+  });
+
+  it("flips to CHAT when the assistant textarea takes focus, even during block-focus", () => {
+    render(<App />);
+    // Assert precedence: BLOCK is set first, then CHAT arrives — CHAT wins.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: true } }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("shax:assistant-input-focus", { detail: { focused: true } }),
+      );
+    });
+    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("CHAT");
+  });
+
+  it("returns to BLOCK when the assistant blurs but block-focus is still engaged", () => {
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: true } }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("shax:assistant-input-focus", { detail: { focused: true } }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("shax:assistant-input-focus", { detail: { focused: false } }),
+      );
+    });
+    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("BLOCK");
+  });
+
+  it("returns to COMMAND when both CHAT and BLOCK are cleared", () => {
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: true } }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("shax:block-focus-changed", { detail: { blockFocus: false } }),
+      );
+    });
+    expect(screen.getByTestId("statusline-mode")).toHaveTextContent("COMMAND");
+  });
+});
+
+describe("App / open-event bus for onboarding chips (M12.1)", () => {
+  it("shax:search-open opens the search overlay", () => {
+    render(<App />);
+    expect(screen.queryByTestId("search-overlay")).toBeNull();
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:search-open"));
+    });
+    expect(screen.getByTestId("search-overlay")).toBeInTheDocument();
+  });
+
+  it("shax:settings-open opens the settings modal", () => {
+    render(<App />);
+    expect(screen.queryByTestId("settings-modal")).toBeNull();
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:settings-open"));
+    });
+    expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
+  });
+});

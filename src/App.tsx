@@ -680,21 +680,39 @@ export default function App(): React.ReactElement {
     // including it here doesn't cause the effect to re-register;
     // the dep silences react-hooks/exhaustive-deps.
   }, [confirmThenClosePane]);
-  // M7.7c: statusline modal indicator. INSERT while the assistant
-  // input owns focus, NORMAL otherwise. AssistantOverlay's textarea
-  // publishes `shax:assistant-input-focus` on focus / blur.
+  // M12.1: statusline modal indicator. Three surfaces feed the pill:
+  //
+  //   - `CHAT` — the assistant textarea owns focus. AssistantOverlay
+  //     publishes `shax:assistant-input-focus` on focus / blur.
+  //   - `BLOCK` — the active pane is in block-focus mode.
+  //     TerminalPane publishes `shax:block-focus-changed` whenever
+  //     the active pane's block-focus toggles or it becomes active.
+  //   - `COMMAND` — default. The prompt strip owns focus.
+  //
+  // Precedence: CHAT > BLOCK > COMMAND. Typing to the assistant
+  // always wins over block-focus (which is orthogonal — you can be
+  // in block-focus in the pane behind the assistant dock).
   const [assistantInputFocused, setAssistantInputFocused] = useState(false);
+  const [activePaneInBlockFocus, setActivePaneInBlockFocus] = useState(false);
   useEffect(() => {
     const onFocus = (e: Event): void => {
       const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
       setAssistantInputFocused(detail?.focused === true);
     };
+    const onBlockFocus = (e: Event): void => {
+      const detail = (e as CustomEvent<{ blockFocus?: boolean }>).detail;
+      setActivePaneInBlockFocus(detail?.blockFocus === true);
+    };
     window.addEventListener("shax:assistant-input-focus", onFocus);
-    return () => window.removeEventListener("shax:assistant-input-focus", onFocus);
+    window.addEventListener("shax:block-focus-changed", onBlockFocus);
+    return () => {
+      window.removeEventListener("shax:assistant-input-focus", onFocus);
+      window.removeEventListener("shax:block-focus-changed", onBlockFocus);
+    };
   }, []);
   // Closing the dock unmounts the textarea; the browser usually
   // fires blur on unmount but we clamp here so a race can't leave
-  // the pill stuck on INSERT after the panel is gone.
+  // the pill stuck on CHAT after the panel is gone.
   useEffect(() => {
     if (!assistantOpen) setAssistantInputFocused(false);
   }, [assistantOpen]);
@@ -720,16 +738,32 @@ export default function App(): React.ReactElement {
       setAssistantOpen(true);
     };
     // `shax:assistant-open` — used by the M7.6 `?`-first-char handler
-    // in PromptStrip. Just toggles the overlay open without a seeded
-    // prompt; the user then types their question.
+    // in PromptStrip and the M12.1 onboarding chip. Just toggles the
+    // overlay open without a seeded prompt; the user then types their
+    // question.
     const onOpen = (): void => {
       setAssistantOpen(true);
     };
+    // M12.1: `shax:search-open` / `shax:settings-open` — click event
+    // buses so surfaces like the empty-state onboarding chips can
+    // trigger the same effect as ⌘F / ⌘,. The keybindings above
+    // handle the keyboard path; these handlers route the mouse path
+    // to the same state without duplicating the toggle logic.
+    const onOpenSearch = (): void => {
+      setSearchOpen(true);
+    };
+    const onOpenSettings = (): void => {
+      setSettingsOpen(true);
+    };
     window.addEventListener("shax:assistant-ask", onAsk);
     window.addEventListener("shax:assistant-open", onOpen);
+    window.addEventListener("shax:search-open", onOpenSearch);
+    window.addEventListener("shax:settings-open", onOpenSettings);
     return () => {
       window.removeEventListener("shax:assistant-ask", onAsk);
       window.removeEventListener("shax:assistant-open", onOpen);
+      window.removeEventListener("shax:search-open", onOpenSearch);
+      window.removeEventListener("shax:settings-open", onOpenSettings);
     };
   }, []);
 
@@ -1206,7 +1240,7 @@ export default function App(): React.ReactElement {
                 : (activeFocused?.cwd ?? null)
             }
             branch={activeFocused?.branch ?? null}
-            mode={assistantInputFocused ? "INSERT" : "NORMAL"}
+            mode={assistantInputFocused ? "CHAT" : activePaneInBlockFocus ? "BLOCK" : "COMMAND"}
             assistantActive={assistantOpen}
             approvalsPending={approvalsPending}
           />
