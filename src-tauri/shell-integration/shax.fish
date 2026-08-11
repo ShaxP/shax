@@ -27,8 +27,13 @@ end
 function _shax_preexec --on-event fish_preexec
   # Emit A right before C so the new block inherits the post-cd cwd from the
   # previous command. argv on fish_preexec is the command line as typed.
+  # Base64 the command so multi-line values (unclosed strings, `\`-continued
+  # lines) survive OSC transport — vte's OSC parser silently drops C0
+  # control bytes inside OSC strings, which would otherwise flatten a
+  # multi-line command to one mashed-together line.
   _shax_emit_a
-  printf '\e]133;C;%s\a' "$argv"
+  set -l cmd_b64 (_shax_b64 "$argv")
+  printf '\e]133;C;cmd=%s\a' $cmd_b64
 end
 
 function _shax_postexec --on-event fish_postexec

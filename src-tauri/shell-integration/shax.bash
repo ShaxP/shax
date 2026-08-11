@@ -92,7 +92,11 @@ _shax_preexec() {
     _shax_precmd|_shax_preexec|_shax_emit_d_and_a|_shax_b64) return ;;
   esac
   _shax_in_command=1
-  printf '\033]133;C;%s\007' "$_cmd"
+  # Base64 the command so multi-line values survive OSC transport
+  # (vte's OSC parser drops C0 control bytes inside strings, so a raw
+  # multi-line here-doc would arrive at the backend with its LFs
+  # stripped). Same encoding as the cwd/branch params on A/D.
+  printf '\033]133;C;cmd=%s\007' "$(_shax_b64 "$_cmd")"
 }
 
 # ── M12.2 always-assertive hardening (spec §18 D2) ────────────────────────
