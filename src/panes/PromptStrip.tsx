@@ -143,32 +143,60 @@ const STYLED_TEXT: CSSProperties = {
   color: "var(--fg-faint)",
 };
 
+/** M12.2: selected cells (mark/region in vi visual or emacs Ctrl-Space)
+ *  are painted with an accent background so the user can see what will
+ *  be operated on. The shell already broadcasts the selection via SGR 7
+ *  (reverse video) — the mirror renderer captures it as the per-cell
+ *  `selected` bit, and this style is applied to any run whose cells
+ *  carry it. Kept to a soft accent tone so it doesn't compete with
+ *  attention going to the cursor. */
+const SELECTED_TEXT: CSSProperties = {
+  background: "var(--accent-soft)",
+  color: "var(--fg)",
+  borderRadius: 2,
+};
+
 interface StyledRun {
   text: string;
   styled: boolean;
+  selected: boolean;
 }
 
 /**
- * Group consecutive same-styled characters into runs. Empty input → empty
- * array. `text` and `styled` are assumed to be the same length; mismatches
- * fall back to treating extra chars as unstyled.
+ * Group consecutive characters that share both flags (styled + selected)
+ * into runs. Empty input → empty array. Arrays are assumed to be the same
+ * length as `text`; mismatches fall back to treating extra chars as
+ * unstyled + unselected.
  */
-function styledRuns(text: string, styled: boolean[]): StyledRun[] {
+function styledRuns(text: string, styled: boolean[], selected: boolean[]): StyledRun[] {
   if (text.length === 0) return [];
   const runs: StyledRun[] = [];
   let runText = "";
   let runStyled = styled[0] ?? false;
+  let runSelected = selected[0] ?? false;
   for (let i = 0; i < text.length; i++) {
     const s = styled[i] ?? false;
-    if (s !== runStyled) {
-      runs.push({ text: runText, styled: runStyled });
+    const sel = selected[i] ?? false;
+    if (s !== runStyled || sel !== runSelected) {
+      runs.push({ text: runText, styled: runStyled, selected: runSelected });
       runText = "";
       runStyled = s;
+      runSelected = sel;
     }
     runText += text.charAt(i);
   }
-  if (runText.length > 0) runs.push({ text: runText, styled: runStyled });
+  if (runText.length > 0) runs.push({ text: runText, styled: runStyled, selected: runSelected });
   return runs;
+}
+
+/** Compose the two per-run flags into an inline style. Selected wins the
+ *  colour axis (the accent background needs contrast; dimming a selected
+ *  run to `--fg-faint` would kill the point). */
+function runStyle(run: StyledRun): CSSProperties | undefined {
+  if (run.selected && run.styled) return SELECTED_TEXT;
+  if (run.selected) return SELECTED_TEXT;
+  if (run.styled) return STYLED_TEXT;
+  return undefined;
 }
 
 function PromptStripInner(
@@ -233,14 +261,24 @@ function PromptStripInner(
     onInput(TEXT_ENCODER.encode(normalised));
   };
 
-  // Group consecutive same-styled chars into runs so the strip can render
-  // styled chunks (zsh-autosuggestions ghost text, syntax-highlighted
-  // command parts) in a faint colour while the user's committed input
-  // stays at full contrast. Defensive against callers (mostly tests) that
-  // pass a partial PromptLine without the styled field.
+  // Group consecutive chars sharing both flags (styled + selected) into
+  // runs so the strip can render styled chunks (zsh-autosuggestions ghost
+  // text) in a faint colour, selected chunks (vi visual / emacs region)
+  // with an accent background, and committed input at full contrast.
+  // Defensive against callers (mostly tests) that pass a partial
+  // PromptLine without the styled / selected fields.
   const lineStyled = line.styled ?? [];
-  const beforeRuns = styledRuns(line.text.slice(0, line.cursor), lineStyled.slice(0, line.cursor));
-  const afterRuns = styledRuns(line.text.slice(line.cursor), lineStyled.slice(line.cursor));
+  const lineSelected = line.selected ?? [];
+  const beforeRuns = styledRuns(
+    line.text.slice(0, line.cursor),
+    lineStyled.slice(0, line.cursor),
+    lineSelected.slice(0, line.cursor),
+  );
+  const afterRuns = styledRuns(
+    line.text.slice(line.cursor),
+    lineStyled.slice(line.cursor),
+    lineSelected.slice(line.cursor),
+  );
 
   return (
     <div
@@ -274,7 +312,7 @@ function PromptStripInner(
          */}
         <span data-testid="prompt-line-text">
           {beforeRuns.map((run, idx) => (
-            <span key={`before-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+            <span key={`before-${idx}`} style={runStyle(run)}>
               {run.text}
             </span>
           ))}
@@ -283,7 +321,7 @@ function PromptStripInner(
         {hasTyping ? (
           <span>
             {afterRuns.map((run, idx) => (
-              <span key={`after-${idx}`} style={run.styled ? STYLED_TEXT : undefined}>
+              <span key={`after-${idx}`} style={runStyle(run)}>
                 {run.text}
               </span>
             ))}
