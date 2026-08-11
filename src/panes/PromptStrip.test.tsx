@@ -453,4 +453,30 @@ describe("PromptStrip / paste handling (M12.3)", () => {
     expect(onInput).not.toHaveBeenCalled();
     expect(screen.queryByTestId("confirm-paste-modal")).toBeNull();
   });
+
+  it("closing the paste modal (confirm) fires shax:refocus-pane so the strip regains focus", () => {
+    const refocus = vi.fn();
+    window.addEventListener("shax:refocus-pane", refocus);
+    try {
+      render(<PromptStrip cwd={null} branch={null} line={emptyPromptLine} onInput={vi.fn()} />);
+      firePaste(screen.getByTestId("prompt-strip"), "a\nb\nc\nd\ne");
+      fireEvent.click(screen.getByTestId("confirm-paste-confirm"));
+      expect(refocus).toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:refocus-pane", refocus);
+    }
+  });
+
+  it("closing the paste modal (cancel) fires shax:refocus-pane so the strip regains focus", () => {
+    const refocus = vi.fn();
+    window.addEventListener("shax:refocus-pane", refocus);
+    try {
+      render(<PromptStrip cwd={null} branch={null} line={emptyPromptLine} onInput={vi.fn()} />);
+      firePaste(screen.getByTestId("prompt-strip"), "a\nb\nc\nd\ne");
+      fireEvent.click(screen.getByTestId("confirm-paste-cancel"));
+      expect(refocus).toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("shax:refocus-pane", refocus);
+    }
+  });
 });

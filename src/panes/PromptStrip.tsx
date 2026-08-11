@@ -357,10 +357,20 @@ function PromptStripInner(
       {pendingPaste !== null && (
         <ConfirmPasteModal
           payload={pendingPaste}
-          onCancel={() => setPendingPaste(null)}
+          onCancel={() => {
+            setPendingPaste(null);
+            // The modal grabbed focus when it opened; without an explicit
+            // hand-back, focus lands on `<body>` after the modal unmounts
+            // and the user has to click the strip before typing works.
+            // `shax:refocus-pane` is the app-wide "give focus back to
+            // the active pane's prompt strip" signal — TerminalPane
+            // listens for it and calls promptStripRef.focus().
+            window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+          }}
           onConfirm={() => {
             onInput(encodePaste(pendingPaste));
             setPendingPaste(null);
+            window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
           }}
         />
       )}
