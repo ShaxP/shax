@@ -245,6 +245,85 @@ function useElapsedNow(running: boolean, now: () => number): number {
   return tick;
 }
 
+/** Render the block's command text in the header.
+ *
+ *  Single-line commands look exactly as they always did. Multi-line
+ *  commands (typical after a bracketed-paste of a script) render as
+ *  multi-line, honouring embedded LFs via `white-space: pre-wrap` and
+ *  wrapping overly long single-line commands (long `curl`, `docker
+ *  run`) rather than truncating them with an ellipsis.
+ *
+ *  Very long pastes (> `COMMAND_COLLAPSE_THRESHOLD` lines) start
+ *  collapsed showing `COMMAND_COLLAPSE_HEAD` lines with a toggle to
+ *  expand the rest. Keeps the scrollback readable when someone dumps
+ *  a 200-line script into the prompt. Stops the click event before
+ *  it bubbles to the header (which toggles the block open/closed) —
+ *  the two toggles are independent. */
+function CommandText({ command }: { command: string | null }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  if (command === null || command.length === 0) {
+    return (
+      <span
+        data-testid="block-command"
+        style={{
+          flex: 1,
+          fontSize: 13,
+          fontWeight: 500,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        <em style={{ color: "var(--fg-faint)" }}>(no command)</em>
+      </span>
+    );
+  }
+  const lines = command.split("\n");
+  const shouldCollapse = lines.length > COMMAND_COLLAPSE_THRESHOLD && !expanded;
+  const visible = shouldCollapse ? lines.slice(0, COMMAND_COLLAPSE_HEAD).join("\n") : command;
+  const hiddenCount = lines.length - COMMAND_COLLAPSE_HEAD;
+  return (
+    <span
+      data-testid="block-command"
+      style={{
+        flex: 1,
+        fontSize: 13,
+        fontWeight: 500,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        minWidth: 0,
+      }}
+    >
+      {visible}
+      {shouldCollapse && (
+        <>
+          {"\n"}
+          <button
+            type="button"
+            data-testid="block-command-expand"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(true);
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: "var(--fg-dim)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 11.5,
+              textDecoration: "underline dotted",
+              textUnderlineOffset: 3,
+            }}
+          >
+            ▶ {hiddenCount} more line{hiddenCount === 1 ? "" : "s"}
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
 const ROW: CSSProperties = {
   position: "relative",
   display: "flex",
@@ -275,10 +354,25 @@ const CONTENT: CSSProperties = {
 
 const HEADER: CSSProperties = {
   display: "flex",
-  alignItems: "center",
+  // Align cluster to the top so the spinner / status / duration / actions
+  // stay anchored at the top-right corner even when the command grows to
+  // multiple rows (M12.3 follow-up — pasted multi-line commands render
+  // as multi-line in the header).
+  alignItems: "flex-start",
   gap: 9,
   minHeight: 24,
 };
+
+/** M12.3 follow-up: how many lines of a multi-line command we show
+ *  by default before offering an expand toggle. Chosen so a modest
+ *  multi-line paste (say a docker run + a follow-up echo) shows in
+ *  full, while a 200-line script gets collapsed with a click-to-
+ *  expand affordance. */
+const COMMAND_COLLAPSE_THRESHOLD = 8;
+/** How many lines the collapsed view shows before the "N more lines"
+ *  toggle. Kept smaller than the threshold so a click actually reveals
+ *  something new (otherwise the toggle would be a no-op). */
+const COMMAND_COLLAPSE_HEAD = 6;
 
 const FMT_RAW_GROUP: CSSProperties = {
   display: "flex",
@@ -700,20 +794,20 @@ function BlockRowInner({
             userSelect: "none",
           }}
         >
-          <span style={{ color: statusGlyphColor(status), fontSize: 12 }}>❯</span>
           <span
-            data-testid="block-command"
             style={{
-              flex: 1,
-              fontSize: 13,
-              fontWeight: 500,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              color: statusGlyphColor(status),
+              fontSize: 12,
+              // The glyph aligns with the first line of the command when
+              // the header is anchored top; a slight top-padding keeps it
+              // visually centered with the first row's cap-height.
+              paddingTop: 4,
+              flexShrink: 0,
             }}
           >
-            {block.command ?? <em style={{ color: "var(--fg-faint)" }}>(no command)</em>}
+            ❯
           </span>
+          <CommandText command={block.command} />
 
           {isRunning ? (
             <>

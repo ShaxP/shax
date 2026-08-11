@@ -358,3 +358,60 @@ describe("BlockRow / Ask Shax on failure (M7.6)", () => {
     window.removeEventListener("shax:assistant-ask", listener);
   });
 });
+
+// ── M12.3 follow-up: multi-line commands render as multi-line ────────
+
+describe("BlockRow / multi-line command (M12.3)", () => {
+  it("single-line commands still render in one row", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: "echo hello" })} />);
+    // No expand toggle for a plain single-line command.
+    expect(screen.queryByTestId("block-command-expand")).toBeNull();
+    expect(screen.getByTestId("block-command").textContent).toBe("echo hello");
+  });
+
+  it("multi-line commands preserve embedded LFs verbatim", () => {
+    const cmd = "echo one\necho two\necho three";
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: cmd })} />);
+    // The whole command text (with LFs) lands in the block-command node.
+    expect(screen.getByTestId("block-command").textContent).toBe(cmd);
+    // Modest multi-line pastes fit under the collapse threshold — no
+    // expand toggle.
+    expect(screen.queryByTestId("block-command-expand")).toBeNull();
+  });
+
+  it("commands above the collapse threshold show a truncated view + expand toggle", () => {
+    const cmd = Array.from({ length: 12 }, (_, i) => `echo ${i}`).join("\n");
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: cmd })} />);
+    // Starts collapsed — only the first 6 lines land in the visible text.
+    expect(screen.getByTestId("block-command").textContent).toContain("echo 0");
+    expect(screen.getByTestId("block-command").textContent).toContain("echo 5");
+    expect(screen.getByTestId("block-command").textContent).not.toContain("echo 6");
+    // Toggle appears with the correct hidden-line count.
+    const toggle = screen.getByTestId("block-command-expand");
+    expect(toggle).toHaveTextContent("6 more lines");
+  });
+
+  it("clicking the expand toggle reveals the full command", () => {
+    const cmd = Array.from({ length: 12 }, (_, i) => `echo ${i}`).join("\n");
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: cmd })} />);
+    fireEvent.click(screen.getByTestId("block-command-expand"));
+    expect(screen.getByTestId("block-command").textContent).toContain("echo 11");
+    // Toggle is gone once expanded.
+    expect(screen.queryByTestId("block-command-expand")).toBeNull();
+  });
+
+  it("clicking the expand toggle does not bubble to the header (block stays collapsed)", () => {
+    // Regression guard: the header toggles the block open on click; the
+    // command-expand toggle is inside the header, so it MUST stop
+    // propagation or clicking it would also flip the block open/closed.
+    const cmd = Array.from({ length: 12 }, (_, i) => `echo ${i}`).join("\n");
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: cmd })} />);
+    // Block is collapsed by default. If the click bubbled, the block's
+    // output would render — which requires a fetch we haven't mocked.
+    // If bubbling happened, the test would either throw on the fetch
+    // or the output would be visible. We assert the output element
+    // isn't in the DOM.
+    fireEvent.click(screen.getByTestId("block-command-expand"));
+    expect(screen.queryByTestId("block-output")).toBeNull();
+  });
+});
