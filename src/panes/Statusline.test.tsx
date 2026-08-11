@@ -86,4 +86,48 @@ describe("Statusline", () => {
     render(<Statusline cwd={null} branch={null} approvalsPending={0} />);
     expect(screen.queryByTestId("statusline-approvals-pending")).toBeNull();
   });
+
+  // M12.2 — two-chip vi sub-mode
+  it("hides the vi sub-chip by default (Emacs preference, no keymap emitted)", () => {
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap={null} />);
+    expect(screen.queryByTestId("statusline-vi-submode")).toBeNull();
+  });
+
+  it("renders INSERT sub-chip for viins keymap on COMMAND", () => {
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap="viins" />);
+    const sub = screen.getByTestId("statusline-vi-submode");
+    expect(sub).toHaveTextContent("INSERT");
+    expect(sub).toHaveAttribute("data-submode", "INSERT");
+  });
+
+  it("renders NORMAL sub-chip for vicmd keymap on COMMAND", () => {
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap="vicmd" />);
+    expect(screen.getByTestId("statusline-vi-submode")).toHaveTextContent("NORMAL");
+  });
+
+  it("renders VISUAL sub-chip for visual keymap on COMMAND", () => {
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap="visual" />);
+    expect(screen.getByTestId("statusline-vi-submode")).toHaveTextContent("VISUAL");
+  });
+
+  it("hides the sub-chip when mode is CHAT even if a vi keymap is reported", () => {
+    // CHAT / BLOCK aren't the shell prompt — the sub-mode doesn't apply.
+    render(<Statusline cwd={null} branch={null} mode="CHAT" viKeymap="vicmd" />);
+    expect(screen.queryByTestId("statusline-vi-submode")).toBeNull();
+  });
+
+  it("hides the sub-chip when mode is BLOCK even if a vi keymap is reported", () => {
+    render(<Statusline cwd={null} branch={null} mode="BLOCK" viKeymap="viins" />);
+    expect(screen.queryByTestId("statusline-vi-submode")).toBeNull();
+  });
+
+  it("hides the sub-chip for an unrecognised keymap value", () => {
+    // `emacs` from the OSC is a non-modal keymap; we don't render a
+    // sub-chip. Same for anything else zsh might report that isn't in
+    // our known map.
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap="emacs" />);
+    expect(screen.queryByTestId("statusline-vi-submode")).toBeNull();
+    render(<Statusline cwd={null} branch={null} mode="COMMAND" viKeymap="something-else" />);
+    expect(screen.queryByTestId("statusline-vi-submode")).toBeNull();
+  });
 });

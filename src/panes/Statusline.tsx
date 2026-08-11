@@ -30,11 +30,48 @@ import type { CSSProperties } from "react";
  */
 export type StatuslineMode = "COMMAND" | "CHAT" | "BLOCK";
 
+/**
+ * Vi sub-modes surfaced by the M12.2 zsh shim via `OSC 133;M`. Only
+ * meaningful when the user picked Vi in preferences; the shim doesn't
+ * emit the marker in Emacs mode. Values not in this map (`main`,
+ * `emacs`, unrecognised) render no sub-chip — the pill stays single.
+ */
+export type ViSubMode = "INSERT" | "NORMAL" | "VISUAL";
+
+/**
+ * Map from a zsh KEYMAP value (as reported over OSC 133;M) to the
+ * sub-mode label rendered in the pill. Returns `null` for anything
+ * that doesn't correspond to a distinct visible vi mode — the pill
+ * then hides the sub-chip.
+ */
+export function viSubModeFromKeymap(keymap: string | null): ViSubMode | null {
+  if (keymap === null) return null;
+  switch (keymap) {
+    case "viins":
+    case "main": // zsh's "main" aliases to whatever bindkey -e / -v set; in vi mode it's viins.
+      return "INSERT";
+    case "vicmd":
+      return "NORMAL";
+    case "visual":
+      return "VISUAL";
+    default:
+      return null;
+  }
+}
+
 export interface StatuslineProps {
   cwd: string | null;
   branch: string | null;
   /** See {@link StatuslineMode}. */
   mode?: StatuslineMode;
+  /**
+   * Raw zsh KEYMAP value from the most recent OSC 133;M on the active
+   * pane (M12.2). Rendered as a second chip next to the primary mode
+   * chip when the mode is COMMAND and the mapped sub-mode is
+   * non-null. Ignored (no sub-chip) for CHAT / BLOCK — those surfaces
+   * are outside the shell prompt.
+   */
+  viKeymap?: string | null;
   /**
    * True when the assistant dock is open (M7.7b). Adds a small "+
    * assistant active" indicator on the right so users know the
@@ -83,6 +120,22 @@ const MODE_BACKGROUND: Record<StatuslineMode, string> = {
   BLOCK: "var(--amber)",
 };
 
+/** Sub-chip (M12.2 vi sub-mode) sits directly right of the mode pill.
+ *  Single subdued background across all three vi sub-modes — the letters
+ *  tell you which one; three different colors would just add noise. */
+const SUB_MODE_CHIP: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: "100%",
+  padding: "0 11px",
+  background: "var(--surface-hover)",
+  color: "var(--fg)",
+  fontWeight: 600,
+  letterSpacing: "0.08em",
+  fontSize: 10,
+  borderRight: "1px solid var(--border)",
+};
+
 const BRANCH_GROUP: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -113,9 +166,14 @@ export function Statusline({
   cwd,
   branch,
   mode = "COMMAND",
+  viKeymap = null,
   assistantActive = false,
   approvalsPending = 0,
 }: StatuslineProps): React.ReactElement {
+  // Sub-chip only rides alongside COMMAND — CHAT / BLOCK are their own
+  // surfaces and don't have a vi sub-mode. Non-vi keymaps (unmapped
+  // values, `emacs`) map to null in viSubModeFromKeymap and hide it.
+  const subMode = mode === "COMMAND" ? viSubModeFromKeymap(viKeymap) : null;
   return (
     <div data-testid="statusline" style={ROW}>
       <span
@@ -125,6 +183,11 @@ export function Statusline({
       >
         {mode}
       </span>
+      {subMode !== null && (
+        <span style={SUB_MODE_CHIP} data-testid="statusline-vi-submode" data-submode={subMode}>
+          {subMode}
+        </span>
+      )}
       <span style={BRANCH_GROUP} data-testid="statusline-branch">
         <span style={{ color: "var(--accent)" }}>⎇</span>
         <span>{branch ?? "—"}</span>

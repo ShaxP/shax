@@ -322,6 +322,14 @@ impl BlockMachine {
                 self.at_input_prompt = false;
                 vec![PtyEvent::ScrollbackCleared]
             }
+            VtEvent::KeymapChanged { keymap } => {
+                // M12.2: pass straight through. The block machine
+                // doesn't care about keymap state — only the frontend
+                // statusline does — but this is the single bridge
+                // point from VtEvent to PtyEvent, so it dispatches
+                // through here.
+                vec![PtyEvent::KeymapChanged { keymap }]
+            }
         }
     }
 

@@ -910,7 +910,79 @@ function AppearanceSection({
           Fuses `==`, `!=`, `=&gt;` etc. when the font supports it.
         </span>
       </div>
+
+      {/* ── Line editing (M12.2) ────────────────────────── */}
+      <hr style={SUB_DIVIDER} />
+      <div style={SECTION_TITLE}>Line editing</div>
+      <div style={SECTION_DESCRIPTION}>
+        How you edit the shell prompt. Takes effect on the next pane you open.
+      </div>
+      <div
+        data-testid="settings-line-editing"
+        role="radiogroup"
+        aria-label="Line editing"
+        style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}
+      >
+        <LineEditingOption
+          value="emacs"
+          active={appearance.line_editing === "emacs"}
+          title="Emacs"
+          description="Standard emacs-style bindings: Ctrl-A / Ctrl-E, Esc as meta prefix. Overrides any vi-mode plugin your shell rc loaded so you get emacs even with zsh-vi-mode installed."
+          onSelect={() => void onPatchAppearance({ line_editing: "emacs" })}
+        />
+        <LineEditingOption
+          value="vi"
+          active={appearance.line_editing === "vi"}
+          title="Vi"
+          description="Modal editing: Esc for normal mode, i / a for insert, v for visual. Shax bundles zsh-vi-mode v0.12.0 for a rich experience (used automatically unless your rc has already loaded a copy). The statusline shows INSERT / NORMAL / VISUAL alongside COMMAND."
+          onSelect={() => void onPatchAppearance({ line_editing: "vi" })}
+        />
+      </div>
     </section>
+  );
+}
+
+/** One card in the line-editing radio pair (M12.2). Same card treatment
+ *  as the assistant-lane cards: selected → accent outline; unselected →
+ *  subdued border. */
+function LineEditingOption({
+  value,
+  active,
+  title,
+  description,
+  onSelect,
+}: {
+  value: "emacs" | "vi";
+  active: boolean;
+  title: string;
+  description: string;
+  onSelect: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      data-testid={`settings-line-editing-${value}`}
+      data-active={active ? "true" : "false"}
+      onClick={onSelect}
+      style={{
+        textAlign: "left",
+        padding: "12px 14px",
+        border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+        borderRadius: 8,
+        background: active ? "var(--surface-hover)" : "var(--surface)",
+        color: "var(--fg)",
+        fontFamily: "inherit",
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+      }}
+    >
+      <span style={{ fontWeight: 600, fontSize: 13 }}>{title}</span>
+      <span style={{ fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.45 }}>{description}</span>
+    </button>
   );
 }
 

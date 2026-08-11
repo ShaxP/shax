@@ -100,3 +100,32 @@ _shax_preexec() {
 # is unset, otherwise prepends our hook with a `;` separator.
 PROMPT_COMMAND="_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 trap '_shax_preexec' DEBUG
+
+# ── M12.2 always-assertive hardening (spec §18 D2) ────────────────────────
+#
+# Runs after the user's rc has been sourced. Unconditional: bare PS1 (Shax
+# owns the visible prompt), empty PS2 (no lingering continuation prompt
+# bytes). Branched on $SHAX_LINE_EDITING: emacs (default) or vi. The
+# undocumented `SHAX_DISABLE_HARDENING=1` env var turns everything off if
+# the shim ever misbehaves.
+#
+# bash has no analog to zsh-syntax-highlighting or zsh-vi-mode worth
+# handling specially; the line editor is readline in either mode. Vi
+# support here is `set -o vi`, which is minimal but functional.
+if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
+  # Bare PS1: single OSC 133 B marker. Precmd above already emits A with
+  # cwd + branch on every prompt cycle; PS1 carries only B to close the
+  # "prompt-rendering" region so anything after it is user typing.
+  # Wrapped in \[...\] so readline's column math ignores it.
+  PS1='\[\e]133;B\a\]'
+  # PS2 (continuation prompt) cleared so a lingering `> ` doesn't paint
+  # bytes we don't own during multi-line commands.
+  PS2=''
+
+  if [[ "$SHAX_LINE_EDITING" == "vi" ]]; then
+    set -o vi 2>/dev/null
+  else
+    # Emacs (default). Forces emacs even if the user's rc set vi mode.
+    set -o emacs 2>/dev/null
+  fi
+fi

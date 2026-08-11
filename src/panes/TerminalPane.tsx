@@ -253,6 +253,12 @@ function TerminalPaneInner({
   // overlay. `null` means the shell is alive; `-1` is the sentinel for
   // "no numeric code reported" (signal-killed, etc.).
   const [exitedCode, setExitedCode] = useState<number | null>(null);
+  // M12.2: the vi keymap the shell is currently in, reported via OSC
+  // 133;M. `null` when the user picked Emacs (the shim doesn't emit
+  // the marker) or when the shell hasn't opened its first ZLE session
+  // yet. Only the active pane's value feeds the statusline pill — see
+  // the publish effect further down.
+  const [viKeymap, setViKeymap] = useState<string | null>(null);
   // Bumped by `handleRestart` to retrigger the mount effect: the existing
   // cleanup tears down xterm + the (already-dead) PTY entry, and setup
   // spawns a fresh shell in the same React-tree position. No unmount,
@@ -841,6 +847,22 @@ function TerminalPaneInner({
     };
   }, [active, blockFocus]);
 
+  // Publish the active pane's vi keymap to App so the Statusline
+  // pill can render the two-chip sub-mode (COMMAND · INSERT /
+  // NORMAL / VISUAL) — M12.2, spec §18 D2. Same active-pane-only
+  // filter as `shax:block-focus-changed`. `null` clears the sub-chip
+  // (either the user picked Emacs and the shim doesn't emit, or the
+  // shell hasn't opened its first ZLE session yet).
+  useEffect(() => {
+    if (!active) return;
+    window.dispatchEvent(
+      new CustomEvent("shax:vi-keymap-changed", { detail: { keymap: viKeymap } }),
+    );
+    return () => {
+      window.dispatchEvent(new CustomEvent("shax:vi-keymap-changed", { detail: { keymap: null } }));
+    };
+  }, [active, viKeymap]);
+
   // Route clicks to a coherent block-focus state. Two bugs
   // this fixes:
   //   1. Ctrl+J engaged block-focus, then the user clicked the
@@ -1096,6 +1118,15 @@ function TerminalPaneInner({
           // the latest block, which only exists once OSC 133 C
           // fires (i.e., a command actually runs).
           setPromptMeta({ cwd: event.cwd, branch: event.git_branch });
+          break;
+
+        case "keymap_changed":
+          // M12.2: OSC 133;M — the vi keymap changed (only fires when
+          // the user picked Vi in preferences; the zsh shim's Emacs
+          // branch doesn't register the keymap-select widget). Stored
+          // per pane; only the ACTIVE pane's value drives the pill,
+          // so we publish through a window event that App filters on.
+          setViKeymap(event.keymap);
           break;
 
         case "exit":

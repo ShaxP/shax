@@ -58,6 +58,16 @@ pub enum VtEvent {
     /// The raw bytes still flow through to xterm.js so the terminal
     /// display clears too — same as before.
     ScrollbackCleared,
+    /// `OSC 133 ; M ; <keymap> ST` – Shax-specific extension of the
+    /// standard OSC 133 semantic-prompt protocol. Emitted by the M12.2
+    /// zsh shim's `zle-keymap-select` widget (registered only when
+    /// the user picked Vi in preferences) whenever the active keymap
+    /// changes. Values seen in practice: `main`, `emacs`, `viins`,
+    /// `vicmd`, `visual`. The frontend uses this to drive the
+    /// statusline's two-chip pill (COMMAND · INSERT / NORMAL /
+    /// VISUAL). Non-Shax OSC 133 receivers ignore unknown markers per
+    /// the spec, so this extension is safe on the wire.
+    KeymapChanged { keymap: String },
 }
 
 /// One item in the VT layer's interleaved message stream.
@@ -253,6 +263,21 @@ impl vte::Perform for Performer {
                     exit_code: code,
                     cwd,
                     git_branch,
+                });
+            }
+            b"M" => {
+                // Shax-specific keymap-change marker (M12.2). Third
+                // param is the keymap name — a plain ASCII zsh keymap
+                // identifier, so a UTF-8 decode failure means the
+                // stream is corrupt and we drop the event silently.
+                let Some(raw) = params.get(2).copied() else {
+                    return;
+                };
+                let Ok(keymap) = std::str::from_utf8(raw) else {
+                    return;
+                };
+                self.emit_event(VtEvent::KeymapChanged {
+                    keymap: keymap.to_string(),
                 });
             }
             _ => {}
@@ -503,6 +528,32 @@ mod tests {
                 git_branch: None,
             }]
         );
+    }
+
+    #[test]
+    fn osc133_m_emits_keymap_changed() {
+        // M12.2: OSC 133;M;<keymap> — Shax-specific keymap-change
+        // marker emitted by the zsh shim's zle-keymap-select
+        // widget when the user picked Vi.
+        for name in ["main", "emacs", "viins", "vicmd", "visual"] {
+            let bytes = format!("\x1b]133;M;{name}\x07");
+            let events = collect_events(bytes.as_bytes());
+            assert_eq!(
+                events,
+                vec![VtEvent::KeymapChanged {
+                    keymap: name.into(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn osc133_m_missing_keymap_param_is_silently_dropped() {
+        // No third param → nothing to report. Don't emit a bogus
+        // KeymapChanged event with an empty string.
+        let bytes = b"\x1b]133;M\x07";
+        let events = collect_events(bytes);
+        assert_eq!(events, Vec::<VtEvent>::new());
     }
 
     #[test]
