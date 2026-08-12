@@ -145,18 +145,32 @@ pub enum PtyEvent {
     /// blocks remain searchable via the overlay.
     ScrollbackCleared,
     /// The shell just started rendering a prompt (OSC 133 A / precmd).
-    /// Emitted once per prompt; carries the cwd and git branch the shell
+    /// Emitted once per prompt; carries the pane-context params the shell
     /// reported on that marker.
     ///
-    /// The block state machine still stashes these values internally so
+    /// The block state machine still stashes cwd + branch internally so
     /// the next `BlockStarted` can attach them to its block — this event
-    /// is *additional*, giving the frontend the current prompt cwd
+    /// is *additional*, giving the frontend the current prompt context
     /// without having to wait for the user to actually run a command.
-    /// Fixes the "prompt strip shows no cwd on a fresh shell until the
-    /// first command runs" gap.
+    ///
+    /// M12.4 grew the payload beyond cwd + branch:
+    /// - `git_ahead` / `git_behind` — commit counts vs upstream, both
+    ///   `None` when no upstream is set OR both are zero (the shim
+    ///   omits the params in that case; the frontend renders nothing).
+    /// - `language` — the primary language detected for the cwd (e.g.
+    ///   `"rust"`, `"node"`, `"typescript"`). `None` when nothing
+    ///   matched.
+    /// - `user` / `host` — session identity from `whoami` / `hostname -s`.
+    ///   Session-constant; emitted on every A for uniformity so the
+    ///   frontend doesn't need a separate one-shot event.
     PromptReady {
         cwd: Option<String>,
         git_branch: Option<String>,
+        git_ahead: Option<u32>,
+        git_behind: Option<u32>,
+        language: Option<String>,
+        user: Option<String>,
+        host: Option<String>,
     },
     /// The shell's line-editor keymap changed (M12.2). Emitted from
     /// the OSC 133;M marker that the zsh shim's `zle-keymap-select`

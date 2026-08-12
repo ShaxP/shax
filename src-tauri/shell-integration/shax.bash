@@ -14,21 +14,74 @@ SHAX_SHELL_INTEGRATION_LOADED=1
 # format" from "bare D / older integration".
 _shax_b64() { printf '%s' "$1" | base64 | tr -d '\n' ; }
 
+# M12.4 language detection — same file-signature check as shax.zsh,
+# ported to bash. Uses `[[ -e ]]` for single files and a loop with
+# `compgen -G` for the two glob checks (`*.csproj`, `*.xcodeproj`)
+# because bash's null-glob is a shopt not a per-command flag. First
+# hit wins; empty return = no language detected.
+_shax_detect_lang() {
+  local _p="$PWD"
+  [[ -e "$_p/Cargo.toml" ]] && { printf 'rust'; return; }
+  [[ -e "$_p/Package.swift" ]] && { printf 'swift'; return; }
+  if compgen -G "$_p/*.xcodeproj" >/dev/null 2>&1 ||
+     compgen -G "$_p/*.xcworkspace" >/dev/null 2>&1; then
+    printf 'swift'; return
+  fi
+  [[ -e "$_p/deno.json" || -e "$_p/deno.jsonc" ]] && { printf 'deno'; return; }
+  [[ -e "$_p/tsconfig.json" ]] && { printf 'typescript'; return; }
+  [[ -e "$_p/package.json" ]] && { printf 'node'; return; }
+  [[ -e "$_p/pyproject.toml" || -e "$_p/requirements.txt" || -e "$_p/setup.py" ]] &&
+    { printf 'python'; return; }
+  [[ -e "$_p/go.mod" ]] && { printf 'go'; return; }
+  [[ -e "$_p/Gemfile" ]] && { printf 'ruby'; return; }
+  [[ -e "$_p/build.gradle.kts" || -e "$_p/settings.gradle.kts" ]] &&
+    { printf 'kotlin'; return; }
+  [[ -e "$_p/pom.xml" || -e "$_p/build.gradle" ]] && { printf 'java'; return; }
+  if compgen -G "$_p/*.csproj" >/dev/null 2>&1 || [[ -e "$_p/global.json" ]]; then
+    printf 'csharp'; return
+  fi
+  [[ -e "$_p/CMakeLists.txt" || -e "$_p/meson.build" || -e "$_p/configure.ac" ]] &&
+    { printf 'c-cpp'; return; }
+}
+
 _shax_emit_d_and_a() {
   local _shax_last_exit=$1
   local _shax_cwd_b64
   _shax_cwd_b64="$(_shax_b64 "$PWD")"
   local _shax_branch=""
+  local _shax_ahead="" _shax_behind=""
   if command -v git >/dev/null 2>&1; then
     _shax_branch="$(command git symbolic-ref --short HEAD 2>/dev/null)"
+    # ahead/behind vs upstream — see shax.zsh for the full explanation
+    # of the git rev-list left-right convention.
+    local _shax_counts
+    _shax_counts="$(command git rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null)"
+    if [[ -n "$_shax_counts" ]]; then
+      _shax_ahead="${_shax_counts%%$'\t'*}"
+      _shax_behind="${_shax_counts##*$'\t'}"
+      if [[ "$_shax_ahead" == "0" && "$_shax_behind" == "0" ]]; then
+        _shax_ahead=""
+        _shax_behind=""
+      fi
+    fi
   fi
   local _shax_branch_b64
   _shax_branch_b64="$(_shax_b64 "$_shax_branch")"
+  local _shax_lang_b64
+  _shax_lang_b64="$(_shax_b64 "$(_shax_detect_lang)")"
   printf '\033]133;D;%s;cwd=%s;branch=%s\007' \
     "$_shax_last_exit" "$_shax_cwd_b64" "$_shax_branch_b64"
-  printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
+  printf '\033]133;A;cwd=%s;branch=%s;ahead=%s;behind=%s;lang=%s;user=%s;host=%s\007' \
+    "$_shax_cwd_b64" "$_shax_branch_b64" \
+    "$_shax_ahead" "$_shax_behind" \
+    "$_shax_lang_b64" \
+    "$_shax_user_b64" "$_shax_host_b64"
   printf '\033]133;B\007'
 }
+
+# M12.4 session-constant identity — computed once at shim source time.
+_shax_user_b64="$(_shax_b64 "$(whoami 2>/dev/null)")"
+_shax_host_b64="$(_shax_b64 "$(hostname -s 2>/dev/null)")"
 
 # State machine for the DEBUG trap. The trap fires for every simple command
 # bash executes — including the body of PROMPT_COMMAND itself, completion
@@ -47,16 +100,35 @@ _shax_precmd() {
   if [[ "$_shax_in_command" -eq 1 ]]; then
     _shax_emit_d_and_a "$_shax_last_exit"
   else
-    # First prompt of the shell: just emit A + B so the next C inherits cwd.
+    # First prompt of the shell: emit A + B (no D — there's no previous
+    # block to close). Same params as _shax_emit_d_and_a's A branch so
+    # the frontend gets user/host/lang/etc. from the very first prompt.
     local _shax_cwd_b64
     _shax_cwd_b64="$(_shax_b64 "$PWD")"
     local _shax_branch=""
+    local _shax_ahead="" _shax_behind=""
     if command -v git >/dev/null 2>&1; then
       _shax_branch="$(command git symbolic-ref --short HEAD 2>/dev/null)"
+      local _shax_counts
+      _shax_counts="$(command git rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null)"
+      if [[ -n "$_shax_counts" ]]; then
+        _shax_ahead="${_shax_counts%%$'\t'*}"
+        _shax_behind="${_shax_counts##*$'\t'}"
+        if [[ "$_shax_ahead" == "0" && "$_shax_behind" == "0" ]]; then
+          _shax_ahead=""
+          _shax_behind=""
+        fi
+      fi
     fi
     local _shax_branch_b64
     _shax_branch_b64="$(_shax_b64 "$_shax_branch")"
-    printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
+    local _shax_lang_b64
+    _shax_lang_b64="$(_shax_b64 "$(_shax_detect_lang)")"
+    printf '\033]133;A;cwd=%s;branch=%s;ahead=%s;behind=%s;lang=%s;user=%s;host=%s\007' \
+      "$_shax_cwd_b64" "$_shax_branch_b64" \
+      "$_shax_ahead" "$_shax_behind" \
+      "$_shax_lang_b64" \
+      "$_shax_user_b64" "$_shax_host_b64"
     printf '\033]133;B\007'
   fi
   _shax_in_command=0
@@ -89,7 +161,7 @@ _shax_preexec() {
   # Skip our own helpers explicitly — these can fire as the first DEBUG
   # after a prompt depending on bash version.
   case "$_cmd" in
-    _shax_precmd|_shax_preexec|_shax_emit_d_and_a|_shax_b64) return ;;
+    _shax_precmd|_shax_preexec|_shax_emit_d_and_a|_shax_b64|_shax_detect_lang) return ;;
   esac
   _shax_in_command=1
   # Base64 the command so multi-line values survive OSC transport

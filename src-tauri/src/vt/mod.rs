@@ -19,13 +19,26 @@ pub enum VtEvent {
     AltScreenLeft,
     /// `OSC 133 ; A [ ; key=value … ] ST` – prompt start.
     ///
-    /// Shax's zsh integration carries `cwd=<base64>` and `branch=<base64>`
-    /// as trailing key/value params on the A marker; the values are
-    /// base64-encoded so they may safely contain `;` and `=`. Older or
-    /// third-party integrations emit a bare `A` and both fields are `None`.
+    /// Shax's shim carries a rich set of key/value params on A:
+    /// - `cwd=<base64>` / `branch=<base64>` — since M1.
+    /// - `ahead=<N>` / `behind=<N>` — since M12.4, git commit counts vs
+    ///   upstream. Omitted when both are zero or no upstream is set.
+    /// - `lang=<base64>` — since M12.4, primary language detected for
+    ///   the cwd. Empty when detection didn't match.
+    /// - `user=<base64>` / `host=<base64>` — since M12.4, session
+    ///   identity (session-constant; emitted on every A for uniformity).
+    ///
+    /// Base64 on the string values keeps `;` and `=` inside them safe.
+    /// Older or third-party integrations emit a bare `A` and all fields
+    /// come back `None` / `0`.
     PromptStart {
         cwd: Option<String>,
         git_branch: Option<String>,
+        git_ahead: Option<u32>,
+        git_behind: Option<u32>,
+        language: Option<String>,
+        user: Option<String>,
+        host: Option<String>,
     },
     /// `OSC 133 ; B ST` – prompt end (command input begins).
     PromptEnd,
@@ -244,8 +257,16 @@ impl vte::Perform for Performer {
         let marker = params.get(1).copied().unwrap_or_default();
         match marker {
             b"A" => {
-                let (cwd, git_branch) = parse_kv_params(&params[2..]);
-                self.emit_event(VtEvent::PromptStart { cwd, git_branch });
+                let parsed = parse_prompt_kv_params(&params[2..]);
+                self.emit_event(VtEvent::PromptStart {
+                    cwd: parsed.cwd,
+                    git_branch: parsed.branch,
+                    git_ahead: parsed.ahead,
+                    git_behind: parsed.behind,
+                    language: parsed.language,
+                    user: parsed.user,
+                    host: parsed.host,
+                });
             }
             b"B" => self.emit_event(VtEvent::PromptEnd),
             b"C" => {
@@ -310,10 +331,38 @@ impl vte::Perform for Performer {
 /// delimiter. A decode error yields `None` for that field rather than
 /// failing the whole event — the marker itself is still useful.
 fn parse_kv_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
+    let parsed = parse_prompt_kv_params(tail);
+    (parsed.cwd, parsed.branch)
+}
+
+/// The full set of key/value params recognised on `OSC 133 ; A` (M12.4).
+/// D still only cares about cwd + branch (via [`parse_kv_params`]); this
+/// struct is the A-side view that adds ahead / behind / language / user
+/// / host.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct PromptKvParams {
+    pub cwd: Option<String>,
+    pub branch: Option<String>,
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
+    pub language: Option<String>,
+    pub user: Option<String>,
+    pub host: Option<String>,
+}
+
+/// Parse every `key=value` pair from an OSC 133 A tail into
+/// [`PromptKvParams`]. String values (`cwd`, `branch`, `lang`, `user`,
+/// `host`) are base64 for `;` / `=` / unicode safety; numeric values
+/// (`ahead`, `behind`) are plain ASCII decimal because they're small
+/// integers with no delimiter risk. Empty decoded strings (`lang=`
+/// with no body, meaning "no language detected") map to `None` — the
+/// shim uses that as a sentinel so the frontend renders no chip.
+/// Unknown keys are dropped so future additions (e.g. `venv=`) don't
+/// break parsing.
+pub(crate) fn parse_prompt_kv_params(tail: &[&[u8]]) -> PromptKvParams {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
-    let mut cwd: Option<String> = None;
-    let mut branch: Option<String> = None;
+    let mut out = PromptKvParams::default();
     for raw in tail {
         let Ok(s) = std::str::from_utf8(raw) else {
             continue;
@@ -321,23 +370,44 @@ fn parse_kv_params(tail: &[&[u8]]) -> (Option<String>, Option<String>) {
         let Some((key, value)) = s.split_once('=') else {
             continue;
         };
-        let decoded = match B64.decode(value.as_bytes()) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(decoded) => decoded,
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
-        if decoded.is_empty() {
-            continue;
-        }
         match key {
-            "cwd" => cwd = Some(decoded),
-            "branch" => branch = Some(decoded),
+            "ahead" | "behind" => {
+                if value.is_empty() {
+                    continue;
+                }
+                let Ok(n) = value.parse::<u32>() else {
+                    continue;
+                };
+                if key == "ahead" {
+                    out.ahead = Some(n);
+                } else {
+                    out.behind = Some(n);
+                }
+            }
+            "cwd" | "branch" | "lang" | "user" | "host" => {
+                let decoded = match B64.decode(value.as_bytes()) {
+                    Ok(bytes) => match String::from_utf8(bytes) {
+                        Ok(decoded) => decoded,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+                if decoded.is_empty() {
+                    continue;
+                }
+                match key {
+                    "cwd" => out.cwd = Some(decoded),
+                    "branch" => out.branch = Some(decoded),
+                    "lang" => out.language = Some(decoded),
+                    "user" => out.user = Some(decoded),
+                    "host" => out.host = Some(decoded),
+                    _ => unreachable!(),
+                }
+            }
             _ => {}
         }
     }
-    (cwd, branch)
+    out
 }
 
 /// Reassemble the command string that lives in OSC 133;C;<cmd...> params.
@@ -454,6 +524,11 @@ mod tests {
                 VtEvent::PromptStart {
                     cwd: None,
                     git_branch: None,
+                    git_ahead: None,
+                    git_behind: None,
+                    language: None,
+                    user: None,
+                    host: None,
                 },
                 VtEvent::PromptEnd,
                 VtEvent::CommandStart { command: None },
@@ -478,6 +553,11 @@ mod tests {
             vec![VtEvent::PromptStart {
                 cwd: Some("/Users/me/project".into()),
                 git_branch: Some("feat/x".into()),
+                git_ahead: None,
+                git_behind: None,
+                language: None,
+                user: None,
+                host: None,
             }]
         );
     }
@@ -493,20 +573,106 @@ mod tests {
             vec![VtEvent::PromptStart {
                 cwd: Some("/tmp".into()),
                 git_branch: None,
+                git_ahead: None,
+                git_behind: None,
+                language: None,
+                user: None,
+                host: None,
             }]
         );
     }
 
     #[test]
     fn osc133_a_ignores_unknown_keys_and_bad_base64() {
-        // Unknown `host=` is ignored; an empty branch value yields None.
-        let bytes = b"\x1b]133;A;host=not-encoded;branch=\x07";
+        // Unknown `venv=` is ignored; a `host=` with non-base64 value
+        // fails decode and is treated the same as omitted; an empty
+        // branch value yields None.
+        let bytes = b"\x1b]133;A;venv=py311;host=not-base64;branch=\x07";
         let events = collect_events(bytes);
         assert_eq!(
             events,
             vec![VtEvent::PromptStart {
                 cwd: None,
                 git_branch: None,
+                git_ahead: None,
+                git_behind: None,
+                language: None,
+                user: None,
+                host: None,
+            }]
+        );
+    }
+
+    // ── M12.4 additions ─────────────────────────────────────────
+
+    #[test]
+    fn osc133_a_carries_ahead_behind_language_user_host() {
+        // The full M12.4 payload: cwd + branch (base64), ahead/behind
+        // (plain decimal), lang/user/host (base64). Non-zero ahead
+        // and behind demonstrate the numeric parse.
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let cwd_b64 = B64.encode("/Users/me/dev/shax");
+        let branch_b64 = B64.encode("main");
+        let lang_b64 = B64.encode("rust");
+        let user_b64 = B64.encode("me");
+        let host_b64 = B64.encode("laptop");
+        let bytes = format!(
+            "\x1b]133;A;cwd={cwd_b64};branch={branch_b64};ahead=2;behind=1;lang={lang_b64};user={user_b64};host={host_b64}\x07"
+        );
+        let events = collect_events(bytes.as_bytes());
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: Some("/Users/me/dev/shax".into()),
+                git_branch: Some("main".into()),
+                git_ahead: Some(2),
+                git_behind: Some(1),
+                language: Some("rust".into()),
+                user: Some("me".into()),
+                host: Some("laptop".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_a_empty_ahead_behind_lang_yield_none() {
+        // The shim omits ahead/behind when both are zero and omits
+        // lang when detection didn't match — they arrive as empty
+        // values (`ahead=;behind=;lang=`). The parser must map empty
+        // to None rather than surface `Some(0)` / `Some("")`.
+        let bytes = b"\x1b]133;A;ahead=;behind=;lang=\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: None,
+                git_branch: None,
+                git_ahead: None,
+                git_behind: None,
+                language: None,
+                user: None,
+                host: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn osc133_a_ahead_behind_reject_non_numeric() {
+        // Someone drops a garbage `ahead=twelve` into the stream —
+        // the parse fails silently and the field stays None. Better
+        // to under-report than to lie with 0.
+        let bytes = b"\x1b]133;A;ahead=twelve;behind=-1\x07";
+        let events = collect_events(bytes);
+        assert_eq!(
+            events,
+            vec![VtEvent::PromptStart {
+                cwd: None,
+                git_branch: None,
+                git_ahead: None,
+                git_behind: None,
+                language: None,
+                user: None,
+                host: None,
             }]
         );
     }

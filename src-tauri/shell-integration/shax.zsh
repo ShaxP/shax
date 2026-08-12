@@ -28,25 +28,118 @@ _shax_b64() { printf '%s' "$1" | base64 | tr -d '\n' }
 # In M12.2's always-assertive mode, PROMPT is reset every precmd to a bare
 # B marker so nothing except the marker paints. This append still fires as
 # a safety net in case anything else re-appends to PROMPT after our reset.
+#
+# M12.4: identity is emitted on every A too. `whoami` / `hostname -s`
+# don't change during a session (Shax doesn't track sudo / SSH), so we
+# compute them once at shim source time (below, near the hooks
+# registration) and cache in module-level vars. Cheaper than a fork
+# per prompt cycle.
+#
+# M12.4: git ahead/behind vs upstream and detected primary language
+# for the cwd are also part of A. Both are computed on demand each
+# precmd — `git rev-list` is fast on small repos and only runs when
+# an upstream is set, and language detection is a handful of `[[ -e ]]`
+# probes per candidate file.
 _shax_precmd() {
   # Capture $? before any subsequent command can stomp on it.
   local _shax_last_exit=$?
   local _shax_cwd_b64
   _shax_cwd_b64="$(_shax_b64 "$PWD")"
   local _shax_branch=""
+  local _shax_ahead="" _shax_behind=""
   if command -v git >/dev/null 2>&1; then
     _shax_branch="$(command git symbolic-ref --short HEAD 2>/dev/null)"
+    # Ahead/behind vs upstream — only when the current branch has one
+    # configured. `git rev-list --left-right --count HEAD...@{u}` yields
+    # `<behind>\t<ahead>` on one line. `2>/dev/null` swallows the
+    # "no upstream" error so a detached HEAD or fresh branch stays quiet.
+    local _shax_counts
+    _shax_counts="$(command git rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null)"
+    if [[ -n "$_shax_counts" ]]; then
+      # Format is "<ahead>\t<behind>" — HEAD is the left side of the
+      # `...`, so the LEFT count is commits on our side (ahead), the
+      # RIGHT count is commits on their side (behind).
+      _shax_ahead="${_shax_counts%%$'\t'*}"
+      _shax_behind="${_shax_counts##*$'\t'}"
+      # Both zero → suppress both (frontend renders the chip only when
+      # at least one is non-zero, and dropping the params keeps the
+      # OSC line short).
+      if [[ "$_shax_ahead" == "0" && "$_shax_behind" == "0" ]]; then
+        _shax_ahead=""
+        _shax_behind=""
+      fi
+    fi
   fi
   local _shax_branch_b64
   _shax_branch_b64="$(_shax_b64 "$_shax_branch")"
+  local _shax_lang
+  _shax_lang="$(_shax_detect_lang)"
+  local _shax_lang_b64
+  _shax_lang_b64="$(_shax_b64 "$_shax_lang")"
+
+  # D marks the previous block's finish. Include cwd/branch so it's
+  # tagged with the directory the command ENDED in (M9-era behaviour).
   printf '\033]133;D;%s;cwd=%s;branch=%s\007' \
     "$_shax_last_exit" "$_shax_cwd_b64" "$_shax_branch_b64"
-  printf '\033]133;A;cwd=%s;branch=%s\007' "$_shax_cwd_b64" "$_shax_branch_b64"
+  # A marks the new prompt. All the pane-context params live here:
+  # cwd, branch, ahead/behind (when non-zero), detected lang, plus
+  # the session-constant user/host (already cached below).
+  printf '\033]133;A;cwd=%s;branch=%s;ahead=%s;behind=%s;lang=%s;user=%s;host=%s\007' \
+    "$_shax_cwd_b64" "$_shax_branch_b64" \
+    "$_shax_ahead" "$_shax_behind" \
+    "$_shax_lang_b64" \
+    "$_shax_user_b64" "$_shax_host_b64"
 
   if [[ "$PROMPT" != *$'\e]133;B\a'* ]]; then
     PROMPT="${PROMPT}"$'%{\e]133;B\a%}'
   fi
 }
+
+# M12.4 language detection. First-hit-wins ordered check against the
+# well-known project files listed in specs/18-prompt-overhaul.md. Uses
+# `[[ -e ]]` for single files (one `stat` each) and `(N)` glob-null for
+# the two pattern checks (`*.csproj`, `*.xcodeproj`), so failure to
+# match is a silent no-op — no error message, no path expansion.
+#
+# Empty return means "no language detected"; the shim then sends
+# `lang=` (empty base64) and the frontend renders no icon.
+_shax_detect_lang() {
+  emulate -L zsh
+  setopt local_options null_glob
+  local _p="$PWD"
+  # Order matters — most-specific first, so tsconfig wins over
+  # package.json (typescript beats node) and build.gradle.kts wins
+  # over build.gradle (kotlin beats java).
+  [[ -e "$_p/Cargo.toml" ]] && { print -- rust; return }
+  [[ -e "$_p/Package.swift" ]] && { print -- swift; return }
+  local _xcode=("$_p"/*.xcodeproj(N) "$_p"/*.xcworkspace(N))
+  (( ${#_xcode} > 0 )) && { print -- swift; return }
+  [[ -e "$_p/deno.json" || -e "$_p/deno.jsonc" ]] && { print -- deno; return }
+  [[ -e "$_p/tsconfig.json" ]] && { print -- typescript; return }
+  [[ -e "$_p/package.json" ]] && { print -- node; return }
+  [[ -e "$_p/pyproject.toml" || -e "$_p/requirements.txt" || -e "$_p/setup.py" ]] &&
+    { print -- python; return }
+  [[ -e "$_p/go.mod" ]] && { print -- go; return }
+  [[ -e "$_p/Gemfile" ]] && { print -- ruby; return }
+  [[ -e "$_p/build.gradle.kts" || -e "$_p/settings.gradle.kts" ]] &&
+    { print -- kotlin; return }
+  [[ -e "$_p/pom.xml" || -e "$_p/build.gradle" ]] && { print -- java; return }
+  local _csproj=("$_p"/*.csproj(N))
+  if (( ${#_csproj} > 0 )) || [[ -e "$_p/global.json" ]]; then
+    print -- csharp
+    return
+  fi
+  [[ -e "$_p/CMakeLists.txt" || -e "$_p/meson.build" || -e "$_p/configure.ac" ]] &&
+    { print -- c-cpp; return }
+  print --
+}
+
+# M12.4 session-constant identity — computed once, sent on every A.
+# `whoami` / `hostname -s` don't change during a session (we don't
+# track sudo / SSH), and forking twice per prompt would add ~2ms of
+# subshell overhead for no new information.
+_shax_user_b64="$(_shax_b64 "$(whoami 2>/dev/null)")"
+_shax_host_b64="$(_shax_b64 "$(hostname -s 2>/dev/null)")"
 
 _shax_preexec() {
   # $1 is the command line as typed (preexec convention). Base64 the

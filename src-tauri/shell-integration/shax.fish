@@ -13,14 +13,90 @@ function _shax_b64
   printf '%s' "$argv" | base64 | tr -d '\n'
 end
 
+# M12.4 language detection — same file-signature check as shax.zsh /
+# shax.bash, ported to fish. First hit wins; empty return = no language
+# detected. See specs/18-prompt-overhaul.md for the full table.
+function _shax_detect_lang
+  set -l p $PWD
+  if test -e "$p/Cargo.toml"
+    echo -n rust; return
+  end
+  if test -e "$p/Package.swift"
+    echo -n swift; return
+  end
+  # `count $p/*.xcodeproj` yields 0 when the glob doesn't match (fish's
+  # default when no files match a glob passed to a command).
+  if count $p/*.xcodeproj >/dev/null 2>&1
+    if count $p/*.xcodeproj >/dev/null
+      echo -n swift; return
+    end
+  end
+  if test -e "$p/deno.json" -o -e "$p/deno.jsonc"
+    echo -n deno; return
+  end
+  if test -e "$p/tsconfig.json"
+    echo -n typescript; return
+  end
+  if test -e "$p/package.json"
+    echo -n node; return
+  end
+  if test -e "$p/pyproject.toml" -o -e "$p/requirements.txt" -o -e "$p/setup.py"
+    echo -n python; return
+  end
+  if test -e "$p/go.mod"
+    echo -n go; return
+  end
+  if test -e "$p/Gemfile"
+    echo -n ruby; return
+  end
+  if test -e "$p/build.gradle.kts" -o -e "$p/settings.gradle.kts"
+    echo -n kotlin; return
+  end
+  if test -e "$p/pom.xml" -o -e "$p/build.gradle"
+    echo -n java; return
+  end
+  if count $p/*.csproj >/dev/null 2>&1; or test -e "$p/global.json"
+    if count $p/*.csproj >/dev/null
+      echo -n csharp; return
+    end
+    if test -e "$p/global.json"
+      echo -n csharp; return
+    end
+  end
+  if test -e "$p/CMakeLists.txt" -o -e "$p/meson.build" -o -e "$p/configure.ac"
+    echo -n c-cpp; return
+  end
+end
+
+# M12.4 session-constant identity — computed once at shim source time.
+set -g _shax_user_b64 (_shax_b64 (whoami 2>/dev/null))
+set -g _shax_host_b64 (_shax_b64 (hostname -s 2>/dev/null))
+
 function _shax_emit_a
   set -l cwd_b64 (_shax_b64 "$PWD")
   set -l branch ''
+  set -l ahead ''
+  set -l behind ''
   if type -q git
     set branch (command git symbolic-ref --short HEAD 2>/dev/null)
+    # ahead/behind vs upstream — mirrors shax.zsh's logic.
+    set -l counts (command git rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null)
+    if test -n "$counts"
+      # `git rev-list --left-right --count` outputs one line with a tab
+      # separator: "<ahead>\t<behind>".
+      set -l parts (string split \t -- $counts)
+      set ahead $parts[1]
+      set behind $parts[2]
+      if test "$ahead" = "0" -a "$behind" = "0"
+        set ahead ''
+        set behind ''
+      end
+    end
   end
   set -l branch_b64 (_shax_b64 "$branch")
-  printf '\e]133;A;cwd=%s;branch=%s\a' $cwd_b64 $branch_b64
+  set -l lang_b64 (_shax_b64 (_shax_detect_lang))
+  printf '\e]133;A;cwd=%s;branch=%s;ahead=%s;behind=%s;lang=%s;user=%s;host=%s\a' \
+    $cwd_b64 $branch_b64 $ahead $behind $lang_b64 $_shax_user_b64 $_shax_host_b64
   printf '\e]133;B\a'
 end
 
