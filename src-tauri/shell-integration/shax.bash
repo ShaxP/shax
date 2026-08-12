@@ -264,5 +264,15 @@ if declare -p PROMPT_COMMAND 2>/dev/null | grep -q '^declare -a'; then
 else
   _shax_previous_prompt_command="$PROMPT_COMMAND"
 fi
+# CRITICAL: unset before the scalar reassignment. Bash 5 treats
+# `arr=value` as `arr[0]=value` when `arr` was declared as an array —
+# without `unset`, our scalar `'_shax_prompt_command_wrapper'` would
+# only replace element [0] and leave any additional array elements
+# (e.g. Fedora 42's `[1]="__vte_precmd" [2]="__vte_osc7"`) running
+# OUTSIDE our wrapper. Those out-of-wrapper commands have no wrapper
+# frame in FUNCNAME, dodge every guard in `_shax_preexec`, and open
+# never-closing phantom blocks — the exact "hangs on __vte_precmd"
+# report from Fedora 42 (bash 5.2).
+unset PROMPT_COMMAND
 PROMPT_COMMAND='_shax_prompt_command_wrapper'
 trap '_shax_preexec' DEBUG

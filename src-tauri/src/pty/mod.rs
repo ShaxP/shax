@@ -1666,6 +1666,25 @@ mod tests {
             "shax.bash must reinstall PROMPT_COMMAND as the wrapper alone \
              — otherwise nested printfs from distro helpers slip through",
         );
+        // CRITICAL: on bash 5, an array-declared PROMPT_COMMAND treats
+        // scalar reassignment as setting only element [0]. Without an
+        // explicit `unset` first, our wrapper install would leave
+        // elements [1..] (e.g. Fedora 42's `__vte_precmd` + `__vte_osc7`)
+        // running OUTSIDE the wrapper — where FUNCNAME lacks our frame
+        // and every guard misses them. See the "hangs on __vte_precmd"
+        // Fedora report for the concrete failure this line prevents.
+        let unset_pos = shim
+            .find("unset PROMPT_COMMAND")
+            .expect("shax.bash must `unset PROMPT_COMMAND` before the wrapper install");
+        let install_pos = shim
+            .find("PROMPT_COMMAND='_shax_prompt_command_wrapper'")
+            .expect("shax.bash must install the wrapper");
+        assert!(
+            unset_pos < install_pos,
+            "shax.bash must `unset PROMPT_COMMAND` *before* the wrapper install — \
+             otherwise on bash 5 with an array-declared PROMPT_COMMAND we only \
+             replace element [0] and leave elements [1..] running outside the wrapper",
+        );
         assert!(
             shim.contains("_shax_previous_prompt_command"),
             "shax.bash must stash the user's original PROMPT_COMMAND so the \
@@ -1923,36 +1942,48 @@ mod tests {
         manager.kill(id).await.expect("kill");
     }
 
-    /// Regression test for the Fedora phantom-block bug: Fedora's
-    /// `/etc/profile.d/vte.sh` (on bash 5) sets
+    /// Regression test for the Fedora phantom-block bug. The exact
+    /// shape captured on Fedora 42 (bash 5.2, VTE 0.78+) is a
+    /// three-element `PROMPT_COMMAND` array:
     ///
     /// ```bash
-    /// PROMPT_COMMAND=(__vte_prompt_command)
+    /// declare -a PROMPT_COMMAND=(
+    ///   [0]="printf \"\\033]0;%s@%s:%s\\007\" \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\""
+    ///   [1]="__vte_precmd"
+    ///   [2]="__vte_osc7"
+    /// )
     /// ```
     ///
-    /// where `__vte_prompt_command` is a function whose body runs the
-    /// title-setting `printf "\033]0;…\007"`. Two bugs surfaced from
-    /// this in the wild:
+    /// Bash runs each array element as a separate command per prompt
+    /// cycle. That's why the same underlying bug surfaced three
+    /// different phantom-block command labels in the wild — the old
+    /// string-match guard let one of `printf …`, `__vte_precmd`, or
+    /// `__vte_osc7` slip through each rebuild depending on which
+    /// happened to trip `_shax_in_command` first:
     ///
-    /// 1. **First report (`printf …` hangs as a block)** — the DEBUG
-    ///    trap fired for the printf inside the function body; the old
-    ///    top-level `case ";$PROMPT_COMMAND;"` guard only matched
-    ///    top-level entries.
-    /// 2. **Second report (`__vte_prompt_command` hangs as a block)**
-    ///    — with the array-form `PROMPT_COMMAND`, our old chain
-    ///    `"_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"` produced
-    ///    `_shax_precmd; __vte_prompt_command` (with a space after `;`).
-    ///    The guard's pattern was `;__vte_prompt_command;` (no space)
-    ///    — no match, phantom C for the function-level DEBUG. On bash
-    ///    3.2 (no array form) the same setup surfaces via the printf
-    ///    (report #1) instead.
+    /// - **Report 1: `printf …` hangs** — element [0] fires DEBUG with
+    ///   the raw printf command; guard's scalar-coerced pattern was
+    ///   just element [0] itself, so it matched, but on earlier
+    ///   Fedora shapes (single function) the printf inside its body
+    ///   slipped through.
+    /// - **Report 2: `__vte_prompt_command` hangs** — an older
+    ///   `/etc/profile.d/vte.sh` shape (`PROMPT_COMMAND=(__vte_prompt_command)`)
+    ///   scalar-coerced to just `__vte_prompt_command` with a space
+    ///   the guard pattern didn't tolerate.
+    /// - **Report 3: `__vte_precmd` hangs** — with the three-element
+    ///   array above, element [1]'s DEBUG isn't reachable by any
+    ///   string-based match on element [0].
     ///
-    /// Both are the same root cause: nested PROMPT_COMMAND entries at
-    /// any layer can slip past a string-based guard. The FUNCNAME-based
-    /// fix in `_shax_preexec` catches every layer in one rule. This
-    /// test reproduces Fedora's exact shape and asserts we see exactly
-    /// one `BlockStarted` for the user's real command — no phantom for
-    /// `printf`, `__vte_prompt_command`, or any other distro helper.
+    /// All three vanish under the FUNCNAME guard: the wrapper is on
+    /// bash's call stack for every command inside the wrapped
+    /// `PROMPT_COMMAND` execution, regardless of array shape, nesting,
+    /// or which specific helper name a given distro uses.
+    ///
+    /// This test reproduces the exact Fedora 42 shape (with a
+    /// fallback for bash 3.2 CI runners that don't understand the
+    /// array syntax) and asserts we see exactly one `BlockStarted` —
+    /// for the user's real command — with no `printf`, `__vte_precmd`,
+    /// or `__vte_osc7` phantoms.
     #[cfg(unix)]
     #[tokio::test]
     async fn bash_integration_ignores_nested_prompt_command_helpers() {
@@ -1965,26 +1996,33 @@ mod tests {
 
         let (channel, mut rx) = make_test_channel();
 
-        // Fedora's actual .bashrc shape. Uses bash 5 array-form when
-        // available, falls back to scalar for bash 3.2 (macOS system
-        // bash) so the test still exercises the same guard on both.
-        // Real /etc/profile.d/vte.sh does the equivalent version gate.
+        // Fedora 42's exact .bashrc shape as reported by the user's
+        // `declare -p PROMPT_COMMAND`. Uses bash 5.1+ array form when
+        // supported; falls back to `; `-joined scalar on bash 3.2
+        // (macOS system bash on CI). The pattern of raw-printf-as-
+        // element-[0] + function-name-as-element-[1] + another-
+        // function-name-as-element-[2] is the shape that produces the
+        // full menagerie of phantom-block reports we saw.
         let home = tempfile::tempdir().expect("tempdir");
         let bashrc = home.path().join(".bashrc");
         std::fs::write(
             &bashrc,
-            "__vte_prompt_command() {\n  \
-                 printf \"\\033]0;%s@%s:%s\\007\" \
-                   \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\"\n\
+            "__vte_osc7() {\n  \
+                 printf \"\\033]7;file://%s%s\\033\\\\\\\\\" \"${HOSTNAME}\" \"${PWD}\"\n\
              }\n\
-             # bash 5.1+ ships PROMPT_COMMAND as an array; older bash\n\
-             # only understands the scalar form. Match /etc/profile.d/vte.sh\n\
-             # in preferring the array shape when supported.\n\
+             __vte_precmd() {\n  \
+                 local errsv=\"$?\"\n  \
+                 return $errsv\n\
+             }\n\
              if ((BASH_VERSINFO[0] > 5)) || \
                 { ((BASH_VERSINFO[0] == 5)) && ((BASH_VERSINFO[1] >= 1)); }; then\n  \
-                 PROMPT_COMMAND=(__vte_prompt_command)\n\
+                 PROMPT_COMMAND=(\n    \
+                     'printf \"\\033]0;%s@%s:%s\\007\" \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\"'\n    \
+                     '__vte_precmd'\n    \
+                     '__vte_osc7'\n  \
+                 )\n\
              else\n  \
-                 PROMPT_COMMAND=\"__vte_prompt_command\"\n\
+                 PROMPT_COMMAND='printf \"\\033]0;%s@%s:%s\\007\" \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\"; __vte_precmd; __vte_osc7'\n\
              fi\n",
         )
         .expect("write .bashrc");
@@ -2041,17 +2079,22 @@ mod tests {
              guard. starts = {starts:?}",
             n = starts.len(),
         );
-        // Belt-and-suspenders: neither known-phantom command must appear.
-        // If the count-1 assertion above passed by coincidence (e.g. we
-        // emitted the phantom C but suppressed the real one) this line
-        // makes the regression visible.
+        // Belt-and-suspenders: none of the known Fedora phantoms must
+        // appear as the captured command. If the count-1 assertion
+        // above passed by coincidence (e.g. we emitted a phantom C but
+        // suppressed the real `true`), this makes the regression
+        // visible with a name the reader recognises from the reports.
         let cmd = starts
             .into_iter()
             .next()
             .flatten()
             .unwrap_or_else(|| String::from("<none>"));
+        let is_phantom = cmd.starts_with("printf")
+            || cmd == "__vte_precmd"
+            || cmd == "__vte_osc7"
+            || cmd == "__vte_prompt_command";
         assert!(
-            !cmd.starts_with("printf") && cmd != "__vte_prompt_command",
+            !is_phantom,
             "the captured block is a distro-helper phantom, not the user's `true` — \
              the FUNCNAME guard isn't firing. cmd = {cmd:?}"
         );
