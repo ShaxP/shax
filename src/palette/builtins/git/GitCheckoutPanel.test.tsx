@@ -131,9 +131,13 @@ describe("GitCheckoutPanel", () => {
     vi.mocked(gitBranches).mockResolvedValue([branch("feat/foo", "local")]);
     const onSubmit = vi.fn();
     render(<GitCheckoutPanel ctx={CTX} onSubmit={onSubmit} />);
-    await waitFor(() =>
-      expect(screen.getByTestId("palette-git-checkout-filter")).toBeInTheDocument(),
-    );
+    // Wait for the row to actually populate — not just the filter
+    // input — before firing Enter. Waiting on the filter alone races
+    // the async `gitBranches` promise: on slower CI (Ubuntu) Enter
+    // arrives before the row is mounted, no branch is selected, and
+    // `onSubmit` never fires. Every other Enter-emits-a-branch test
+    // in this file uses this same pattern.
+    await waitFor(() => expect(screen.getAllByTestId("palette-git-checkout-row")).toHaveLength(1));
     fireEvent.keyDown(screen.getByTestId("palette-git-checkout-filter"), { key: "Enter" });
     expect(onSubmit).toHaveBeenCalledWith("git checkout feat/foo");
   });
