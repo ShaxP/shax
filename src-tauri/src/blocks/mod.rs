@@ -259,7 +259,15 @@ impl BlockMachine {
                 self.at_input_prompt = false;
                 vec![PtyEvent::AltScreenChanged { active: false }]
             }
-            VtEvent::PromptStart { cwd, git_branch } => {
+            VtEvent::PromptStart {
+                cwd,
+                git_branch,
+                git_ahead,
+                git_behind,
+                language,
+                user,
+                host,
+            } => {
                 // PS1 rendering is about to start. Whatever bytes follow up
                 // to the next OSC 133 B are the shell drawing its prompt —
                 // not user input. The PromptStrip must not show those, so
@@ -277,7 +285,22 @@ impl BlockMachine {
                 // behaviour — blocks are created on OSC 133 C, and the display
                 // used to derive cwd from the latest block). Fixes the "fresh
                 // shell shows no cwd until the first cd" gap.
-                vec![PtyEvent::PromptReady { cwd, git_branch }]
+                //
+                // M12.4: also propagate ahead/behind, language, user, host —
+                // the frontend uses them for the prompt-strip enrichment and
+                // the statusbar identity cluster. The block store doesn't
+                // stash them because they're prompt-time context, not
+                // block-time context (a command that finishes in a different
+                // language directory shouldn't retroactively re-tag).
+                vec![PtyEvent::PromptReady {
+                    cwd,
+                    git_branch,
+                    git_ahead,
+                    git_behind,
+                    language,
+                    user,
+                    host,
+                }]
             }
             VtEvent::PromptEnd => {
                 // PS1 is done; the shell is now waiting for input. Bytes that
@@ -649,6 +672,11 @@ mod tests {
         all_events.extend(machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/Users/me/proj".into()),
             git_branch: Some("main".into()),
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         }));
         all_events.extend(machine.handle_vt_event(VtEvent::PromptEnd));
         all_events.extend(machine.handle_vt_event(VtEvent::CommandStart {
@@ -719,6 +747,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/start".into()),
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("cd /target && ls".into()),
@@ -745,6 +778,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/repo".into()),
             git_branch: Some("main".into()),
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("cd /tmp".into()),
@@ -770,6 +808,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/home/me".into()),
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("ls".into()),
@@ -791,6 +834,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/old".into()),
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("cd /new".into()),
@@ -828,10 +876,17 @@ mod tests {
         let events = machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/Users/ada/proj".into()),
             git_branch: Some("main".into()),
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         assert_eq!(events.len(), 1);
         match &events[0] {
-            PtyEvent::PromptReady { cwd, git_branch } => {
+            PtyEvent::PromptReady {
+                cwd, git_branch, ..
+            } => {
                 assert_eq!(cwd.as_deref(), Some("/Users/ada/proj"));
                 assert_eq!(git_branch.as_deref(), Some("main"));
             }
@@ -850,10 +905,17 @@ mod tests {
         let events = machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         assert_eq!(events.len(), 1);
         match &events[0] {
-            PtyEvent::PromptReady { cwd, git_branch } => {
+            PtyEvent::PromptReady {
+                cwd, git_branch, ..
+            } => {
                 assert!(cwd.is_none());
                 assert!(git_branch.is_none());
             }
@@ -869,10 +931,20 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: Some("/old".into()),
             git_branch: Some("old-branch".into()),
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("ls".into()),
@@ -1103,6 +1175,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         assert!(!machine.at_input_prompt());
 
@@ -1130,6 +1207,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         assert!(!machine.at_input_prompt());
         machine.handle_vt_event(VtEvent::PromptEnd);
@@ -1142,6 +1224,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::PromptEnd);
         assert!(machine.at_input_prompt());
@@ -1164,6 +1251,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::PromptEnd);
         machine.handle_vt_event(VtEvent::CommandStart {
@@ -1194,6 +1286,11 @@ mod tests {
         machine.handle_vt_event(VtEvent::PromptStart {
             cwd: None,
             git_branch: None,
+            git_ahead: None,
+            git_behind: None,
+            language: None,
+            user: None,
+            host: None,
         });
         machine.handle_vt_event(VtEvent::CommandStart {
             command: Some("sleep 5".into()),

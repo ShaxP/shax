@@ -480,3 +480,136 @@ describe("PromptStrip / paste handling (M12.3)", () => {
     }
   });
 });
+
+// ── M12.4: prompt chrome enrichment (ahead/behind + language) ──────
+
+describe("PromptStrip / chrome enrichment (M12.4)", () => {
+  it("does not render the git-ahead-behind chip when both are null", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={emptyPromptLine} onInput={noop} />);
+    expect(screen.queryByTestId("prompt-git-ahead-behind")).toBeNull();
+  });
+
+  it("does not render the ahead-behind chip when both are zero", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        gitAhead={0}
+        gitBehind={0}
+        line={emptyPromptLine}
+        onInput={noop}
+      />,
+    );
+    expect(screen.queryByTestId("prompt-git-ahead-behind")).toBeNull();
+  });
+
+  it("renders `↑N` when ahead > 0, no `↓` when behind is zero", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        gitAhead={2}
+        gitBehind={0}
+        line={emptyPromptLine}
+        onInput={noop}
+      />,
+    );
+    const chip = screen.getByTestId("prompt-git-ahead-behind");
+    expect(chip).toHaveTextContent("↑2");
+    expect(chip).not.toHaveTextContent("↓");
+  });
+
+  it("renders both `↑N ↓M` when both are non-zero", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        gitAhead={2}
+        gitBehind={1}
+        line={emptyPromptLine}
+        onInput={noop}
+      />,
+    );
+    const chip = screen.getByTestId("prompt-git-ahead-behind");
+    expect(chip).toHaveTextContent("↑2");
+    expect(chip).toHaveTextContent("↓1");
+    expect(chip).toHaveAttribute("title", "2 ahead, 1 behind upstream");
+  });
+
+  it("does not render a language chip when language is null", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={emptyPromptLine} onInput={noop} />);
+    expect(screen.queryByTestId("prompt-language")).toBeNull();
+  });
+
+  it("does not render a language chip for an unknown label", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        language="elixir"
+        line={emptyPromptLine}
+        onInput={noop}
+      />,
+    );
+    expect(screen.queryByTestId("prompt-language")).toBeNull();
+  });
+
+  it("renders the language chip with icon + display name for a known label", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        language="rust"
+        line={emptyPromptLine}
+        onInput={noop}
+      />,
+    );
+    const chip = screen.getByTestId("prompt-language");
+    expect(chip).toHaveAttribute("data-language", "rust");
+    expect(chip).toHaveTextContent("rust");
+    expect(chip).toHaveAttribute("title", "Detected language: rust");
+  });
+
+  it("continuation rows hide the chrome via visibility:hidden so alignment holds", () => {
+    // Multi-row line — row 1 should render its chrome duplicated but
+    // aria-hidden and visually invisible. Regression guard: adding
+    // new chrome chips (ahead/behind, language) must keep this
+    // invariant so pasted multi-line commands still align.
+    const line: PromptLine = {
+      rows: [
+        {
+          text: 'echo "hello',
+          styled: new Array<boolean>(11).fill(false),
+          selected: new Array<boolean>(11).fill(false),
+        },
+        {
+          text: 'world"',
+          styled: new Array<boolean>(6).fill(false),
+          selected: new Array<boolean>(6).fill(false),
+        },
+      ],
+      cursorRow: 1,
+      cursorCol: 6,
+      currentStyled: false,
+      currentSelected: false,
+    };
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        gitAhead={2}
+        gitBehind={0}
+        language="rust"
+        line={line}
+        onInput={noop}
+      />,
+    );
+    // Row 1's chrome is aria-hidden — enumerating aria-hidden spans
+    // should catch the branch, ahead/behind, language, and prompt
+    // glyph reservations. If any of the new chips forgot the
+    // aria-hidden wrapping, alignment would break silently.
+    const row1 = screen.getByTestId("prompt-row-1");
+    const hidden = row1.querySelectorAll('[aria-hidden="true"]');
+    expect(hidden.length).toBeGreaterThanOrEqual(4);
+  });
+});

@@ -238,10 +238,29 @@ function TerminalPaneInner({
   // with no persisted values, the display starts blank and
   // populates within milliseconds when the shell renders its
   // first prompt.
+  // M12.4 grew this beyond cwd + branch. All fields fed by the most
+  // recent OSC 133 A (`prompt_ready` event). Ahead/behind are `null`
+  // when the shim omitted them (no upstream, or both zero). Language
+  // is `null` when detection didn't match anything for this cwd.
+  // User/host are session-constant but re-arrive on every A for
+  // uniformity — first non-null wins semantically.
   const [promptMeta, setPromptMeta] = useState<{
     cwd: string | null;
     branch: string | null;
-  }>(() => ({ cwd: initialCwd ?? null, branch: initialBranch ?? null }));
+    ahead: number | null;
+    behind: number | null;
+    language: string | null;
+    user: string | null;
+    host: string | null;
+  }>(() => ({
+    cwd: initialCwd ?? null,
+    branch: initialBranch ?? null,
+    ahead: null,
+    behind: null,
+    language: null,
+    user: null,
+    host: null,
+  }));
   const promptStripRef = useRef<HTMLDivElement | null>(null);
 
   const [blockState, dispatch] = useReducer(blockReducer, initialBlockState);
@@ -863,6 +882,28 @@ function TerminalPaneInner({
     };
   }, [active, viKeymap]);
 
+  // Publish the active pane's session identity (user / host) to App so
+  // the Statusline's right-side cluster can show `me@laptop`. M12.4.
+  // User/host are session-constant locally (all panes come back the
+  // same), but pane-scoped anyway in case a future SSH-through-Shax
+  // scenario surfaces a different identity per pane. Same active-pane
+  // filter as block-focus / vi-keymap.
+  useEffect(() => {
+    if (!active) return;
+    window.dispatchEvent(
+      new CustomEvent("shax:prompt-identity-changed", {
+        detail: { user: promptMeta.user, host: promptMeta.host },
+      }),
+    );
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent("shax:prompt-identity-changed", {
+          detail: { user: null, host: null },
+        }),
+      );
+    };
+  }, [active, promptMeta.user, promptMeta.host]);
+
   // Route clicks to a coherent block-focus state. Two bugs
   // this fixes:
   //   1. Ctrl+J engaged block-focus, then the user clicked the
@@ -1112,12 +1153,19 @@ function TerminalPaneInner({
 
         case "prompt_ready":
           // OSC 133 A fires on every prompt; the display source of
-          // truth for the prompt strip's cwd / branch. Fixes the
-          // "fresh shell shows no cwd until the first command" gap
-          // — before this event was added, cwd was derived from
-          // the latest block, which only exists once OSC 133 C
-          // fires (i.e., a command actually runs).
-          setPromptMeta({ cwd: event.cwd, branch: event.git_branch });
+          // truth for the prompt strip's pane-context chrome. M12.4
+          // grew the payload to carry ahead/behind + language for the
+          // prompt-strip enrichment and user/host for the statusbar
+          // identity cluster.
+          setPromptMeta({
+            cwd: event.cwd,
+            branch: event.git_branch,
+            ahead: event.git_ahead,
+            behind: event.git_behind,
+            language: event.language,
+            user: event.user,
+            host: event.host,
+          });
           break;
 
         case "keymap_changed":
@@ -1591,6 +1639,9 @@ function TerminalPaneInner({
           ref={promptStripRef}
           cwd={cwd}
           branch={branch}
+          gitAhead={promptMeta.ahead}
+          gitBehind={promptMeta.behind}
+          language={promptMeta.language}
           line={blockState.promptLine}
           onInput={handlePromptInput}
           altScreen={altScreen}

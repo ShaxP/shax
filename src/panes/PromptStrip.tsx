@@ -42,6 +42,7 @@ import { compactCwd } from "./blockFormat";
 import type { PromptLine, PromptRow } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
 import { ConfirmPasteModal } from "./ConfirmPasteModal";
+import { languageChip } from "./languageIcons";
 
 const TEXT_ENCODER = new TextEncoder();
 
@@ -85,6 +86,19 @@ export interface PromptStripProps {
   cwd: string | null;
   /** The current git branch, sourced from OSC 133 A. */
   branch: string | null;
+  /**
+   * M12.4: commit counts vs upstream. `null` when the shim omitted
+   * the field (no upstream, or both zero). The chrome renders
+   * `↑N` / `↓M` in muted tone only when at least one is non-null.
+   */
+  gitAhead?: number | null;
+  gitBehind?: number | null;
+  /**
+   * M12.4: the primary language detected for the cwd (e.g. `"rust"`,
+   * `"typescript"`). `null` when detection didn't match; the chrome
+   * then renders no icon.
+   */
+  language?: string | null;
   /** The mirror of the shell's current prompt line. */
   line: PromptLine;
   /**
@@ -169,6 +183,45 @@ const PROMPT_GLYPH: CSSProperties = {
   fontSize: 14,
   fontWeight: 700,
   flexShrink: 0,
+};
+
+/** M12.4 git ahead/behind chip — sits after the branch label, only
+ *  renders when at least one count is non-zero. Muted tone so it
+ *  doesn't compete with the branch name for attention. */
+const AHEAD_BEHIND_GROUP: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  color: "var(--fg-dim)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  fontVariantNumeric: "tabular-nums",
+};
+
+/** The `↑` / `↓` arrow inside the ahead/behind chip. */
+const ARROW_GLYPH: CSSProperties = {
+  marginRight: 1,
+};
+
+/** M12.4 language chip — sits after ahead/behind. Nerd Font icon
+ *  inherits currentColor via the icon-font fallback stack (see
+ *  languageIcons.ts docblock). */
+const LANG_GROUP: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  color: "var(--fg-dim)",
+  fontFamily: "var(--font-ui)",
+  fontSize: 11.5,
+};
+
+/** The Nerd Font icon inside the language chip. `font-family` names
+ *  the Nerd Font first so the glyph resolves even when the user
+ *  picked a non-Nerd `font_family` in preferences. */
+const LANG_ICON: CSSProperties = {
+  fontFamily: "'JetBrainsMono Nerd Font', var(--font-mono), monospace",
+  fontSize: 13,
+  lineHeight: 1,
 };
 
 const LINE_AREA: CSSProperties = {
@@ -257,7 +310,16 @@ function runStyle(run: StyledRun): CSSProperties | undefined {
 }
 
 function PromptStripInner(
-  { cwd, branch, line, onInput, assistantDocked: assistantDockedProp }: PromptStripProps,
+  {
+    cwd,
+    branch,
+    gitAhead = null,
+    gitBehind = null,
+    language = null,
+    line,
+    onInput,
+    assistantDocked: assistantDockedProp,
+  }: PromptStripProps,
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
   const hasTyping = line.rows.some((r) => r.text.length > 0);
@@ -349,6 +411,9 @@ function PromptStripInner(
           isFirst={rowIdx === 0}
           cwd={displayCwd}
           branch={branch}
+          gitAhead={gitAhead}
+          gitBehind={gitBehind}
+          language={language}
           cursorCol={rowIdx === line.cursorRow ? line.cursorCol : null}
           showPlaceholder={rowIdx === 0 && !hasTyping}
           assistantDocked={assistantDocked}
@@ -389,6 +454,9 @@ function PromptRowView({
   isFirst,
   cwd,
   branch,
+  gitAhead,
+  gitBehind,
+  language,
   cursorCol,
   showPlaceholder,
   assistantDocked,
@@ -398,6 +466,9 @@ function PromptRowView({
   isFirst: boolean;
   cwd: string;
   branch: string | null;
+  gitAhead: number | null;
+  gitBehind: number | null;
+  language: string | null;
   /** Column the cursor sits at within this row, or `null` if the cursor
    *  is on a different row. */
   cursorCol: number | null;
@@ -405,6 +476,9 @@ function PromptRowView({
   assistantDocked: boolean;
 }): React.ReactElement {
   const chromeStyle: CSSProperties = isFirst ? {} : { visibility: "hidden" };
+  const langChip = languageChip(language);
+  const showAhead = gitAhead !== null && gitAhead > 0;
+  const showBehind = gitBehind !== null && gitBehind > 0;
   const beforeText = cursorCol !== null ? row.text.slice(0, cursorCol) : row.text;
   const afterText = cursorCol !== null ? row.text.slice(cursorCol) : "";
   const beforeRuns = styledRuns(
@@ -435,6 +509,45 @@ function PromptRowView({
           <span style={{ fontSize: 11 }}>⎇</span>
           {branch ?? "—"}
         </span>
+        {(showAhead || showBehind) && (
+          <span
+            style={AHEAD_BEHIND_GROUP}
+            data-testid={isFirst ? "prompt-git-ahead-behind" : undefined}
+            aria-hidden={!isFirst}
+            title={
+              showAhead && showBehind
+                ? `${gitAhead} ahead, ${gitBehind} behind upstream`
+                : showAhead
+                  ? `${gitAhead} ahead of upstream`
+                  : `${gitBehind} behind upstream`
+            }
+          >
+            {showAhead && (
+              <span>
+                <span style={ARROW_GLYPH}>↑</span>
+                {gitAhead}
+              </span>
+            )}
+            {showBehind && (
+              <span>
+                <span style={ARROW_GLYPH}>↓</span>
+                {gitBehind}
+              </span>
+            )}
+          </span>
+        )}
+        {langChip !== null && (
+          <span
+            style={LANG_GROUP}
+            data-testid={isFirst ? "prompt-language" : undefined}
+            data-language={langChip.label}
+            aria-hidden={!isFirst}
+            title={`Detected language: ${langChip.displayName}`}
+          >
+            <span style={LANG_ICON}>{langChip.icon}</span>
+            {langChip.displayName}
+          </span>
+        )}
       </span>
       <span style={{ ...PROMPT_GLYPH, ...chromeStyle }} aria-hidden={!isFirst}>
         ❯

@@ -98,15 +98,31 @@ export type PtyEvent =
   | {
       /**
        * The shell just started rendering a prompt (OSC 133 A / precmd).
-       * Fires on every prompt including the first — the prompt strip uses
-       * it as the primary source for the cwd / branch display so a fresh
-       * shell shows its cwd immediately, not only after the user runs
-       * their first command. `cwd` and `git_branch` are `null` when the
-       * shell integration emitted a bare `A` marker without params.
+       * Fires on every prompt including the first — the prompt strip
+       * uses it as the primary source for pane-context display.
+       *
+       * M12.4 grew the payload. All fields are `null` when the shell
+       * integration didn't report them (bare `A` marker, missing key,
+       * or empty value):
+       *
+       * - `cwd` / `git_branch` — since M1.
+       * - `git_ahead` / `git_behind` — commit counts vs upstream, both
+       *   `null` when no upstream is set OR the shim omitted them
+       *   because both were zero (frontend then renders no chip).
+       * - `language` — primary language detected for the cwd (e.g.
+       *   `"rust"`, `"typescript"`); `null` when detection didn't
+       *   match anything.
+       * - `user` / `host` — session identity from `whoami` / `hostname -s`.
+       *   Session-constant; emitted on every A for uniformity.
        */
       kind: "prompt_ready";
       cwd: string | null;
       git_branch: string | null;
+      git_ahead: number | null;
+      git_behind: number | null;
+      language: string | null;
+      user: string | null;
+      host: string | null;
     }
   | {
       /**

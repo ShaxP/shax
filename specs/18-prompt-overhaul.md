@@ -112,21 +112,106 @@ Five slices. None gates the next; ship in the order below or reorder if prioriti
 
 **Exit:** typing `echo "hello` and pressing Enter drops to PS2 with the second row visible in the strip; typing `echo hello` and pressing Shift+Enter puts a visible newline in the strip and drops to PS2; pasting a 6-line snippet opens the confirmation modal, and after Paste the strip shows the payload as a multi-line buffer that executes as separate commands when the user presses Enter; the resulting block header shows the command as multi-line with LFs preserved; large multi-line commands collapse with a toggle-to-expand affordance; no folding, no repetition on redraw, no click-to-refocus after the paste modal.
 
-### M12.4 — Custom prompt header enrichment
+### M12.4 — Chrome reshape: statusbar and prompt
 
-**Scope:** the visible payoff of D2's PS1 suppression — Shax now owns the prompt real-estate, so we fill it with something worth looking at.
+**Scope:** reshape the chrome hierarchy across the whole window so each surface has a coherent job. **Statusbar = global, invariant across panes. Prompt = pane-specific, moves with the active shell.** No preference toggles; opinionated v1 (same reasoning as `M10.5` on derived ratios).
 
-The header row above the input line grows from `[cwd] [⎇ branch] ❯` to a two-column layout:
+Today's problem: cwd and branch appear in both the statusbar and the prompt strip. `⌘K Ask Shax` and the `shax •` brand dot in the statusbar duplicate the top-bar affordances (M7.5a / M7.6). `utf-8` is a placeholder with no honest source. The mode pill loses meaning when the prompt is hidden (alt-screen). All of this gets fixed together — the reshape is coupled, splitting into two PRs would land half a design.
 
-- **Left cluster (identity + location):** user@host, cwd (compact, `~/…` prefix), git branch, git ahead/behind if non-zero (`↑1 ↓2` in muted tone). Everything is fed by data the backend already captures (OSC 133 A payload plus a small extension in the shim to include `whoami` and `hostname -s` once at session start).
-- **Right cluster (time):** live-updating HH:MM:SS in muted tone, with today's date on a hover tooltip. Ticks once per second via a single `setInterval` at the App level, not per pane (per-pane interval multiplied by pane count is the wrong scaling).
-- **Symbols/separators** stay minimal — a thin `·` between clusters, the existing `❯` at the start of the input row.
+#### Statusbar (new shape)
 
-The header wraps to a second line under narrow pane widths (~< 60 chars); the input row never wraps its header.
+Left cluster (mode indicator):
 
-Preferences: v1 ships opinionated — everything above is shown, no toggle. If a user objects to any specific cluster, that's a design conversation not a preference. (Same reasoning as `M10.5` on the derived font-size ratios.) The `appearance.prompt_header` toggle knob is explicitly deferred.
+- Resting state: `[COMMAND]` / `[CHAT]` / `[BLOCK]` — three-way pill from M12.1, unchanged.
+- Alt-screen state: `[INTERACTIVE][~/dev/shax]` — two chips. INTERACTIVE takes a distinct cyan tone so it reads as a special state (not amber, which BLOCK already claims). The cwd chip replaces the per-pane context the user lost when the prompt strip got hidden — vim / htop / less users still see where they are. Continues to reflect the active pane's cwd.
 
-**Exit:** the header renders `me@laptop · ~/dev/shax · ⎇ main ↑2` on the left and `14:37:02` on the right, both fed by real data; the time visibly advances; nothing rebuilds when the shell's precmd fires except cwd / branch (which change).
+Right cluster (global identity + status), in reading order left-to-right:
+
+- `me@laptop` — session identity, computed once at shim source time from `whoami` + `hostname -s`, muted tone.
+- `13:37:02` — live clock ticking once per second via a **single** App-level `setInterval` (per-pane interval × pane count is the wrong scaling). Today's date on hover tooltip. Muted tone.
+- Chips that already existed and stay: `⚠ N approvals pending` (amber, when count > 0), `+ assistant active` (when the dock is open).
+
+Removed from the statusbar (each with reason):
+
+- `⎇ branch` — per-pane; the prompt owns pane-specific context.
+- `cwd` — per-pane; only surfaces in the statusbar during INTERACTIVE (see above).
+- `utf-8` — placeholder with no honest source.
+- `⌘K Ask Shax` hint — the top-bar assistant affordance already carries this (M7.6).
+- `shax •` brand dot — the tab strip already has our icon (M7.5a).
+
+#### Prompt strip (row 0 chrome, new shape)
+
+`~/dev/shax  ⎇ main ↑2 ↓0  <lang-icon> rust  ❯ <input>`
+
+- `cwd` (compact, `~/…` prefix — existing) — always shown.
+- `⎇ branch` (existing) — shown when the shim reports one.
+- `↑N ↓M` (new) — git ahead/behind vs upstream, muted tone, only rendered when at least one is non-zero. Backend receives via `ahead=N;behind=M` on OSC 133 A.
+- `<lang-icon> label` (new) — detected primary language for the cwd, only rendered when detection succeeded. Backend receives via `lang=<label>` on OSC 133 A; frontend maps to Nerd Font DevIcons codepoint + display label.
+
+Continuation rows (M12.3): unchanged — align to the input column via `visibility: hidden` on the chrome column.
+
+#### Language detection (in-shim, cached per-cwd)
+
+The shim runs one `stat` pass per candidate file when the cwd changes (precmd on cd, first prompt) and emits the winning label. Never scans directory contents; never parses project files. Ranked most-specific-first:
+
+| File signature | Label |
+|---|---|
+| `Cargo.toml` | rust |
+| `Package.swift` OR `*.xcodeproj/` OR `*.xcworkspace/` | swift |
+| `deno.json` / `deno.jsonc` | deno |
+| `tsconfig.json` | typescript |
+| `package.json` (fallback when no `tsconfig.json`) | node |
+| `pyproject.toml` / `requirements.txt` / `setup.py` | python |
+| `go.mod` | go |
+| `Gemfile` | ruby |
+| `build.gradle.kts` / `settings.gradle.kts` | kotlin |
+| `pom.xml` / `build.gradle` | java |
+| `*.csproj` OR `global.json` | c# |
+| `CMakeLists.txt` / `meson.build` / `configure.ac` | c/c++ |
+
+First hit wins. Bounded to a ~100ms budget total per detection; on timeout (slow network mounts) the shim omits the `lang=` param and the frontend silently renders no icon. C vs C++ not distinguished — one shared `c/c++` chip; distinguishing them requires parsing `CMakeLists.txt`'s `LANGUAGES` clause or scanning file extensions, both disproportionate for the value.
+
+Framework detection (React vs Vue, virtualenv presence, kubectl context, etc.) and runtime versions (`node -v`) are explicit follow-up territory — different mechanism (parsing project files, running probes), different failure surface.
+
+#### Icons: Nerd Font, never emoji
+
+All chrome glyphs (language, battery, plug, ahead/behind arrows, mode-pill icons) are Nerd Font codepoints — DevIcons for languages, Font Awesome for battery/plug. Reasons: monochrome (inherit `currentColor` from theme tokens), consistent width in the mono grid, consistent rendering across macOS / Windows / Linux (bundled fonts ship via `@font-face`), size with `--font-size-terminal` naturally. Emoji fail on all four axes.
+
+Fallback stack for icon spans: `"JetBrainsMono Nerd Font", var(--font-mono), monospace` — Nerd Font tried first for the glyph even when the user's preferred font family lacks the icons.
+
+#### Shim additions
+
+Every OSC 133 A payload now carries these extra params (base64-encoded, same as `cwd=` and `branch=`):
+
+- `ahead=<N>` `behind=<N>` — computed via `git rev-list --left-right --count HEAD...@{u} 2>/dev/null` when in a repo with an upstream. Both zero → params omitted.
+- `lang=<label>` — from the file-signature check above.
+- `user=<b64>` `host=<b64>` — computed once at shim source time from `whoami` and `hostname -s`, cached in shell variables, included on every A. Simpler than a separate one-shot event.
+
+Backend `parse_kv_params` grows to recognize the five new keys; `VtEvent::PromptStart` and `PtyEvent::PromptReady` gain the fields; frontend `PromptReady` TS type mirrors.
+
+**Exit:** the statusbar shows `[COMMAND]` on the left and `me@laptop · 13:37:02` on the right (plus any of the existing chips). During alt-screen it shows `[INTERACTIVE][~/dev/shax]` on the left. The prompt strip's row 0 shows `~/dev/shax ⎇ main ↑2 <lang-icon> rust ❯` when in a Rust repo two commits ahead of upstream. Time advances live via a single App-level interval. No cwd / branch duplication anywhere.
+
+### M12.4b — Native status probes (battery + local IP)
+
+Follow-up slice for the two statusbar additions that need Tauri commands and per-platform native code, held out of M12.4 so the chrome reshape ships fast.
+
+**Scope:** two more chips on the statusbar right cluster:
+
+- **Battery**: `<battery-icon> 87%` on battery, `<plug> 87%` when charging, `<plug>` alone on desktop machines (no battery). Amber when < 20% and discharging. Same "plug glyph = on wall power" rule across laptop-plugged-in and desktop states — cleanest cross-population rule. Refresh every 30s (battery doesn't change per second).
+- **Local IP**: `192.168.1.42` — the IP of the interface carrying the default route. Refresh on network-change event (SCNetworkReachability on macOS, netlink on Linux, WMI on Windows); 30s poll fallback if event subscription fails. Multi-homed systems (VPN + wifi + ethernet) pick the default-route interface — users who want to see all interfaces have `ifconfig`.
+
+**New Tauri commands** (per-platform impl in `src-tauri/src/status.rs`):
+
+- `system_battery() -> BatteryStatus { present: bool, percent: Option<u8>, charging: bool }`
+- `system_local_ip() -> Option<String>`
+
+**Icons** (Nerd Font, per M12.4 rules):
+
+- `` … `` — nf-fa-battery_full … battery_empty
+- `` — nf-fa-bolt (charging)
+- `` — nf-fa-plug
+
+**Exit:** the statusbar shows the battery + local-IP chips populated with real data on all three platforms; they refresh on the documented cadences; desktops render the plug-alone glyph without any percentage.
 
 ### M12.5 — Client-side syntax highlighting
 

@@ -699,6 +699,15 @@ export default function App(): React.ReactElement {
   // shim has emitted at least one OSC 133;M. Drives the pill's
   // sub-chip alongside COMMAND.
   const [activePaneViKeymap, setActivePaneViKeymap] = useState<string | null>(null);
+  // M12.4: the active pane's session identity, fed by the shim's
+  // OSC 133 A `user=` / `host=` params. Session-constant locally so
+  // this rarely changes, but pane-scoped for the future
+  // SSH-through-Shax case where a remote OSC 133 emitter might
+  // surface a different identity per pane.
+  const [activePaneIdentity, setActivePaneIdentity] = useState<{
+    user: string | null;
+    host: string | null;
+  }>({ user: null, host: null });
   useEffect(() => {
     const onFocus = (e: Event): void => {
       const detail = (e as CustomEvent<{ focused?: boolean }>).detail;
@@ -712,13 +721,22 @@ export default function App(): React.ReactElement {
       const detail = (e as CustomEvent<{ keymap?: string | null }>).detail;
       setActivePaneViKeymap(detail?.keymap ?? null);
     };
+    const onIdentity = (e: Event): void => {
+      const detail = (e as CustomEvent<{ user?: string | null; host?: string | null }>).detail;
+      setActivePaneIdentity({
+        user: detail?.user ?? null,
+        host: detail?.host ?? null,
+      });
+    };
     window.addEventListener("shax:assistant-input-focus", onFocus);
     window.addEventListener("shax:block-focus-changed", onBlockFocus);
     window.addEventListener("shax:vi-keymap-changed", onViKeymap);
+    window.addEventListener("shax:prompt-identity-changed", onIdentity);
     return () => {
       window.removeEventListener("shax:assistant-input-focus", onFocus);
       window.removeEventListener("shax:block-focus-changed", onBlockFocus);
       window.removeEventListener("shax:vi-keymap-changed", onViKeymap);
+      window.removeEventListener("shax:prompt-identity-changed", onIdentity);
     };
   }, []);
   // Closing the dock unmounts the textarea; the browser usually
@@ -727,6 +745,39 @@ export default function App(): React.ReactElement {
   useEffect(() => {
     if (!assistantOpen) setAssistantInputFocused(false);
   }, [assistantOpen]);
+
+  // M12.4: single App-level 1s clock tick for the statusline. Per-pane
+  // intervals would multiply by pane count — the clock reads the same
+  // time everywhere, so one interval at the app root is the right
+  // scaling. Updates a `Date` in state; the two derived strings
+  // (`HH:MM:SS` and the tooltip date) get formatted at render time so
+  // a locale change would be picked up on the next tick without
+  // needing to re-derive here.
+  const [clockNow, setClockNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const handle = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => window.clearInterval(handle);
+  }, []);
+  const clockLabel = useMemo(
+    () =>
+      clockNow.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }),
+    [clockNow],
+  );
+  const clockTooltip = useMemo(
+    () =>
+      clockNow.toLocaleDateString([], {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      }),
+    [clockNow],
+  );
   // Guard so the persistence effect doesn't overwrite stored prefs with
   // the default state during App's first render (before loadPreferences
   // resolves). Flipped inside the boot loader below.
@@ -1245,14 +1296,31 @@ export default function App(): React.ReactElement {
             )}
           </main>
           <Statusline
-            cwd={
-              activeFocused?.cwd
-                ? compactCwd(activeFocused.cwd, home)
-                : (activeFocused?.cwd ?? null)
+            mode={
+              // Precedence: CHAT > INTERACTIVE > BLOCK > COMMAND. CHAT
+              // wins because it names where the keys ARE going (the
+              // assistant textarea); INTERACTIVE ranks above BLOCK
+              // because when an alt-screen program (vim / less / top)
+              // owns the pane, the block list is hidden and block-focus
+              // can't be entered anyway. See spec §18 M12.4.
+              assistantInputFocused
+                ? "CHAT"
+                : activeFocused?.altScreen
+                  ? "INTERACTIVE"
+                  : activePaneInBlockFocus
+                    ? "BLOCK"
+                    : "COMMAND"
             }
-            branch={activeFocused?.branch ?? null}
-            mode={assistantInputFocused ? "CHAT" : activePaneInBlockFocus ? "BLOCK" : "COMMAND"}
+            interactiveCwd={
+              activeFocused?.altScreen && activeFocused.cwd
+                ? compactCwd(activeFocused.cwd, home)
+                : null
+            }
             viKeymap={activePaneViKeymap}
+            user={activePaneIdentity.user}
+            host={activePaneIdentity.host}
+            clock={clockLabel}
+            clockTooltip={clockTooltip}
             assistantActive={assistantOpen}
             approvalsPending={approvalsPending}
           />
