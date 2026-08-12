@@ -92,8 +92,10 @@ _shax_host_b64="$(_shax_b64 "$(hostname -s 2>/dev/null)")"
 _shax_in_command=0
 
 _shax_precmd() {
-  # Capture the last command's exit before any of our own commands stomp on $?.
-  local _shax_last_exit=$?
+  # Exit code of the last user command, captured by our PROMPT_COMMAND
+  # wrapper before any of our own commands could stomp on $?. Required
+  # (positional) so we always emit the right value on OSC 133 D.
+  local _shax_last_exit="$1"
   # Only emit D for a block that was actually open. On shell startup, the
   # very first precmd runs with no preceding C — skip the D in that case so
   # we don't synthesise a phantom block.
@@ -150,18 +152,34 @@ _shax_preexec() {
   # Skip if we're already inside a command — DEBUG fires for every simple
   # command in a chain (`a && b`, `c; d`), and we only want the first.
   if [[ "$_shax_in_command" -eq 1 ]]; then return; fi
-  # Skip while PROMPT_COMMAND is running: BASH_COMMAND would be our own
-  # helper or whatever else the user wired into PROMPT_COMMAND. We detect
-  # this by matching BASH_COMMAND against the (semicolon-split) entries of
-  # PROMPT_COMMAND. This mirrors bash-preexec's guard.
+  # Skip anything that runs (directly or transitively) inside our
+  # PROMPT_COMMAND wrapper. This catches every phantom-block source
+  # in one rule:
+  #   - our own _shax_precmd body,
+  #   - Fedora / distro PROMPT_COMMAND helpers (e.g. `__vte_prompt_command`
+  #     whose body runs `printf "\033]0;%s@%s:%s\007" …` to set the title —
+  #     the bug this guard exists for),
+  #   - any user-added chpwd/precmd/statusline hook.
+  # bash's FUNCNAME array exposes the live call stack when DEBUG fires;
+  # the wrapper is on it whenever we're inside PROMPT_COMMAND execution,
+  # at any nesting depth. The older `case ";$PROMPT_COMMAND;"` guard only
+  # matched top-level entries and missed nested printfs — that's what
+  # opened the never-closing phantom block on Fedora.
+  local _f
+  for _f in "${FUNCNAME[@]}"; do
+    if [[ "$_f" == "_shax_prompt_command_wrapper" ]]; then
+      return
+    fi
+  done
   local _cmd="$BASH_COMMAND"
-  case ";$PROMPT_COMMAND;" in
-    *";$_cmd;"*) return ;;
-  esac
-  # Skip our own helpers explicitly — these can fire as the first DEBUG
-  # after a prompt depending on bash version.
+  # Skip our own helpers explicitly — the wrapper name catches nested
+  # invocations, but the wrapper itself is called by bash *before* it
+  # appears in FUNCNAME (DEBUG fires for the function name as bash is
+  # about to invoke it). Ditto for the standalone helpers if they ever
+  # get called from a non-wrapper context.
   case "$_cmd" in
-    _shax_precmd|_shax_preexec|_shax_emit_d_and_a|_shax_b64|_shax_detect_lang) return ;;
+    _shax_prompt_command_wrapper|_shax_precmd|_shax_preexec) return ;;
+    _shax_emit_d_and_a|_shax_b64|_shax_detect_lang) return ;;
   esac
   _shax_in_command=1
   # Base64 the command so multi-line values survive OSC transport
@@ -169,6 +187,24 @@ _shax_preexec() {
   # multi-line here-doc would arrive at the backend with its LFs
   # stripped). Same encoding as the cwd/branch params on A/D.
   printf '\033]133;C;cmd=%s\007' "$(_shax_b64 "$_cmd")"
+}
+
+# Single-entry PROMPT_COMMAND wrapper. Bash calls this once per prompt
+# cycle; we then invoke our precmd, then eval whatever the user/distro
+# had in PROMPT_COMMAND before we chained in. Wrapping everything under
+# one function name is what lets `_shax_preexec` recognise "I'm inside
+# PROMPT_COMMAND" via FUNCNAME (see the loop above).
+_shax_prompt_command_wrapper() {
+  # Must be the very first line: preserves the exit code of the last
+  # user command so we can hand it to _shax_precmd for OSC 133 D.
+  local _shax_last_exit=$?
+  _shax_precmd "$_shax_last_exit"
+  # Run the previously-installed PROMPT_COMMAND (empty on a bare shell,
+  # populated on Fedora / distros with a title-setting helper). We use
+  # `eval` because the string can be any bash compound command.
+  if [[ -n "$_shax_previous_prompt_command" ]]; then
+    eval "$_shax_previous_prompt_command"
+  fi
 }
 
 # ── M12.2 always-assertive hardening (spec §18 D2) ────────────────────────
@@ -208,8 +244,35 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
   fi
 fi
 
-# Chain into PROMPT_COMMAND without clobbering anything the user already has.
-# The `${PROMPT_COMMAND:+; $PROMPT_COMMAND}` form is a no-op when PROMPT_COMMAND
-# is unset, otherwise prepends our hook with a `;` separator.
-PROMPT_COMMAND="_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+# Chain into PROMPT_COMMAND via a single-function wrapper. The wrapper
+# stores whatever the user / distro had in PROMPT_COMMAND into
+# `_shax_previous_prompt_command` and reinstalls PROMPT_COMMAND as just
+# our wrapper name. That gives us two things at once:
+#
+#   1. We can find "am I inside PROMPT_COMMAND right now?" by scanning
+#      FUNCNAME for the wrapper — this catches nested printfs / helpers
+#      like Fedora's `__vte_prompt_command` body that the older
+#      semicolon-split PROMPT_COMMAND string match missed.
+#   2. Same ordering guarantee as before: our precmd runs first, then
+#      the user's / distro's stuff.
+#
+# PROMPT_COMMAND can be a scalar string (any bash version) or an array
+# of separate commands (bash 5.1+). Handle both by joining any array
+# with `; ` before stashing as a scalar to feed `eval` in the wrapper.
+if declare -p PROMPT_COMMAND 2>/dev/null | grep -q '^declare -a'; then
+  _shax_previous_prompt_command="$(printf '%s; ' "${PROMPT_COMMAND[@]}")"
+else
+  _shax_previous_prompt_command="$PROMPT_COMMAND"
+fi
+# CRITICAL: unset before the scalar reassignment. Bash 5 treats
+# `arr=value` as `arr[0]=value` when `arr` was declared as an array —
+# without `unset`, our scalar `'_shax_prompt_command_wrapper'` would
+# only replace element [0] and leave any additional array elements
+# (e.g. Fedora 42's `[1]="__vte_precmd" [2]="__vte_osc7"`) running
+# OUTSIDE our wrapper. Those out-of-wrapper commands have no wrapper
+# frame in FUNCNAME, dodge every guard in `_shax_preexec`, and open
+# never-closing phantom blocks — the exact "hangs on __vte_precmd"
+# report from Fedora 42 (bash 5.2).
+unset PROMPT_COMMAND
+PROMPT_COMMAND='_shax_prompt_command_wrapper'
 trap '_shax_preexec' DEBUG
