@@ -193,25 +193,35 @@ Backend `parse_kv_params` grows to recognize the five new keys; `VtEvent::Prompt
 
 ### M12.4b — Native status probes (battery + local IP)
 
-Follow-up slice for the two statusbar additions that need Tauri commands and per-platform native code, held out of M12.4 so the chrome reshape ships fast.
+Two more chips on the statusbar right cluster, split out of M12.4 because they need native probes into the host OS. Both follow the same graceful-degradation rule: any probe failure hides its chip rather than showing a bogus value.
 
-**Scope:** two more chips on the statusbar right cluster:
+**Scope:**
 
-- **Battery**: `<battery-icon> 87%` on battery, `<plug> 87%` when charging, `<plug>` alone on desktop machines (no battery). Amber when < 20% and discharging. Same "plug glyph = on wall power" rule across laptop-plugged-in and desktop states — cleanest cross-population rule. Refresh every 30s (battery doesn't change per second).
-- **Local IP**: `192.168.1.42` — the IP of the interface carrying the default route. Refresh on network-change event (SCNetworkReachability on macOS, netlink on Linux, WMI on Windows); 30s poll fallback if event subscription fails. Multi-homed systems (VPN + wifi + ethernet) pick the default-route interface — users who want to see all interfaces have `ifconfig`.
+- **Battery** — laptop on battery shows `<battery-fill-icon> 87%` with five fill glyphs across the 0..100 range (bucket thresholds at 12 / 38 / 62 / 88, sitting midway between the FA icon levels). Under 20% and discharging flips to amber. Plugged-in laptop shows `<plug> 87%` — the *same* plug glyph whether the OS reports actively-charging OR fully-charged-at-100%. A fully-charged plugged-in laptop reports `charging: false` from the OS but is still on wall power, so the caller-side rule is `onWallPower = charging OR (present AND percent == 100)`, which catches both. Desktop (no battery detected) shows `<plug>` alone, no percentage. Refresh cadence: 30s (battery ticks minutes at a time; per-second polling is pure waste).
+- **Local IP** — `192.168.1.42`, the IPv4 address of the interface carrying the default route (the one you'd use to reach `1.1.1.1`). Multi-homed systems (VPN + wifi + ethernet) get the default-route interface — users who want to see every interface have `ifconfig` / `ip addr`. Chip hides entirely when the probe returns `None` (offline / VPN-only / probe failure — all indistinguishable to the user, all rendered the same). Refresh cadence: 30s poll.
 
-**New Tauri commands** (per-platform impl in `src-tauri/src/status.rs`):
+**Implementation: existing crates, not hand-rolled per-platform syscalls.** The natural design instinct is per-platform `#[cfg]` blocks — SCNetworkReachability + IOKit on macOS, netlink + `/sys/class/power_supply` on Linux, WMI on Windows — but that's roughly 400 lines of code we'd have to keep matching against new OS releases forever, for a pair of statusbar chips. Two crates already do this and are actively maintained:
 
-- `system_battery() -> BatteryStatus { present: bool, percent: Option<u8>, charging: bool }`
-- `system_local_ip() -> Option<String>`
+- **`starship-battery` v0.11** — the actively-maintained fork of the (stale-since-2020) `battery` crate. Starship prompt uses it in production, so it stays current against Apple Silicon / Windows 11 / recent Linux kernels. Uniform `State` enum + `state_of_charge()` ratio across all three platforms.
+- **`local-ip-address` v0.6** — cross-platform default-route lookup via each OS's native syscall. Small, focused, no runtime.
 
-**Icons** (Nerd Font, per M12.4 rules):
+Combined dependency weight is ~50KB. Trade well worth making for this slice.
 
-- `` … `` — nf-fa-battery_full … battery_empty
-- `` — nf-fa-bolt (charging)
-- `` — nf-fa-plug
+**New Tauri commands** in `src-tauri/src/status.rs`:
 
-**Exit:** the statusbar shows the battery + local-IP chips populated with real data on all three platforms; they refresh on the documented cadences; desktops render the plug-alone glyph without any percentage.
+- `system_battery() -> BatteryStatus { present: bool, percent: Option<u8>, charging: bool }` — always returns a value; probe failures degrade to the `BatteryStatus::absent()` sentinel (`{present: false, percent: null, charging: false}`), which renders identically to a desktop.
+- `system_local_ip() -> Option<String>` — `None` on probe failure.
+
+**Frontend polling.** A single 30s `setInterval` in App owns both probes; results push down to Statusline as `battery` and `localIp` props. No per-pane polling; both values are global to the process.
+
+**Icons** (Nerd Font Font Awesome codepoints):
+
+- `` `` `` `` `` — battery_full / three_quarters / half / quarter / empty.
+- `` — plug (used for both plugged-in laptop and desktop-on-AC).
+
+**Deferred out of scope.** On-network-change event subscription (SCNetworkReachability / netlink / WMI listeners). The 30s poll averages 15s to reflect a real network change, which matches other apps. Add the event path only if a real user complains about the lag.
+
+**Exit:** the statusbar shows the battery + local-IP chips populated with real data on all three platforms. Laptop-on-battery: fill glyph tracks percentage across five buckets, flips amber under 20%. Laptop-plugged-in: plug glyph + percentage. Desktop: plug glyph alone, no percentage. Local IP shows the default-route address; disappears when offline.
 
 ### M12.5 — Client-side syntax highlighting
 

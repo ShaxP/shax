@@ -841,3 +841,48 @@ export async function listThemes(): Promise<Theme[]> {
 export function __resetThemesCacheForTest(): void {
   themesCache = null;
 }
+
+// ── M12.4b: system status probes ────────────────────────────────────
+
+/**
+ * Snapshot of the host's power state, mirrors `BatteryStatus` in
+ * `src-tauri/src/status.rs`.
+ *
+ * - `present = false` → desktop machine (no battery installed) OR
+ *   the OS probe failed. Frontend renders the "plug alone" glyph.
+ * - `present = true` → laptop with a battery; `percent` is 0..=100
+ *   when the OS reported one and `null` when firmware returned
+ *   garbage. `charging` is true only while the battery is actively
+ *   drawing power (a fully-charged plugged-in laptop reports
+ *   `charging: false` — the frontend still shows the plug via the
+ *   "on wall power = charging OR at 100%" rule).
+ */
+export interface BatteryStatus {
+  present: boolean;
+  percent: number | null;
+  charging: boolean;
+}
+
+/** Absent-battery sentinel — used as the default before the first
+ *  poll returns AND in the non-Tauri dev shell (browser). */
+const BATTERY_ABSENT: BatteryStatus = {
+  present: false,
+  percent: null,
+  charging: false,
+};
+
+/** Poll the host's power state. Outside Tauri returns the absent
+ *  sentinel so the browser dev shell renders the desktop chip. */
+export async function systemBattery(): Promise<BatteryStatus> {
+  if (!isTauriContext()) return BATTERY_ABSENT;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BatteryStatus>("system_battery");
+}
+
+/** Poll the host's local IP (default-route interface). Outside
+ *  Tauri returns null so the browser dev shell hides the chip. */
+export async function systemLocalIp(): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("system_local_ip");
+}

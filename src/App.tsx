@@ -79,6 +79,9 @@ import {
   openNewWindow,
   ptyRunningCommands,
   quitConfirmed,
+  systemBattery,
+  systemLocalIp,
+  type BatteryStatus,
 } from "./lib/ipc";
 import { useWindowId } from "./lib/useWindowId";
 import { compactCwd } from "./panes/blockFormat";
@@ -778,6 +781,38 @@ export default function App(): React.ReactElement {
       }),
     [clockNow],
   );
+
+  // M12.4b: statusbar native probes (battery + local IP). Polled at
+  // 30s per the spec — both values change slowly (battery percentage
+  // ticks minutes at a time; IP only changes on network transitions),
+  // so per-second polling would be waste. Both probes fail-soft: a
+  // failing battery probe returns the desktop sentinel, a failing IP
+  // probe returns null; the statusbar handles both cases gracefully.
+  const [batteryStatus, setBatteryStatus] = useState<BatteryStatus>({
+    present: false,
+    percent: null,
+    charging: false,
+  });
+  const [localIp, setLocalIp] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Fire an immediate probe on mount so the chips populate within
+    // milliseconds instead of waiting 30s for the first tick.
+    const poll = (): void => {
+      void systemBattery().then((b) => {
+        if (!cancelled) setBatteryStatus(b);
+      });
+      void systemLocalIp().then((ip) => {
+        if (!cancelled) setLocalIp(ip);
+      });
+    };
+    poll();
+    const handle = window.setInterval(poll, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
   // Guard so the persistence effect doesn't overwrite stored prefs with
   // the default state during App's first render (before loadPreferences
   // resolves). Flipped inside the boot loader below.
@@ -1321,6 +1356,8 @@ export default function App(): React.ReactElement {
             host={activePaneIdentity.host}
             clock={clockLabel}
             clockTooltip={clockTooltip}
+            battery={batteryStatus}
+            localIp={localIp}
             assistantActive={assistantOpen}
             approvalsPending={approvalsPending}
           />
