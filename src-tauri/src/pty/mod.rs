@@ -1924,21 +1924,35 @@ mod tests {
     }
 
     /// Regression test for the Fedora phantom-block bug: Fedora's
-    /// `/etc/profile.d/vte.sh` (and similar distro rc snippets) sets
-    /// `PROMPT_COMMAND` to a function whose body runs a title-setting
-    /// `printf "\033]0;…\007"`. The DEBUG trap fires for that inner
-    /// printf too, and before the FUNCNAME-based guard we'd emit a
-    /// phantom OSC 133 C for it — which opened a "printf …" block that
-    /// never closed (there was no matching D since it wasn't a real
-    /// user command).
+    /// `/etc/profile.d/vte.sh` (on bash 5) sets
     ///
-    /// This test simulates the exact shape: writes a `.bashrc` in the
-    /// tempdir HOME that defines the function and sets PROMPT_COMMAND
-    /// to it, spawns bash through the standard rcfile shim (which
-    /// sources `.bashrc` before `shax.bash`, matching production
-    /// startup order), runs one real command, and asserts we see
-    /// exactly one BlockStarted whose command is the real one — no
-    /// phantom block whose command begins with `printf`.
+    /// ```bash
+    /// PROMPT_COMMAND=(__vte_prompt_command)
+    /// ```
+    ///
+    /// where `__vte_prompt_command` is a function whose body runs the
+    /// title-setting `printf "\033]0;…\007"`. Two bugs surfaced from
+    /// this in the wild:
+    ///
+    /// 1. **First report (`printf …` hangs as a block)** — the DEBUG
+    ///    trap fired for the printf inside the function body; the old
+    ///    top-level `case ";$PROMPT_COMMAND;"` guard only matched
+    ///    top-level entries.
+    /// 2. **Second report (`__vte_prompt_command` hangs as a block)**
+    ///    — with the array-form `PROMPT_COMMAND`, our old chain
+    ///    `"_shax_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"` produced
+    ///    `_shax_precmd; __vte_prompt_command` (with a space after `;`).
+    ///    The guard's pattern was `;__vte_prompt_command;` (no space)
+    ///    — no match, phantom C for the function-level DEBUG. On bash
+    ///    3.2 (no array form) the same setup surfaces via the printf
+    ///    (report #1) instead.
+    ///
+    /// Both are the same root cause: nested PROMPT_COMMAND entries at
+    /// any layer can slip past a string-based guard. The FUNCNAME-based
+    /// fix in `_shax_preexec` catches every layer in one rule. This
+    /// test reproduces Fedora's exact shape and asserts we see exactly
+    /// one `BlockStarted` for the user's real command — no phantom for
+    /// `printf`, `__vte_prompt_command`, or any other distro helper.
     #[cfg(unix)]
     #[tokio::test]
     async fn bash_integration_ignores_nested_prompt_command_helpers() {
@@ -1951,9 +1965,10 @@ mod tests {
 
         let (channel, mut rx) = make_test_channel();
 
-        // Fedora-shaped setup: PROMPT_COMMAND is a function name whose
-        // body runs the title-setting printf. Same exact bytes the user
-        // reported opening a stuck block on Fedora Linux.
+        // Fedora's actual .bashrc shape. Uses bash 5 array-form when
+        // available, falls back to scalar for bash 3.2 (macOS system
+        // bash) so the test still exercises the same guard on both.
+        // Real /etc/profile.d/vte.sh does the equivalent version gate.
         let home = tempfile::tempdir().expect("tempdir");
         let bashrc = home.path().join(".bashrc");
         std::fs::write(
@@ -1962,7 +1977,15 @@ mod tests {
                  printf \"\\033]0;%s@%s:%s\\007\" \
                    \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\"\n\
              }\n\
-             PROMPT_COMMAND=\"__vte_prompt_command\"\n",
+             # bash 5.1+ ships PROMPT_COMMAND as an array; older bash\n\
+             # only understands the scalar form. Match /etc/profile.d/vte.sh\n\
+             # in preferring the array shape when supported.\n\
+             if ((BASH_VERSINFO[0] > 5)) || \
+                { ((BASH_VERSINFO[0] == 5)) && ((BASH_VERSINFO[1] >= 1)); }; then\n  \
+                 PROMPT_COMMAND=(__vte_prompt_command)\n\
+             else\n  \
+                 PROMPT_COMMAND=\"__vte_prompt_command\"\n\
+             fi\n",
         )
         .expect("write .bashrc");
 
@@ -1995,10 +2018,10 @@ mod tests {
             .expect("write");
 
         // Collect BlockStarted events for two seconds. Without the fix,
-        // the printf inside __vte_prompt_command would either surface as
-        // an extra BlockStarted (if it fires cleanly through OSC 133 C)
-        // or leave the current block dangling. Either failure mode gets
-        // caught by the two assertions below.
+        // one of two phantoms would land here: the printf inside the
+        // function body (bash 3.2, string-form PROMPT_COMMAND) or the
+        // outer `__vte_prompt_command` name (bash 5+, array-form).
+        // Both fail-modes get caught below.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut starts: Vec<Option<String>> = Vec::new();
         while tokio::time::Instant::now() < deadline {
@@ -2018,9 +2041,9 @@ mod tests {
              guard. starts = {starts:?}",
             n = starts.len(),
         );
-        // Belt-and-suspenders: the one block MUST NOT be the phantom
-        // printf. If the count-1 assertion above passed by coincidence
-        // (e.g. we emitted C for printf but not for `true`), this line
+        // Belt-and-suspenders: neither known-phantom command must appear.
+        // If the count-1 assertion above passed by coincidence (e.g. we
+        // emitted the phantom C but suppressed the real one) this line
         // makes the regression visible.
         let cmd = starts
             .into_iter()
@@ -2028,9 +2051,9 @@ mod tests {
             .flatten()
             .unwrap_or_else(|| String::from("<none>"));
         assert!(
-            !cmd.starts_with("printf"),
-            "the captured block is the phantom printf from __vte_prompt_command, \
-             not the user's `true` — the FUNCNAME guard isn't firing. cmd = {cmd:?}"
+            !cmd.starts_with("printf") && cmd != "__vte_prompt_command",
+            "the captured block is a distro-helper phantom, not the user's `true` — \
+             the FUNCNAME guard isn't firing. cmd = {cmd:?}"
         );
 
         manager.kill(id).await.expect("kill");
