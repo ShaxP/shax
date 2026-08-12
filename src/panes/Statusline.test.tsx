@@ -191,11 +191,14 @@ describe("Statusline / battery chip (M12.4b)", () => {
     expect(chip).toHaveAttribute("title", "AC power (100%)");
   });
 
-  it("missing percent (firmware glitch) still renders a chip", () => {
-    // Firmware occasionally reports NaN / garbage; we degrade to
-    // showing an unknown-percent label rather than hiding the chip
-    // (a laptop unexpectedly missing its battery percentage should
-    // be visible, not silently dropped).
+  it("missing percent (defensive) still renders a chip with `?`", () => {
+    // The backend's phantom-entry filter (status::snapshot_from)
+    // means present==true with percent==null shouldn't occur in
+    // practice — a real battery always reports a finite state-of-
+    // charge, and the desktop phantom entry gets filtered before it
+    // reaches us. This test locks in the defensive rendering path
+    // so that if the backend contract ever regresses, we still
+    // surface *something* to the user rather than a blank chip.
     render(<Statusline battery={{ present: true, percent: null, charging: false }} />);
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveTextContent("?");

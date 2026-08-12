@@ -219,6 +219,8 @@ Combined dependency weight is ~50KB. Trade well worth making for this slice.
 - `` `` `` `` `` — battery_full / three_quarters / half / quarter / empty.
 - `` — plug (used for both plugged-in laptop and desktop-on-AC).
 
+**Phantom-entry filter.** On Apple Silicon Mac desktops (Mac Mini, Mac Studio) `IOPMPowerSource` enumerates entries even without a real battery attached, and those entries report a non-finite `state_of_charge()`. Without a filter this would render as "On battery (?)" on a machine that has no battery at all. `status::snapshot_from` rejects any entry whose state-of-charge isn't finite and the caller advances to the next entry; if every entry is phantom, we fall through to `absent()` and the chip renders as the desktop plug-alone glyph. A genuine battery on any modern OS always reports a finite state-of-charge, so the rule is a safe filter.
+
 **Deferred out of scope.** On-network-change event subscription (SCNetworkReachability / netlink / WMI listeners). The 30s poll averages 15s to reflect a real network change, which matches other apps. Add the event path only if a real user complains about the lag.
 
 **Exit:** the statusbar shows the battery + local-IP chips populated with real data on all three platforms. Laptop-on-battery: fill glyph tracks percentage across five buckets, flips amber under 20%. Laptop-plugged-in: plug glyph + percentage. Desktop: plug glyph alone, no percentage. Local IP shows the default-route address; disappears when offline.

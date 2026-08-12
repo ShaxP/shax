@@ -16,6 +16,12 @@
 //! in the M12.4b spec section. Failures are always non-fatal: the
 //! frontend hides the chip when the probe returns `None` / not-present.
 //!
+//! The battery probe applies a phantom-entry filter documented on
+//! [`snapshot_from`]: Apple Silicon Mac desktops expose an
+//! `IOPMPowerSource` entry with a non-finite state-of-charge, and we
+//! must not surface that as "on battery (?)". See §18 M12.4b for the
+//! rule.
+//!
 //! Refresh cadence is a frontend concern (30s polling per spec) —
 //! this module just exposes the point-in-time snapshot.
 //!
@@ -90,31 +96,53 @@ pub fn system_battery() -> BatteryStatus {
             return BatteryStatus::absent();
         }
     };
-    // First present battery wins. Machines with multiple batteries
-    // are rare in practice; UPS + laptop scenarios would need a
-    // separate design conversation to surface both.
+    // First real battery wins. Machines with multiple batteries are
+    // rare in practice; UPS + laptop scenarios would need a separate
+    // design conversation to surface both.
     for battery_result in iter {
         let Ok(battery) = battery_result else {
             continue;
         };
-        // `state_of_charge()` is a ratio 0.0..=1.0 (with a small
-        // margin for over/under reporting from noisy firmware).
         let ratio = battery.state_of_charge().value;
-        let percent = if ratio.is_finite() {
-            Some((ratio.clamp(0.0, 1.0) * 100.0).round() as u8)
-        } else {
-            None
-        };
         let charging = matches!(battery.state(), starship_battery::State::Charging);
-        return BatteryStatus {
-            present: true,
-            percent,
-            charging,
-        };
+        if let Some(status) = snapshot_from(ratio, charging) {
+            return status;
+        }
     }
     // No batteries in the iterator — desktop machine, or the OS
     // reported an empty set.
     BatteryStatus::absent()
+}
+
+/// Turn a raw (state-of-charge ratio, charging flag) reading into a
+/// [`BatteryStatus`], or [`None`] if the entry looks phantom.
+///
+/// Phantom-entry filter: on Apple Silicon Mac desktops (Mac Mini,
+/// Mac Studio) the `IOPMPowerSource` service enumerates entries even
+/// without a real battery attached, and those entries report a
+/// non-finite `state_of_charge()` (NaN). We treat that as the signal
+/// "not a real usable battery" and skip — a genuine battery on any
+/// modern OS always reports a finite state-of-charge, even when the
+/// exact charging state is momentarily uncertain. If every entry in
+/// the iterator is a phantom, the caller falls through to
+/// [`BatteryStatus::absent`], which renders as the desktop plug-alone
+/// chip.
+///
+/// Split out so the phantom rule is directly unit-testable without
+/// having to mock the `starship-battery` iterator.
+fn snapshot_from(ratio: f32, charging: bool) -> Option<BatteryStatus> {
+    if !ratio.is_finite() {
+        tracing::debug!("skipping battery entry with non-finite state-of-charge");
+        return None;
+    }
+    // `state_of_charge()` is nominally 0.0..=1.0; noisy firmware can
+    // report slightly outside that range, so clamp before scaling.
+    let percent = (ratio.clamp(0.0, 1.0) * 100.0).round() as u8;
+    Some(BatteryStatus {
+        present: true,
+        percent: Some(percent),
+        charging,
+    })
 }
 
 /// Snapshot the machine's IPv4 address on the default-route interface.
@@ -170,6 +198,43 @@ mod tests {
         assert!(json.contains(r#""present":false"#));
         assert!(json.contains(r#""percent":null"#));
         assert!(json.contains(r#""charging":false"#));
+    }
+
+    #[test]
+    fn snapshot_from_returns_none_for_nan_state_of_charge() {
+        // The Mac Mini phantom-entry case: IOKit hands us a
+        // non-finite state-of-charge. `snapshot_from` must reject it
+        // so the caller can try the next entry (or fall through to
+        // `absent()` and render the desktop plug-alone chip).
+        assert!(snapshot_from(f32::NAN, false).is_none());
+        assert!(snapshot_from(f32::INFINITY, false).is_none());
+        assert!(snapshot_from(f32::NEG_INFINITY, true).is_none());
+    }
+
+    #[test]
+    fn snapshot_from_returns_a_percent_for_a_real_reading() {
+        let s = snapshot_from(0.87, false).expect("real reading must map to a status");
+        assert!(s.present);
+        assert_eq!(s.percent, Some(87));
+        assert!(!s.charging);
+    }
+
+    #[test]
+    fn snapshot_from_preserves_the_charging_flag() {
+        let s = snapshot_from(0.45, true).expect("real reading must map to a status");
+        assert!(s.charging);
+        assert_eq!(s.percent, Some(45));
+    }
+
+    #[test]
+    fn snapshot_from_clamps_out_of_range_ratios() {
+        // Noisy firmware occasionally reports slightly outside
+        // 0.0..=1.0 — we clamp rather than reject, because the
+        // battery is still real.
+        let over = snapshot_from(1.03, false).expect("clamped");
+        assert_eq!(over.percent, Some(100));
+        let under = snapshot_from(-0.02, false).expect("clamped");
+        assert_eq!(under.percent, Some(0));
     }
 
     #[test]
