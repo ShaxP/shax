@@ -1647,6 +1647,52 @@ mod tests {
         );
     }
 
+    /// Regression guard for the Fedora phantom-block bug: shax.bash MUST
+    /// wrap the user's PROMPT_COMMAND in a single-function wrapper and
+    /// MUST detect "inside PROMPT_COMMAND" via the FUNCNAME call stack.
+    /// The older `case ";$PROMPT_COMMAND;"` string-split guard only
+    /// matched top-level entries and missed nested printfs like the one
+    /// in Fedora's `__vte_prompt_command` body, which then opened a
+    /// never-closing phantom block.
+    #[test]
+    fn bash_shim_wraps_prompt_command_and_guards_via_funcname() {
+        let shim = SHAX_BASH;
+        assert!(
+            shim.contains("_shax_prompt_command_wrapper()"),
+            "shax.bash must define the PROMPT_COMMAND wrapper function",
+        );
+        assert!(
+            shim.contains("PROMPT_COMMAND='_shax_prompt_command_wrapper'"),
+            "shax.bash must reinstall PROMPT_COMMAND as the wrapper alone \
+             — otherwise nested printfs from distro helpers slip through",
+        );
+        assert!(
+            shim.contains("_shax_previous_prompt_command"),
+            "shax.bash must stash the user's original PROMPT_COMMAND so the \
+             wrapper can eval it after our precmd",
+        );
+        // FUNCNAME loop is the "am I inside PROMPT_COMMAND right now?"
+        // check. Its presence in _shax_preexec is what catches nested
+        // helpers — the whole point of this design.
+        assert!(
+            shim.contains(r#"for _f in "${FUNCNAME[@]}""#),
+            "shax.bash _shax_preexec must scan FUNCNAME for the wrapper \
+             to detect nested PROMPT_COMMAND execution",
+        );
+        // Older string-split guard MUST be gone: it was the incomplete
+        // fix. Keeping it around alongside the FUNCNAME check would be
+        // dead code and would mislead future maintainers into thinking
+        // it was doing something useful. Match the code shape (the
+        // wildcard case body) rather than the case-header string —
+        // the header appears in a nearby explanatory comment.
+        assert!(
+            !shim.contains(r#"*";$_cmd;"*)"#),
+            "shax.bash must not carry the old top-level PROMPT_COMMAND \
+             string-split guard body (`*\";$_cmd;\"*)`) — the FUNCNAME \
+             loop subsumes it and leaving both invites confusion",
+        );
+    }
+
     #[test]
     fn build_shell_command_sets_line_editing_env_var() {
         // M12.2: the shim reads $SHAX_LINE_EDITING to branch. The
@@ -1872,6 +1918,119 @@ mod tests {
             starts, 1,
             "expected exactly one BlockStarted for the user's `true`; saw {starts} (PS1 \
              $() expansions are leaking through the DEBUG-trap filter)"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// Regression test for the Fedora phantom-block bug: Fedora's
+    /// `/etc/profile.d/vte.sh` (and similar distro rc snippets) sets
+    /// `PROMPT_COMMAND` to a function whose body runs a title-setting
+    /// `printf "\033]0;…\007"`. The DEBUG trap fires for that inner
+    /// printf too, and before the FUNCNAME-based guard we'd emit a
+    /// phantom OSC 133 C for it — which opened a "printf …" block that
+    /// never closed (there was no matching D since it wasn't a real
+    /// user command).
+    ///
+    /// This test simulates the exact shape: writes a `.bashrc` in the
+    /// tempdir HOME that defines the function and sets PROMPT_COMMAND
+    /// to it, spawns bash through the standard rcfile shim (which
+    /// sources `.bashrc` before `shax.bash`, matching production
+    /// startup order), runs one real command, and asserts we see
+    /// exactly one BlockStarted whose command is the real one — no
+    /// phantom block whose command begins with `printf`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_ignores_nested_prompt_command_helpers() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash nested PROMPT_COMMAND test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Fedora-shaped setup: PROMPT_COMMAND is a function name whose
+        // body runs the title-setting printf. Same exact bytes the user
+        // reported opening a stuck block on Fedora Linux.
+        let home = tempfile::tempdir().expect("tempdir");
+        let bashrc = home.path().join(".bashrc");
+        std::fs::write(
+            &bashrc,
+            "__vte_prompt_command() {\n  \
+                 printf \"\\033]0;%s@%s:%s\\007\" \
+                   \"${USER}\" \"${HOSTNAME%%.*}\" \"${PWD/#$HOME/\\~}\"\n\
+             }\n\
+             PROMPT_COMMAND=\"__vte_prompt_command\"\n",
+        )
+        .expect("write .bashrc");
+
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        // Let startup settle (the shim sources .bashrc, hardening runs,
+        // first prompt is drawn). Drain everything up to this point so
+        // the collection loop only sees events triggered by our command.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        while rx.try_recv().is_ok() {}
+
+        manager
+            .write(id, &B64.encode(b"true\n"))
+            .await
+            .expect("write");
+
+        // Collect BlockStarted events for two seconds. Without the fix,
+        // the printf inside __vte_prompt_command would either surface as
+        // an extra BlockStarted (if it fires cleanly through OSC 133 C)
+        // or leave the current block dangling. Either failure mode gets
+        // caught by the two assertions below.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut starts: Vec<Option<String>> = Vec::new();
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockStarted { command, .. })) => starts.push(command),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+
+        assert_eq!(
+            starts.len(),
+            1,
+            "expected exactly one BlockStarted for the user's `true`; saw {n} — \
+             a distro helper inside PROMPT_COMMAND is leaking through the FUNCNAME \
+             guard. starts = {starts:?}",
+            n = starts.len(),
+        );
+        // Belt-and-suspenders: the one block MUST NOT be the phantom
+        // printf. If the count-1 assertion above passed by coincidence
+        // (e.g. we emitted C for printf but not for `true`), this line
+        // makes the regression visible.
+        let cmd = starts
+            .into_iter()
+            .next()
+            .flatten()
+            .unwrap_or_else(|| String::from("<none>"));
+        assert!(
+            !cmd.starts_with("printf"),
+            "the captured block is the phantom printf from __vte_prompt_command, \
+             not the user's `true` — the FUNCNAME guard isn't firing. cmd = {cmd:?}"
         );
 
         manager.kill(id).await.expect("kill");
