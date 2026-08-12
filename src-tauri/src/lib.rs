@@ -7,6 +7,7 @@ mod preferences;
 mod pty;
 mod safety;
 mod search;
+mod status;
 mod store;
 mod themes;
 mod vt;
@@ -356,6 +357,8 @@ pub fn run() {
             embedding_progress,
             semantic_search,
             list_themes,
+            status::system_battery,
+            status::system_local_ip,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

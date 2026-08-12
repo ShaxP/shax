@@ -120,6 +120,16 @@ vi.mock("./lib/ipc", () => ({
   // empty catalog is fine: applyTheme falls back to the
   // data-theme attribute and the tokens.css :root palette.
   listThemes: (): Promise<unknown[]> => Promise.resolve([]),
+  // M12.4b — statusbar native probes. The polling effect fires on
+  // mount and every 30s; tests don't exercise the resulting chips,
+  // so the desktop / offline sentinels keep the effect quiet.
+  systemBattery: (): Promise<{
+    present: boolean;
+    percent: number | null;
+    on_ac_power: boolean;
+    charging: boolean;
+  }> => Promise.resolve({ present: false, percent: null, on_ac_power: false, charging: false }),
+  systemLocalIp: (): Promise<string | null> => Promise.resolve(null),
 }));
 
 class StubResizeObserver {

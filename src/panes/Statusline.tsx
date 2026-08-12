@@ -77,6 +77,28 @@ export function viSubModeFromKeymap(keymap: string | null): ViSubMode | null {
   }
 }
 
+/**
+ * Battery snapshot for the right-cluster battery chip (M12.4b).
+ * Mirrors `BatteryStatus` in `src-tauri/src/status.rs`. `present:
+ * false` means either a desktop or a probe failure; the chip renders
+ * a bare plug glyph in both cases (identical treatment is deliberate
+ * — the user's mental model is "am I on wall power," and the answer
+ * is yes in either case).
+ *
+ * `on_ac_power` is the primary discriminator between the plug icon
+ * and the battery-fill icon. `charging` distinguishes actively-drawing
+ * from fully-charged-on-AC for the tooltip label only. Do NOT proxy
+ * on `percent === 100` to infer AC power: an unplugged laptop at 100%
+ * would misreport as being on wall power (this was the MBP M1 Pro
+ * bug the state-based mapping fixes).
+ */
+export interface BatterySnapshot {
+  present: boolean;
+  percent: number | null;
+  on_ac_power: boolean;
+  charging: boolean;
+}
+
 export interface StatuslineProps {
   /** See {@link StatuslineMode}. */
   mode?: StatuslineMode;
@@ -112,6 +134,18 @@ export interface StatuslineProps {
    * source as `clock`; falls back to no tooltip when `null`.
    */
   clockTooltip?: string | null;
+  /**
+   * M12.4b: snapshot of the host's power state. When omitted, the
+   * chip hides entirely (used by tests that don't care and by
+   * the browser dev shell before the first probe returns).
+   */
+  battery?: BatterySnapshot;
+  /**
+   * M12.4b: IPv4 address of the default-route interface. `null`
+   * hides the chip (offline machine, VPN-only host, or probe
+   * failure — all treated the same).
+   */
+  localIp?: string | null;
   /**
    * True when the assistant dock is open (M7.7b). Adds a small "+
    * assistant active" indicator on the right so users know the
@@ -216,6 +250,85 @@ const CLOCK_TEXT: CSSProperties = {
   fontVariantNumeric: "tabular-nums",
 };
 
+/** M12.4b Nerd Font (Font Awesome) icon codepoints for the battery
+ *  chip. Named per the FA icon names so a future reader can grep. */
+const BATTERY_ICON = {
+  full: "", // nf-fa-battery_full (100%)
+  threeQuarters: "", // nf-fa-battery_three_quarters
+  half: "", // nf-fa-battery_half
+  quarter: "", // nf-fa-battery_quarter
+  empty: "", // nf-fa-battery_empty
+  plug: "", // nf-fa-plug
+} as const;
+
+/** Pick the discharging-battery fill glyph for a given percentage.
+ *  Buckets follow the Font Awesome icon set: empty (< 12%), quarter
+ *  (< 38%), half (< 62%), three-quarters (< 88%), full (>= 88%).
+ *  Cutoffs sit at the midpoint between the FA levels (100% → full,
+ *  75% → 3/4, 50% → 1/2, etc.). */
+function batteryFillIcon(percent: number): string {
+  if (percent < 12) return BATTERY_ICON.empty;
+  if (percent < 38) return BATTERY_ICON.quarter;
+  if (percent < 62) return BATTERY_ICON.half;
+  if (percent < 88) return BATTERY_ICON.threeQuarters;
+  return BATTERY_ICON.full;
+}
+
+/** Compose the battery chip's icon + label + colour for a snapshot.
+ *  Returns `null` when the chip should be hidden entirely (currently
+ *  never — the desktop path always renders the plug, per the spec's
+ *  "consistent rule" reasoning). */
+function batteryChip(
+  battery: BatterySnapshot,
+): { icon: string; label: string; amber: boolean; title: string } | null {
+  if (!battery.present) {
+    return {
+      icon: BATTERY_ICON.plug,
+      label: "",
+      amber: false,
+      title: "AC power (no battery detected)",
+    };
+  }
+  const pct = battery.percent;
+  const pctLabel = pct === null ? "?" : `${pct}%`;
+  // On wall power is a direct read of the OS's state enum, not a
+  // percent proxy: State::Charging OR State::Full both map to true
+  // in the backend, and the older "at 100% ⇒ AC" heuristic (which
+  // misfired on unplugged full-charge laptops) is gone.
+  if (battery.on_ac_power) {
+    return {
+      icon: BATTERY_ICON.plug,
+      label: pctLabel,
+      amber: false,
+      title: battery.charging ? `Charging (${pctLabel})` : `AC power (${pctLabel})`,
+    };
+  }
+  const amber = pct !== null && pct < 20;
+  return {
+    icon: pct === null ? BATTERY_ICON.empty : batteryFillIcon(pct),
+    label: pctLabel,
+    amber,
+    title: amber ? `Battery low (${pctLabel})` : `On battery (${pctLabel})`,
+  };
+}
+
+const BATTERY_ICON_STYLE: CSSProperties = {
+  fontFamily: "'JetBrainsMono Nerd Font', var(--font-mono), monospace",
+  fontSize: 13,
+  lineHeight: 1,
+};
+
+const BATTERY_LABEL_STYLE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  fontVariantNumeric: "tabular-nums",
+};
+
+const LOCAL_IP_STYLE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+};
+
 export function Statusline({
   mode = "COMMAND",
   interactiveCwd = null,
@@ -224,9 +337,12 @@ export function Statusline({
   host = null,
   clock = null,
   clockTooltip = null,
+  battery,
+  localIp = null,
   assistantActive = false,
   approvalsPending = 0,
 }: StatuslineProps): React.ReactElement {
+  const battery_ = battery !== undefined ? batteryChip(battery) : null;
   // Vi sub-mode rides alongside COMMAND only. INTERACTIVE gets the
   // cwd chip; the two states can't co-exist (vim owns the modality
   // once alt-screen is active).
@@ -260,6 +376,24 @@ export function Statusline({
       {identity !== null && (
         <span style={RIGHT_CELL} data-testid="statusline-identity">
           <span style={IDENTITY_TEXT}>{identity}</span>
+        </span>
+      )}
+      {localIp !== null && (
+        <span style={RIGHT_CELL} data-testid="statusline-local-ip" title="Local IP address">
+          <span style={LOCAL_IP_STYLE}>{localIp}</span>
+        </span>
+      )}
+      {battery_ !== null && (
+        <span
+          style={{ ...RIGHT_CELL, color: battery_.amber ? "var(--amber)" : "var(--fg-dim)" }}
+          data-testid="statusline-battery"
+          data-battery-present={battery?.present ? "true" : "false"}
+          data-battery-charging={battery?.charging ? "true" : "false"}
+          data-battery-amber={battery_.amber ? "true" : "false"}
+          title={battery_.title}
+        >
+          <span style={BATTERY_ICON_STYLE}>{battery_.icon}</span>
+          {battery_.label.length > 0 && <span style={BATTERY_LABEL_STYLE}>{battery_.label}</span>}
         </span>
       )}
       {clock !== null && (
