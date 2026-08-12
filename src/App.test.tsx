@@ -126,8 +126,9 @@ vi.mock("./lib/ipc", () => ({
   systemBattery: (): Promise<{
     present: boolean;
     percent: number | null;
+    on_ac_power: boolean;
     charging: boolean;
-  }> => Promise.resolve({ present: false, percent: null, charging: false }),
+  }> => Promise.resolve({ present: false, percent: null, on_ac_power: false, charging: false }),
   systemLocalIp: (): Promise<string | null> => Promise.resolve(null),
 }));
 

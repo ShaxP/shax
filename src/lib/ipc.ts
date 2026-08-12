@@ -846,20 +846,27 @@ export function __resetThemesCacheForTest(): void {
 
 /**
  * Snapshot of the host's power state, mirrors `BatteryStatus` in
- * `src-tauri/src/status.rs`.
+ * `src-tauri/src/status.rs`. All rendering flows from the two
+ * orthogonal booleans below; the frontend never proxies on percent.
  *
  * - `present = false` → desktop machine (no battery installed) OR
  *   the OS probe failed. Frontend renders the "plug alone" glyph.
- * - `present = true` → laptop with a battery; `percent` is 0..=100
+ * - `present = true` → laptop with a battery. `percent` is 0..=100
  *   when the OS reported one and `null` when firmware returned
- *   garbage. `charging` is true only while the battery is actively
- *   drawing power (a fully-charged plugged-in laptop reports
- *   `charging: false` — the frontend still shows the plug via the
- *   "on wall power = charging OR at 100%" rule).
+ *   garbage.
+ * - `on_ac_power` — the machine is drawing wall power right now.
+ *   True for both actively-charging AND fully-charged-plugged-in
+ *   (macOS reports `charging=false` in the latter case). False for
+ *   any laptop on battery, including a fully-charged laptop that
+ *   was just unplugged.
+ * - `charging` — the battery is actively being *charged*. True only
+ *   when energy flows in. Frontend uses this only for the tooltip
+ *   distinction "Charging (X%)" vs "AC power (X%)".
  */
 export interface BatteryStatus {
   present: boolean;
   percent: number | null;
+  on_ac_power: boolean;
   charging: boolean;
 }
 
@@ -868,6 +875,7 @@ export interface BatteryStatus {
 const BATTERY_ABSENT: BatteryStatus = {
   present: false,
   percent: null,
+  on_ac_power: false,
   charging: false,
 };
 

@@ -84,10 +84,18 @@ export function viSubModeFromKeymap(keymap: string | null): ViSubMode | null {
  * a bare plug glyph in both cases (identical treatment is deliberate
  * — the user's mental model is "am I on wall power," and the answer
  * is yes in either case).
+ *
+ * `on_ac_power` is the primary discriminator between the plug icon
+ * and the battery-fill icon. `charging` distinguishes actively-drawing
+ * from fully-charged-on-AC for the tooltip label only. Do NOT proxy
+ * on `percent === 100` to infer AC power: an unplugged laptop at 100%
+ * would misreport as being on wall power (this was the MBP M1 Pro
+ * bug the state-based mapping fixes).
  */
 export interface BatterySnapshot {
   present: boolean;
   percent: number | null;
+  on_ac_power: boolean;
   charging: boolean;
 }
 
@@ -283,13 +291,11 @@ function batteryChip(
   }
   const pct = battery.percent;
   const pctLabel = pct === null ? "?" : `${pct}%`;
-  // On wall power = actively charging OR present at 100%. Fully-
-  // charged plugged-in laptops report `charging: false` from the OS,
-  // so the second half of the disjunction is what makes them show
-  // the plug rather than the "battery full" glyph — matches the
-  // user's mental model of "am I plugged in."
-  const onWallPower = battery.charging || pct === 100;
-  if (onWallPower) {
+  // On wall power is a direct read of the OS's state enum, not a
+  // percent proxy: State::Charging OR State::Full both map to true
+  // in the backend, and the older "at 100% ⇒ AC" heuristic (which
+  // misfired on unplugged full-charge laptops) is gone.
+  if (battery.on_ac_power) {
     return {
       icon: BATTERY_ICON.plug,
       label: pctLabel,

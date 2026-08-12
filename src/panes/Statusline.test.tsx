@@ -148,7 +148,11 @@ describe("Statusline / battery chip (M12.4b)", () => {
   });
 
   it("desktop (no battery) renders the bare plug glyph and title", () => {
-    render(<Statusline battery={{ present: false, percent: null, charging: false }} />);
+    render(
+      <Statusline
+        battery={{ present: false, percent: null, on_ac_power: false, charging: false }}
+      />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveAttribute("data-battery-present", "false");
     expect(chip).toHaveAttribute("title", "AC power (no battery detected)");
@@ -157,7 +161,9 @@ describe("Statusline / battery chip (M12.4b)", () => {
   });
 
   it("laptop on battery renders the percent + non-amber colour", () => {
-    render(<Statusline battery={{ present: true, percent: 87, charging: false }} />);
+    render(
+      <Statusline battery={{ present: true, percent: 87, on_ac_power: false, charging: false }} />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveAttribute("data-battery-present", "true");
     expect(chip).toHaveAttribute("data-battery-charging", "false");
@@ -167,14 +173,18 @@ describe("Statusline / battery chip (M12.4b)", () => {
   });
 
   it("laptop on battery below 20% flips to amber", () => {
-    render(<Statusline battery={{ present: true, percent: 15, charging: false }} />);
+    render(
+      <Statusline battery={{ present: true, percent: 15, on_ac_power: false, charging: false }} />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveAttribute("data-battery-amber", "true");
     expect(chip).toHaveAttribute("title", "Battery low (15%)");
   });
 
   it("laptop charging renders as plugged in regardless of percent", () => {
-    render(<Statusline battery={{ present: true, percent: 45, charging: true }} />);
+    render(
+      <Statusline battery={{ present: true, percent: 45, on_ac_power: true, charging: true }} />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveAttribute("data-battery-charging", "true");
     expect(chip).toHaveAttribute("data-battery-amber", "false");
@@ -182,13 +192,28 @@ describe("Statusline / battery chip (M12.4b)", () => {
     expect(chip).toHaveAttribute("title", "Charging (45%)");
   });
 
-  it("fully-charged plugged-in laptop (present, 100%, not charging) shows the plug", () => {
-    // OS reports `charging: false` when the battery is full — but the
-    // user is still on wall power, so the chip must show the plug.
-    // The "on wall power = charging OR at 100%" rule catches this.
-    render(<Statusline battery={{ present: true, percent: 100, charging: false }} />);
+  it("fully-charged plugged-in laptop (State::Full → on_ac_power) shows the plug", () => {
+    // macOS reports `charging: false` when the battery is at 100% on
+    // AC — but the state is `Full`, which the backend maps to
+    // `on_ac_power: true`. Chip must show the plug + "AC power" title.
+    render(
+      <Statusline battery={{ present: true, percent: 100, on_ac_power: true, charging: false }} />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveAttribute("title", "AC power (100%)");
+  });
+
+  it("unplugged laptop at 100% (Discharging → !on_ac_power) shows on-battery", () => {
+    // Regression guard for the MBP M1 Pro bug (PR #116). An
+    // unplugged full-charge laptop reports state Discharging, which
+    // maps to on_ac_power=false. The chip MUST show battery-on, not
+    // the old percent-based fallback that used to fire on "== 100".
+    render(
+      <Statusline battery={{ present: true, percent: 100, on_ac_power: false, charging: false }} />,
+    );
+    const chip = screen.getByTestId("statusline-battery");
+    expect(chip).toHaveAttribute("title", "On battery (100%)");
+    expect(chip).toHaveAttribute("data-battery-amber", "false");
   });
 
   it("missing percent (defensive) still renders a chip with `?`", () => {
@@ -199,7 +224,11 @@ describe("Statusline / battery chip (M12.4b)", () => {
     // reaches us. This test locks in the defensive rendering path
     // so that if the backend contract ever regresses, we still
     // surface *something* to the user rather than a blank chip.
-    render(<Statusline battery={{ present: true, percent: null, charging: false }} />);
+    render(
+      <Statusline
+        battery={{ present: true, percent: null, on_ac_power: false, charging: false }}
+      />,
+    );
     const chip = screen.getByTestId("statusline-battery");
     expect(chip).toHaveTextContent("?");
   });

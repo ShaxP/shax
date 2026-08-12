@@ -791,6 +791,7 @@ export default function App(): React.ReactElement {
   const [batteryStatus, setBatteryStatus] = useState<BatteryStatus>({
     present: false,
     percent: null,
+    on_ac_power: false,
     charging: false,
   });
   const [localIp, setLocalIp] = useState<string | null>(null);

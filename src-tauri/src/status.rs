@@ -3,9 +3,9 @@
 //! Two Tauri commands driving two statusbar chips:
 //!
 //! - [`system_battery`] returns [`BatteryStatus`] describing the
-//!   machine's power state (present? at what percent? charging?).
-//!   Desktops (no battery present) get `{present: false}` and the
-//!   frontend renders the plug-alone glyph.
+//!   machine's power state (present? at what percent? on AC? actively
+//!   charging?). Desktops (no battery present) get `{present: false}`
+//!   and the frontend renders the plug-alone glyph.
 //! - [`system_local_ip`] returns the IPv4 address of the interface
 //!   carrying the default route (the one you'd use to reach
 //!   `1.1.1.1`). `None` when no network is reachable or the platform
@@ -32,10 +32,11 @@
 //! cover the real values.
 
 use serde::{Deserialize, Serialize};
+use starship_battery::State;
 
 /// The machine's current power state, as reported by the OS.
 ///
-/// The three fields answer three orthogonal questions the statusbar
+/// The four fields answer four orthogonal questions the statusbar
 /// chip needs to render:
 ///
 /// - `present` — is there a battery at all? Desktops answer `false`;
@@ -43,17 +44,29 @@ use serde::{Deserialize, Serialize};
 /// - `percent` — how full is it? `None` when the OS couldn't compute
 ///   a percentage (rare — usually means the battery firmware is
 ///   reporting garbage). Range is 0..=100.
-/// - `charging` — is it currently being charged? On laptops that
-///   report "AC connected, battery full" this is still `false` — the
-///   battery isn't charging *because it's full*. The frontend treats
-///   `!charging` on a present battery as "on battery" for the
-///   discharge visual, so a fully-charged plugged-in laptop shows the
-///   plug glyph via the caller-side rule "on wall power = charging
-///   OR (present AND at 100%)" — see the M12.4b spec table.
+/// - `on_ac_power` — is the machine currently drawing from wall
+///   power? True for both "actively charging" and "on AC, battery
+///   full" (macOS reports `IsCharging=false, FullyCharged=true` in
+///   the latter case). False for a laptop on battery — including a
+///   fully-charged laptop that was just unplugged. The frontend uses
+///   this as the primary discriminator between the plug icon and the
+///   battery-fill icon.
+/// - `charging` — is the battery actively being *charged* right now?
+///   True only when energy is flowing into the cell. False when on
+///   battery, false when fully charged on AC. The frontend uses this
+///   only for the tooltip distinction between "Charging (X%)" and
+///   "AC power (X%)".
+///
+/// We deliberately keep the two flags separate rather than collapsing
+/// into a three-state enum: it lets the frontend derive both the icon
+/// choice and the tooltip label with straight boolean checks, and it
+/// leaves room for future rendering (e.g. a lightning-bolt overlay
+/// for `charging && on_ac_power`) without another IPC change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatteryStatus {
     pub present: bool,
     pub percent: Option<u8>,
+    pub on_ac_power: bool,
     pub charging: bool,
 }
 
@@ -64,6 +77,7 @@ impl BatteryStatus {
         Self {
             present: false,
             percent: None,
+            on_ac_power: false,
             charging: false,
         }
     }
@@ -104,8 +118,7 @@ pub fn system_battery() -> BatteryStatus {
             continue;
         };
         let ratio = battery.state_of_charge().value;
-        let charging = matches!(battery.state(), starship_battery::State::Charging);
-        if let Some(status) = snapshot_from(ratio, charging) {
+        if let Some(status) = snapshot_from(ratio, battery.state()) {
             return status;
         }
     }
@@ -114,10 +127,29 @@ pub fn system_battery() -> BatteryStatus {
     BatteryStatus::absent()
 }
 
-/// Turn a raw (state-of-charge ratio, charging flag) reading into a
-/// [`BatteryStatus`], or [`None`] if the entry looks phantom.
+/// Turn a raw (state-of-charge ratio, `starship-battery` state)
+/// reading into a [`BatteryStatus`], or [`None`] if the entry looks
+/// phantom.
 ///
-/// Phantom-entry filter: on Apple Silicon Mac desktops (Mac Mini,
+/// **State mapping.** The `State` enum reports what the OS thinks the
+/// battery is doing right now. We collapse it into two orthogonal
+/// booleans:
+///
+/// | `State`       | `on_ac_power` | `charging` | Real-world case                          |
+/// | ------------- | ------------- | ---------- | ---------------------------------------- |
+/// | `Charging`    | `true`        | `true`     | Plugged in, drawing energy into battery. |
+/// | `Full`        | `true`        | `false`    | Plugged in, battery at 100%, not drawing.|
+/// | `Discharging` | `false`       | `false`    | On battery, energy flowing out.          |
+/// | `Empty`       | `false`       | `false`    | On battery, 0%.                          |
+/// | `Unknown`     | `false`       | `false`    | Defensive default — assume on battery.   |
+///
+/// The `Unknown` default matters: an unplugged laptop at 100% that
+/// momentarily reports `Unknown` should not flash the plug icon. The
+/// worst case of getting this wrong is a plugged-in laptop briefly
+/// showing the battery icon, which is a self-correcting visual glitch
+/// versus a stationary lie about power state.
+///
+/// **Phantom-entry filter.** On Apple Silicon Mac desktops (Mac Mini,
 /// Mac Studio) the `IOPMPowerSource` service enumerates entries even
 /// without a real battery attached, and those entries report a
 /// non-finite `state_of_charge()` (NaN). We treat that as the signal
@@ -128,9 +160,9 @@ pub fn system_battery() -> BatteryStatus {
 /// [`BatteryStatus::absent`], which renders as the desktop plug-alone
 /// chip.
 ///
-/// Split out so the phantom rule is directly unit-testable without
-/// having to mock the `starship-battery` iterator.
-fn snapshot_from(ratio: f32, charging: bool) -> Option<BatteryStatus> {
+/// Split out so both rules are directly unit-testable without having
+/// to mock the `starship-battery` iterator.
+fn snapshot_from(ratio: f32, state: State) -> Option<BatteryStatus> {
     if !ratio.is_finite() {
         tracing::debug!("skipping battery entry with non-finite state-of-charge");
         return None;
@@ -138,9 +170,12 @@ fn snapshot_from(ratio: f32, charging: bool) -> Option<BatteryStatus> {
     // `state_of_charge()` is nominally 0.0..=1.0; noisy firmware can
     // report slightly outside that range, so clamp before scaling.
     let percent = (ratio.clamp(0.0, 1.0) * 100.0).round() as u8;
+    let on_ac_power = matches!(state, State::Charging | State::Full);
+    let charging = matches!(state, State::Charging);
     Some(BatteryStatus {
         present: true,
         percent: Some(percent),
+        on_ac_power,
         charging,
     })
 }
@@ -172,6 +207,7 @@ mod tests {
         let a = BatteryStatus::absent();
         assert!(!a.present);
         assert!(a.percent.is_none());
+        assert!(!a.on_ac_power);
         assert!(!a.charging);
     }
 
@@ -182,6 +218,7 @@ mod tests {
         let s = BatteryStatus {
             present: true,
             percent: Some(87),
+            on_ac_power: false,
             charging: false,
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -197,6 +234,7 @@ mod tests {
         let json = serde_json::to_string(&BatteryStatus::absent()).unwrap();
         assert!(json.contains(r#""present":false"#));
         assert!(json.contains(r#""percent":null"#));
+        assert!(json.contains(r#""on_ac_power":false"#));
         assert!(json.contains(r#""charging":false"#));
     }
 
@@ -206,24 +244,57 @@ mod tests {
         // non-finite state-of-charge. `snapshot_from` must reject it
         // so the caller can try the next entry (or fall through to
         // `absent()` and render the desktop plug-alone chip).
-        assert!(snapshot_from(f32::NAN, false).is_none());
-        assert!(snapshot_from(f32::INFINITY, false).is_none());
-        assert!(snapshot_from(f32::NEG_INFINITY, true).is_none());
+        assert!(snapshot_from(f32::NAN, State::Discharging).is_none());
+        assert!(snapshot_from(f32::INFINITY, State::Full).is_none());
+        assert!(snapshot_from(f32::NEG_INFINITY, State::Charging).is_none());
     }
 
     #[test]
-    fn snapshot_from_returns_a_percent_for_a_real_reading() {
-        let s = snapshot_from(0.87, false).expect("real reading must map to a status");
-        assert!(s.present);
-        assert_eq!(s.percent, Some(87));
-        assert!(!s.charging);
-    }
-
-    #[test]
-    fn snapshot_from_preserves_the_charging_flag() {
-        let s = snapshot_from(0.45, true).expect("real reading must map to a status");
+    fn snapshot_from_maps_state_charging_to_both_flags_true() {
+        // Actively drawing energy into the battery.
+        let s = snapshot_from(0.45, State::Charging).expect("charging is real");
+        assert!(s.on_ac_power);
         assert!(s.charging);
         assert_eq!(s.percent, Some(45));
+    }
+
+    #[test]
+    fn snapshot_from_maps_state_full_to_on_ac_but_not_charging() {
+        // Plugged-in laptop at 100%. macOS reports IsCharging=false
+        // in this case — the OS-level distinction we're preserving.
+        let s = snapshot_from(1.00, State::Full).expect("full is real");
+        assert!(s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(100));
+    }
+
+    #[test]
+    fn snapshot_from_maps_state_discharging_to_neither_flag() {
+        // Unplugged laptop consuming battery. Note: even at 100%
+        // (unplugged full-charge laptop), Discharging still resolves
+        // to on-battery — this is the MBP bug the mapping fixes.
+        let s = snapshot_from(1.00, State::Discharging).expect("discharging is real");
+        assert!(!s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(100));
+    }
+
+    #[test]
+    fn snapshot_from_maps_state_empty_to_neither_flag() {
+        let s = snapshot_from(0.00, State::Empty).expect("empty is real");
+        assert!(!s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(0));
+    }
+
+    #[test]
+    fn snapshot_from_maps_state_unknown_to_neither_flag_defensively() {
+        // Ambiguous OS state: default to "on battery" so we never
+        // silently misreport an unplugged laptop as AC power.
+        let s = snapshot_from(0.55, State::Unknown).expect("unknown is real");
+        assert!(!s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(55));
     }
 
     #[test]
@@ -231,9 +302,9 @@ mod tests {
         // Noisy firmware occasionally reports slightly outside
         // 0.0..=1.0 — we clamp rather than reject, because the
         // battery is still real.
-        let over = snapshot_from(1.03, false).expect("clamped");
+        let over = snapshot_from(1.03, State::Discharging).expect("clamped");
         assert_eq!(over.percent, Some(100));
-        let under = snapshot_from(-0.02, false).expect("clamped");
+        let under = snapshot_from(-0.02, State::Discharging).expect("clamped");
         assert_eq!(under.percent, Some(0));
     }
 
