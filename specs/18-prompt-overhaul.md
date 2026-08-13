@@ -66,6 +66,26 @@ The tokenizer is hand-rolled (~200 LOC), POSIX-shell-flavored, and shell-agnosti
 
 **Rejected alternatives:** (a) adopt CodeMirror's bash grammar — pulls a much larger dependency for a single-line editor; the mirror renderer already isn't CM. (b) full grammar with argv-aware coloring (e.g. `git commit -m "…"` colors `-m` as a git-specific flag) — deferred; a POSIX-shell tokenizer is 90% of the visual win at 20% of the cost.
 
+### D6 — Extend the M12.5 tokenizer to every command-rendering surface; replace hljs for shell fences in the assistant
+
+The M12.5 tokenizer lives in `src/panes/promptSyntax.ts` and is only wired into `PromptStrip`. Every other surface that displays a captured or user-authored shell command line still renders as a monochrome mono span:
+
+- The block header (`BlockRow`'s `CommandText`) — the command row that leads every completed block in the scrollback.
+- Search-result snippets — when a block matches a search query, the results list shows the command as a snippet.
+- The command / history palette — recall UIs that let the user run a past command by clicking it.
+- The assistant chat — when the model echoes a shell command in a fenced code block (`` ```bash ``, `` ```sh ``, `` ```shell ``, `` ```zsh ``), the fence today goes through `highlight.js` and gets `hljs`-flavoured coloring — different theme, different token model, different palette from Shax's own.
+
+M12.6 makes all four surfaces render commands with the same tokenizer and the same `--syntax-*` palette used by the prompt strip. "Commands look the same everywhere" becomes an app-wide invariant, not a prompt-only feature.
+
+The assistant-chat surface is the load-bearing decision here: **shell fences get intercepted and routed through our tokenizer, not hljs.** Other language fences (`js`, `rust`, `python`, …) keep hljs — those are outside the shell tokenizer's domain, and the mixed-language chat still needs their coloring. The tradeoff:
+
+- **For (chosen):** every place the user sees `git commit -m "hi"` in Shax, it looks identical — same command color, same string color, same theme adaptation. Users don't have to context-switch between "shell colored one way in the prompt, another way in an assistant response."
+- **Against:** a chat message with `bash` + `js` fences would show two visually distinct highlighting styles side by side. This is genuinely a minor aesthetic inconsistency within a single message.
+
+Chose "for" because the shell is the daily-driver surface and the assistant-chat's shell fences are a small fraction of assistant output; consistency across shell surfaces beats consistency within a mixed-language message.
+
+**Rejected alternatives:** (a) keep hljs everywhere and give up cross-surface shell consistency — leaves the block header and prompt strip visually mismatched, defeats the point. (b) intercept ALL hljs fences and replace them with Shax-authored tokenizers per language — massive scope creep; we don't have a JS/Rust/Python tokenizer and building them is a separate multi-milestone effort. (c) offer a preference to opt out of the hljs override on shell fences — YAGNI until a real user asks for the mixed-style aesthetic.
+
 ## Slices
 
 Five slices. None gates the next; ship in the order below or reorder if priorities shift.
@@ -244,6 +264,58 @@ Combined dependency weight is ~50KB. Trade well worth making for this slice.
 
 **Exit:** typing `git commit -m "hello"` colors `git` as command, `commit` as subcommand, `-m` as flag, `"hello"` as string; typing `echo $HOME | grep foo` colors `$HOME` as variable, `|` as operator; unbalanced quote (`echo "hi`) doesn't corrupt the line — the string just runs to end-of-line in string color.
 
+### M12.6 — Extend syntax highlighting to every command-rendering surface
+
+**Scope:** wire the M12.5 tokenizer (`src/panes/promptSyntax.ts`) into every place that displays a shell command line. Same tokenizer, same `--syntax-*` theme palette, same fidelity-fallback contract as M12.5. See D6 for the design rationale and the assistant-chat direction.
+
+Sliced into three sub-PRs so review lands in bite-sized pieces:
+
+#### M12.6a — Shared render helper + block header
+
+The core reuse. Extract the syntax-colored span renderer that currently lives inside `PromptStrip.tsx` (the `styledRuns` + `runStyle` + `syntaxColor` cluster) into a new pure component `src/panes/CommandSpans.tsx`:
+
+```tsx
+<CommandSpans text={cmd} />                  // simplest form — text-only
+<CommandSpans text={cmd} styled={arr} selected={arr} />   // prompt-strip form
+```
+
+The component owns the tokenizer call (inside try/catch — fidelity fallback preserved) and the leaf `<span style={{color:…}}>` emission. `PromptStrip` refactors to use it. `BlockRow`'s existing `CommandText` component (from M12.3) also switches to it — the multi-line collapse behaviour stays in `CommandText`; the per-line render delegates to `CommandSpans`.
+
+Tests:
+
+- `CommandSpans.test.tsx` — the render-path tests currently in `PromptStrip.test.tsx` move here (component's own tests own the render behaviour); PromptStrip keeps a smaller integration test that the composition works.
+- New `BlockRow.test.tsx` case: a block command like `git commit -m "hi"` renders with `command` / `subcommand` / `flag` / `string` colors — same shape as the M12.5 PromptStrip test.
+
+**Exit:** open the scrollback with a mix of past commands; each command row in the block headers shows the same coloring as the prompt strip did while it was being typed.
+
+#### M12.6b — Search snippets and command palette / history
+
+Second surface batch. Two independent renderers:
+
+- **Search results.** `SearchResults` renders block command hits with the query-highlight marks (`<mark>`) already in place from M7.3. This slice wraps the command portion of each snippet in `<CommandSpans>` while preserving the `<mark>` overlay on hits. Precedence: the query-highlight background takes priority over syntax color, matching the same "selection wins" rule PromptStrip already uses for SGR-7 selections. If a snippet contains a fragment of *output* (not a command line), it stays monochrome — snippets are labeled by source in the results reducer, so this is a straightforward gate.
+- **History / command palette.** Any picker that shows a past command line as an actionable row (the command-recall path in the palette, session history browsers) renders via `<CommandSpans>`. Same component, same colors.
+
+Tests:
+
+- `SearchResults.test.tsx` gains a case that a command hit renders syntax spans + preserves the `<mark>` overlay; and a case that an output snippet stays monochrome.
+- Whichever palette registers command-recall rows gets an equivalent case in its own test file.
+
+**Exit:** search for `git` — the snippet rows in results show git-family commands colored, with the hit-highlight on `git` still winning visually. Open the palette's recall path — past commands render colored.
+
+#### M12.6c — Assistant chat shell fences
+
+The load-bearing surface. Requires intercepting markdown code fences before hljs paints them.
+
+- `ChatMarkdown.tsx` currently routes every fenced block through `react-markdown` → `rehype-highlight` (which calls hljs). Add a custom `code` component that inspects the `className` (`react-markdown` writes `language-bash` / `language-sh` / `language-shell` / `language-zsh` for shell fences). When it matches, render via `<CommandSpans>` instead of the hljs path; when it doesn't match, delegate to the existing hljs-styled render.
+- Multi-line handling: the tokenizer already treats `\n` as a segment reset (M12.5 spec), so a multi-line shell fence renders per line with correct segment resets around pipes / `;` / etc.
+- Precedence: no `styled` axis in chat (no autosuggestion ghost); no `selected` axis unless we later add per-fence selection. Just: syntax color or nothing.
+
+Tests:
+
+- `ChatMarkdown.test.tsx` gains three cases: a `bash` fence renders via `CommandSpans` (not hljs classes); a `rust` fence keeps hljs classes; a `bash` fence with an unbalanced quote falls back to monochrome (fidelity).
+
+**Exit:** ask the assistant "how do I check disk usage?", get back a response with `` ```bash df -h ``. The rendered fence shows `df` colored as command, `-h` as flag — same palette as the prompt strip. A `` ```rust ` fence in the same response still renders with hljs classes for keyword / string / number.
+
 ## Non-goals (explicit, not deferred)
 
 - **A local line editor.** M12 keeps the mirror-the-shell model. Building our own readline replacement — with history, completion, kill-ring, incremental search — is a multi-milestone rewrite with heavy compatibility risk. Rejected as a category, not delayed. If the shell's line editor ever becomes the blocker, the conversation is separate.
@@ -261,8 +333,11 @@ Every slice writes tests alongside per CLAUDE.md §"Testing policy".
 - **M12.3** — `promptRenderer.test.ts` gains multi-row cases (`\n` appends, cursor advances across rows, kill-to-end doesn't cross rows); new `ConfirmPasteModal.test.tsx`; `keyToBytes.test.ts` gains the Shift+Enter case.
 - **M12.4** — `PromptStrip.test.tsx` renders the header with mocked cwd / branch / user / host / clock; the App-level clock tick has a fake-timer test.
 - **M12.5** — `promptSyntax.test.ts` covers each token kind, unbalanced quote, empty line, `#` comment; `PromptStrip.test.tsx` gains a render-spans-with-colors case and a tokenizer-throws-→-monochrome fallback case.
+- **M12.6a** — new `CommandSpans.test.tsx` inherits the render-path tests; `BlockRow.test.tsx` gains a syntax-coloring case for the block header. `PromptStrip.test.tsx` shrinks to a composition test that the strip still renders coloured spans (component ownership moved out).
+- **M12.6b** — `SearchResults.test.tsx` gains (i) command-snippet renders coloured spans + preserves `<mark>` overlay, (ii) output-snippet stays monochrome. Palette command-recall tests get one syntax-render case each.
+- **M12.6c** — `ChatMarkdown.test.tsx` gains three cases: `bash` fence → `CommandSpans`, `rust` fence → hljs classes untouched, `bash` fence with unbalanced quote → monochrome fallback.
 
-Playwright end-to-end: one flow per slice under `tests/e2e/prompt-overhaul.spec.ts`, all added in M12.5 as a final integration pass.
+Playwright end-to-end: one flow per slice under `tests/e2e/prompt-overhaul.spec.ts`, all added in M12.5 as a final integration pass. M12.6 does not add new e2e flows — the visual coverage sits in the component tests, and the end-to-end paths (search a command, expand a block, open a chat with a shell fence) are already covered by earlier milestones' e2e specs.
 
 ## Cross-cutting concerns
 
