@@ -14,6 +14,7 @@
 
 import { useState, type CSSProperties } from "react";
 import { shellEscape } from "../../../lib/shellEscape";
+import { CommandSpans } from "../../../panes/CommandSpans";
 import type { PaneContext } from "../../registry";
 import {
   FIELD_LABEL,
@@ -112,7 +113,10 @@ export function GitStashPanel({ onSubmit }: GitStashPanelProps): React.ReactElem
 
       <div style={PREVIEW}>
         <div style={PREVIEW_LABEL}>Preview</div>
-        <div data-testid="palette-git-stash-preview">{preview}</div>
+        {/* M12.6b: syntax-highlight the preview. */}
+        <div data-testid="palette-git-stash-preview">
+          <CommandSpans text={preview} />
+        </div>
       </div>
 
       <div style={FOOTER}>

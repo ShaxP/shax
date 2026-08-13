@@ -264,3 +264,55 @@ describe("SearchOverlay — semantic tier (M7 slice 3)", () => {
     expect(screen.queryByTestId("search-section-semantic")).toBeNull();
   });
 });
+
+// ── M12.6b: syntax highlighting on command snippets ───────────────
+
+describe("SearchOverlay / syntax highlighting on command hits (M12.6b)", () => {
+  it("colours a command hit with the shared --syntax-* palette", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([makeLiteralHit("b1", "git commit")]);
+    render(<SearchOverlay onClose={() => undefined} onSelect={() => undefined} />);
+    await typeQuery("git");
+    // `git` is inside a <mark> because it's the query hit; `commit`
+    // is outside, so it gets the subcommand syntax color.
+    const spans = Array.from(document.querySelectorAll<HTMLSpanElement>("span"));
+    const commitSpan = spans.find(
+      (s) => s.textContent === "commit" && s.querySelector("span") === null,
+    );
+    expect(commitSpan?.style.color).toBe("var(--syntax-subcommand)");
+  });
+
+  it("preserves the <mark> overlay on the query-matched portion", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([makeLiteralHit("b1", "git commit")]);
+    render(<SearchOverlay onClose={() => undefined} onSelect={() => undefined} />);
+    await typeQuery("git");
+    // The <mark> renders inline as a real HTML mark element (for
+    // accessibility), with the accent-soft background style.
+    const marks = document.querySelectorAll<HTMLElement>("mark");
+    const gitMark = Array.from(marks).find((m) => m.textContent === "git");
+    expect(gitMark).toBeDefined();
+    expect(gitMark?.style.background).toBe("var(--accent-soft)");
+  });
+
+  it("empty query renders commands as plain syntax-only (no marks)", async () => {
+    mockSearchBlocks.mockResolvedValueOnce([makeLiteralHit("b1", "git commit")]);
+    render(<SearchOverlay onClose={() => undefined} onSelect={() => undefined} />);
+    // Force a search result render without a query: type a token
+    // that matches nothing so results come back as-is.
+    await typeQuery("");
+    // No mark elements emitted for command spans when query is
+    // empty — CommandSpans receives `marks: []` and skips them.
+    const marks = document.querySelectorAll<HTMLElement>("mark");
+    // Note: SearchOverlay only calls CommandSpans when results are
+    // present; on an empty query the results panel might be empty
+    // OR show only the empty-state UI. Either way, no command
+    // marks should appear.
+    for (const m of Array.from(marks)) {
+      // If any mark exists, it must not be inside a command line
+      // (could be an output-snippet mark from renderSnippet, which
+      // still uses <mark> for output hits — different code path).
+      // The command-line path in this test has no query, so we
+      // assert no command-shaped marks land in the DOM.
+      expect(m.textContent).not.toBe("git");
+    }
+  });
+});

@@ -22,6 +22,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { gitUserEmail } from "../../../lib/ipc";
 import { shellEscape } from "../../../lib/shellEscape";
+import { CommandSpans } from "../../../panes/CommandSpans";
 import type { PaneContext } from "../../registry";
 import {
   ERROR_BOX,
@@ -172,7 +173,12 @@ export function GitCommitPanel({ ctx, onSubmit }: GitCommitPanelProps): React.Re
       {canSubmit && (
         <div style={PREVIEW}>
           <div style={PREVIEW_LABEL}>Preview</div>
-          <div data-testid="palette-git-commit-preview">{preview}</div>
+          {/* M12.6b: syntax-highlight the preview so the panel
+              matches the prompt strip / block header / palette
+              overlay preview once submitted. */}
+          <div data-testid="palette-git-commit-preview">
+            <CommandSpans text={preview} />
+          </div>
         </div>
       )}
 

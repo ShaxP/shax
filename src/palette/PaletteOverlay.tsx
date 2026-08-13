@@ -39,6 +39,7 @@ import { availableCommands } from "./registry";
 import { rankCommands, type RankedCommand } from "./filter";
 import { isTopmostModalLayer, useModalLayer } from "../lib/modalLayer";
 import { gitRootFor } from "../lib/ipc";
+import { CommandSpans } from "../panes/CommandSpans";
 
 /** Emit source tag for palette-originated commands. Matches
  *  the `EmitSource` union in the Rust safety gate; kept as a
@@ -381,7 +382,13 @@ export function PaletteOverlay({ ctx, onClose }: PaletteOverlayProps): React.Rea
         {view.kind === "preview" && (
           <div style={PREVIEW_ROW} data-testid="palette-overlay-preview">
             <kbd style={PREVIEW_KBD}>⏎</kbd>
-            <span>{view.command}</span>
+            {/* M12.6b: syntax-highlight the palette's final preview
+                so the user sees the same coloring here that will
+                appear in the prompt strip once they hit Enter and
+                in the block header once the command completes. */}
+            <span>
+              <CommandSpans text={view.command} />
+            </span>
           </div>
         )}
 
