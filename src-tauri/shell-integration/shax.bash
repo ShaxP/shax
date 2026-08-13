@@ -227,17 +227,64 @@ _shax_prompt_command_wrapper() {
 # startup output. Running assertive setup first keeps DEBUG safely
 # scoped to user commands.
 if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
-  # Bare PS1: single OSC 133 B marker. Precmd below already emits A with
-  # cwd + branch on every prompt cycle; PS1 carries only B to close the
-  # "prompt-rendering" region so anything after it is user typing.
-  # Wrapped in \[...\] so readline's column math ignores it.
-  PS1='\[\e]133;B\a\]'
+  # PS1: one zero-width space (U+200B, UTF-8 \xe2\x80\x8b) followed by
+  # the OSC 133 B marker wrapped in \[...\] so readline's cursor math
+  # ignores it. The ZWSP is a bash-readline load-bearing hack: without
+  # at least one "visible" byte in PS1, readline's redisplay code takes
+  # a fast path that emits only the *diff* of the vi mode-string on
+  # each mode transition — corrupting the OSC 133;M sequence (only
+  # `cmd` / `ins` bytes reach the wire, not the full escape) and
+  # breaking the statusbar's INSERT/NORMAL chip. Modern terminals
+  # render U+200B as zero pixels, so users see nothing extra; bash
+  # counts it as one column, which is enough to disable the diff
+  # optimization and force a full redraw of the mode strings.
+  # Precmd below already emits A with cwd/branch/etc on every prompt
+  # cycle; PS1 still carries only the closing B so everything after
+  # it is user typing.
+  PS1=$'\xe2\x80\x8b\[\e]133;B\a\]'
   # PS2 (continuation prompt) cleared so a lingering `> ` doesn't paint
   # bytes we don't own during multi-line commands.
   PS2=''
 
   if [[ "$SHAX_LINE_EDITING" == "vi" ]]; then
     set -o vi 2>/dev/null
+    # Emit OSC 133;M on every vi mode transition so the statusbar
+    # can render the INSERT / NORMAL sub-mode chip on bash the same
+    # way it does on zsh. Uses readline's `vi-{ins,cmd}-mode-string`
+    # feature (bash 4.3+): readline prepends the string to the
+    # prompt line when redrawing after a mode switch. The `\1`/`\2`
+    # bytes bracket the OSC so readline knows it takes zero display
+    # columns (otherwise the mode transition would shift the cursor).
+    #
+    # Bash readline has only two vi modes (insert + command); there's
+    # no VISUAL sub-mode. The statusbar's `viSubModeFromKeymap` maps
+    # `viins` → INSERT and `vicmd` → NORMAL, which is what we emit
+    # here. VISUAL support would need to come from a userland vi-mode
+    # plugin like `bash-preexec` or the zsh-vi-mode analog — none of
+    # which is standard-enough to bundle. Fine for parity with what
+    # the M12.2 spec promised on bash.
+    #
+    # `bind 'set …'` injects into readline's runtime config the same
+    # way an inputrc line would. `2>/dev/null` swallows any warning
+    # from a readline older than 4.3 (which doesn't know the mode
+    # string vars) — we degrade to plain vi with no sub-mode chip in
+    # that case, matching pre-fix behaviour.
+    bind 'set show-mode-in-prompt on' 2>/dev/null
+    bind 'set vi-ins-mode-string "\1\e]133;M;viins\7\2"' 2>/dev/null
+    bind 'set vi-cmd-mode-string "\1\e]133;M;vicmd\7\2"' 2>/dev/null
+
+    # Neutralise `v` in vi-command mode. Bash's default binding is
+    # `edit-and-execute-command`, which spawns `$VISUAL` / `$EDITOR`
+    # (`nano` on Ubuntu / Fedora) to edit the current line. Users
+    # coming from macOS + zsh (where zsh-vi-mode makes `v` enter
+    # visual mode) get a jarring editor pop-up they didn't ask for.
+    # Bash readline has no analog to zsh-vi-mode's visual mode; the
+    # cleanest option is a silent no-op via an empty macro binding,
+    # so pressing `v` in NORMAL does nothing rather than opening an
+    # editor. See the `fc -e "${VISUAL:-…}"` phantom-block bug
+    # report — the fix removes the source rather than trying to
+    # scrub the resulting command from the block stream.
+    bind -m vi-command '"v": ""' 2>/dev/null
   else
     # Emacs (default). Forces emacs even if the user's rc set vi mode.
     set -o emacs 2>/dev/null
