@@ -1611,9 +1611,19 @@ mod tests {
             shim.contains(r#"SHAX_DISABLE_HARDENING" != "1""#),
             "shax.bash must gate the assertive block on SHAX_DISABLE_HARDENING",
         );
+        // PS1 has a leading zero-width space (UTF-8 \xe2\x80\x8b for
+        // U+200B) so bash readline sees the prompt as "1 column wide"
+        // and disables its diff-optimize path — that path corrupts
+        // the vi mode-string OSC 133;M emission (only `cmd`/`ins`
+        // bytes reach the wire, not the full escape). Modern
+        // terminals render U+200B as zero pixels, so no visible
+        // change. Regression guard against reverting to a
+        // fully-invisible PS1.
         assert!(
-            shim.contains(r"PS1='\[\e]133;B\a\]'"),
-            "shax.bash must reset PS1 to a bare OSC 133 B marker",
+            shim.contains("PS1=$'\\xe2\\x80\\x8b\\[\\e]133;B\\a\\]'"),
+            "shax.bash must set PS1 to `<ZWSP>\\[\\e]133;B\\a\\]` — the ZWSP is \
+             what keeps bash from corrupting the vi mode-string OSC via its \
+             redisplay-diff optimization",
         );
         assert!(shim.contains("PS2=''"), "shax.bash must clear PS2",);
         assert!(
@@ -1628,6 +1638,26 @@ mod tests {
             shim.contains("set -o emacs"),
             "shax.bash emacs branch must set emacs mode",
         );
+        // Bash vi branch must inject OSC 133;M mode-transition markers
+        // via readline's vi-{ins,cmd}-mode-string vars. Without this,
+        // Linux users (bash is the default shell on Ubuntu / Fedora)
+        // get vi keybindings but no INSERT / NORMAL sub-chip on the
+        // statusbar — exactly the reported bug. The `\1`/`\2` bytes
+        // mark the OSC as zero-width to readline so the cursor doesn't
+        // shift on mode change.
+        assert!(
+            shim.contains("show-mode-in-prompt on"),
+            "shax.bash vi branch must enable readline's show-mode-in-prompt \
+             — without it, the mode strings never render",
+        );
+        assert!(
+            shim.contains(r#"vi-ins-mode-string "\1\e]133;M;viins\7\2""#),
+            "shax.bash vi branch must set vi-ins-mode-string to emit OSC 133;M;viins",
+        );
+        assert!(
+            shim.contains(r#"vi-cmd-mode-string "\1\e]133;M;vicmd\7\2""#),
+            "shax.bash vi branch must set vi-cmd-mode-string to emit OSC 133;M;vicmd",
+        );
         // ORDER CONSTRAINT (regression guard). The always-assertive block
         // must run BEFORE the DEBUG trap is installed. If the trap is
         // already in place when we run PS1=/PS2=/set -o, bash fires
@@ -1635,7 +1665,7 @@ mod tests {
         // phantom OSC 133 C that opens a bogus block and eats the
         // shell's startup output. See git blame + the fix commit.
         let assertive_pos = shim
-            .find(r"PS1='\[\e]133;B\a\]'")
+            .find("PS1=$'\\xe2\\x80\\x8b\\[\\e]133;B\\a\\]'")
             .expect("PS1 reset must exist");
         let trap_pos = shim
             .find("trap '_shax_preexec' DEBUG")
@@ -2097,6 +2127,121 @@ mod tests {
             !is_phantom,
             "the captured block is a distro-helper phantom, not the user's `true` — \
              the FUNCNAME guard isn't firing. cmd = {cmd:?}"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// Regression test for the "vi sub-mode chip doesn't show on
+    /// Linux" bug. bash is the default shell on Ubuntu / Fedora, and
+    /// before this fix `shax.bash` did `set -o vi` for vi-preferring
+    /// users but emitted no OSC 133;M markers on mode transitions —
+    /// so the statusbar's INSERT / NORMAL chip stayed dark. The fix
+    /// is readline's `vi-{ins,cmd}-mode-string` vars, which prepend
+    /// zero-width strings to the prompt line on each mode change; we
+    /// wrap our OSC 133;M in `\1…\2` so readline treats them as
+    /// invisible and doesn't shift the cursor.
+    ///
+    /// The test spawns bash with SHAX_LINE_EDITING=vi, sends `\e`
+    /// (Esc → NORMAL) then `i` (→ INSERT), and asserts we see both
+    /// KeymapChanged events with the zsh-parity keymap names.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_emits_osc133m_on_vi_mode_transitions() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash vi-mode test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Empty HOME so no user rc perturbs the test. SHAX_LINE_EDITING
+        // is what the shim's assertive block reads to pick vi vs emacs.
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+        env.insert("SHAX_LINE_EDITING".into(), "vi".into());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        // Let bash finish sourcing the shim and draw its first prompt
+        // (which fires the initial vi-ins-mode-string emission). Drain
+        // the event queue so subsequent assertions only see the events
+        // we care about.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Esc → readline switches viins → vicmd, redraws the prompt,
+        // and prints the vi-cmd-mode-string which carries our
+        // OSC 133;M;vicmd marker. IMPORTANT: bash's readline waits
+        // `keyseq-timeout` (500ms default) after Esc before deciding
+        // it's a standalone Esc versus the start of an escape
+        // sequence like `\e[A`. Until that timeout expires, the mode
+        // redraw doesn't fire. Real users can shorten this with
+        // `set keyseq-timeout 25` in their inputrc; the test just
+        // waits the timeout out.
+        manager
+            .write(id, &B64.encode(b"\x1b"))
+            .await
+            .expect("write esc");
+
+        // Give bash the full escape-sequence timeout plus slack, then
+        // scan the event queue. The deadline of 1.5s covers 500ms
+        // keyseq-timeout + ~1s of margin for slow CI runners.
+        let mut got_vicmd = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::KeymapChanged { keymap })) if keymap == "vicmd" => {
+                    got_vicmd = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            got_vicmd,
+            "expected KeymapChanged {{ keymap: \"vicmd\" }} after Esc — the bash \
+             shim's vi-cmd-mode-string isn't emitting OSC 133;M"
+        );
+
+        // `i` → back to insert (viins). No keyseq-timeout concern here
+        // since `i` isn't the start of any escape sequence, so the
+        // redraw fires immediately.
+        manager.write(id, &B64.encode(b"i")).await.expect("write i");
+        let mut got_viins = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(800);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::KeymapChanged { keymap })) if keymap == "viins" => {
+                    got_viins = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            got_viins,
+            "expected KeymapChanged {{ keymap: \"viins\" }} after `i` — the bash \
+             shim's vi-ins-mode-string isn't emitting OSC 133;M"
         );
 
         manager.kill(id).await.expect("kill");
