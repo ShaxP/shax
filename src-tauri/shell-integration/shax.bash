@@ -272,6 +272,19 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
     bind 'set show-mode-in-prompt on' 2>/dev/null
     bind 'set vi-ins-mode-string "\1\e]133;M;viins\7\2"' 2>/dev/null
     bind 'set vi-cmd-mode-string "\1\e]133;M;vicmd\7\2"' 2>/dev/null
+
+    # Neutralise `v` in vi-command mode. Bash's default binding is
+    # `edit-and-execute-command`, which spawns `$VISUAL` / `$EDITOR`
+    # (`nano` on Ubuntu / Fedora) to edit the current line. Users
+    # coming from macOS + zsh (where zsh-vi-mode makes `v` enter
+    # visual mode) get a jarring editor pop-up they didn't ask for.
+    # Bash readline has no analog to zsh-vi-mode's visual mode; the
+    # cleanest option is a silent no-op via an empty macro binding,
+    # so pressing `v` in NORMAL does nothing rather than opening an
+    # editor. See the `fc -e "${VISUAL:-…}"` phantom-block bug
+    # report — the fix removes the source rather than trying to
+    # scrub the resulting command from the block stream.
+    bind -m vi-command '"v": ""' 2>/dev/null
   else
     # Emacs (default). Forces emacs even if the user's rc set vi mode.
     set -o emacs 2>/dev/null

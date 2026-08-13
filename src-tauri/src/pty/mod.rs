@@ -1658,6 +1658,19 @@ mod tests {
             shim.contains(r#"vi-cmd-mode-string "\1\e]133;M;vicmd\7\2""#),
             "shax.bash vi branch must set vi-cmd-mode-string to emit OSC 133;M;vicmd",
         );
+        // Bash vi-command mode binds `v` to `edit-and-execute-command`,
+        // which spawns $VISUAL / $EDITOR (nano on Ubuntu / Fedora).
+        // That's a jarring pop-up for users coming from macOS + zsh
+        // where `v` enters visual mode via zsh-vi-mode. We can't
+        // implement real visual mode on bash readline, so the shim
+        // silences `v` with an empty macro binding. See the
+        // `fc -e "${VISUAL:-…}"` phantom-block bug report on Linux.
+        assert!(
+            shim.contains(r#"bind -m vi-command '"v": ""'"#),
+            "shax.bash vi branch must neutralise `v` in vi-command keymap \
+             — bash's default `edit-and-execute-command` opens $EDITOR and \
+             surprises users expecting zsh-vi-mode-style visual mode",
+        );
         // ORDER CONSTRAINT (regression guard). The always-assertive block
         // must run BEFORE the DEBUG trap is installed. If the trap is
         // already in place when we run PS1=/PS2=/set -o, bash fires
@@ -2242,6 +2255,100 @@ mod tests {
             got_viins,
             "expected KeymapChanged {{ keymap: \"viins\" }} after `i` — the bash \
              shim's vi-ins-mode-string isn't emitting OSC 133;M"
+        );
+
+        manager.kill(id).await.expect("kill");
+    }
+
+    /// Regression test for the "pressing v in NORMAL mode spawns nano
+    /// and leaves a hanging `fc -e` block" bug on Linux (bash). Bash's
+    /// default `v` binding in vi-command keymap is
+    /// `edit-and-execute-command`, which spawns `$EDITOR` / `$VISUAL`
+    /// to edit the current line, then runs the edited command via
+    /// `fc -e $editor`. On Fedora / Ubuntu with `$EDITOR=nano`, users
+    /// expecting zsh-vi-mode-style visual mode instead got a nano
+    /// pop-up and, after exiting, a phantom `fc -e "${VISUAL:-…}"`
+    /// block that never completed. The shim neutralises `v` with an
+    /// empty macro so pressing it is a silent no-op — no editor
+    /// spawn, no `fc` command, no phantom block.
+    ///
+    /// The test: enter vi-command mode, press `v`, and confirm zero
+    /// `BlockStarted` events fire. Uses `$EDITOR=cat` in the environment
+    /// so that IF the fix regressed and `v` did trigger the editor,
+    /// the test would still terminate (cat with no input exits fast)
+    /// rather than hanging on a real interactive editor.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_v_in_normal_mode_is_a_silent_noop() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash v-in-normal test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+        env.insert("SHAX_LINE_EDITING".into(), "vi".into());
+        // Defensive: if the fix regressed and `v` reached
+        // edit-and-execute-command, we don't want the test to block
+        // on an interactive editor. `cat` with no stdin exits
+        // immediately.
+        env.insert("EDITOR".into(), "cat".into());
+        env.insert("VISUAL".into(), "cat".into());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Esc → vi-command mode (wait past readline's keyseq-timeout
+        // so the mode-transition redraw fires and Esc is settled).
+        manager
+            .write(id, &B64.encode(b"\x1b"))
+            .await
+            .expect("write esc");
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Now press `v`. With the fix, this is bound to an empty
+        // macro — zero terminal output, no command runs, no
+        // BlockStarted. Without the fix, bash would call
+        // edit-and-execute-command, which runs an fc invocation
+        // that our OSC 133 C machinery captures as a BlockStarted.
+        manager.write(id, &B64.encode(b"v")).await.expect("write v");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut starts: Vec<Option<String>> = Vec::new();
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(PtyEvent::BlockStarted { command, .. })) => starts.push(command),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            starts.is_empty(),
+            "pressing `v` in vi-command mode must not open an editor or run any \
+             command; saw BlockStarted events: {starts:?} — this is the Linux \
+             \"nano opens on v\" bug. The fix is `bind -m vi-command '\"v\": \"\"'` \
+             in shax.bash."
         );
 
         manager.kill(id).await.expect("kill");
