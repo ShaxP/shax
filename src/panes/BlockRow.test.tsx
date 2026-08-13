@@ -415,3 +415,42 @@ describe("BlockRow / multi-line command (M12.3)", () => {
     expect(screen.queryByTestId("block-output")).toBeNull();
   });
 });
+
+// ── M12.6a: syntax-highlighted block header ───────────────────────
+
+describe("BlockRow / syntax-highlighted command (M12.6a)", () => {
+  /** Find the leaf span (no child spans) whose textContent equals
+   *  `text`. Mirrors the helper in `CommandSpans.test.tsx` — we
+   *  filter to leaves so the wrapper `block-command` span (which
+   *  inherits the joined textContent from all its children) doesn't
+   *  match. */
+  function leafSpanColor(text: string): string | null {
+    return (
+      Array.from(document.querySelectorAll<HTMLSpanElement>("span")).find(
+        (s) => s.textContent === text && s.querySelector("span") === null,
+      )?.style.color || null
+    );
+  }
+
+  it("colours the command with the same --syntax-* palette as the prompt strip", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: 'git commit -m "hi"' })} />);
+    // `git`→command, `commit`→subcommand, `-m`→flag, `"hi"`→string.
+    // Same palette the prompt strip uses (both route through
+    // `CommandSpans`).
+    expect(leafSpanColor("git")).toBe("var(--syntax-command)");
+    expect(leafSpanColor("commit")).toBe("var(--syntax-subcommand)");
+    expect(leafSpanColor("-m")).toBe("var(--syntax-flag)");
+    expect(leafSpanColor('"hi"')).toBe("var(--syntax-string)");
+  });
+
+  it("keeps the (no command) fallback un-highlighted", () => {
+    render(<BlockRow pty="pty-1" block={makeBlock({ command: null })} />);
+    // The em with "(no command)" comes from a separate branch that
+    // doesn't route through the tokenizer.
+    const em = document.querySelector<HTMLElement>("em");
+    expect(em?.textContent).toBe("(no command)");
+    // The block-command span has no leaf child spans (only the em).
+    const spans = document.querySelectorAll<HTMLSpanElement>('[data-testid="block-command"] span');
+    expect(spans).toHaveLength(0);
+  });
+});

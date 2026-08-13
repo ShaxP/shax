@@ -34,6 +34,7 @@ import type {
   ClipboardEvent as ReactClipboardEvent,
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
+  ReactElement,
   Ref,
 } from "react";
 import { useAssistantDocked } from "../lib/AssistantDockContext";
@@ -43,7 +44,7 @@ import type { PromptLine, PromptRow } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
 import { ConfirmPasteModal } from "./ConfirmPasteModal";
 import { languageChip } from "./languageIcons";
-import { tokenize, type SyntaxKind } from "./promptSyntax";
+import { CommandSpans } from "./CommandSpans";
 
 const TEXT_ENCODER = new TextEncoder();
 
@@ -250,138 +251,22 @@ const CURSOR_BAR: CSSProperties = {
   marginLeft: 1,
 };
 
-const STYLED_TEXT: CSSProperties = {
-  color: "var(--fg-faint)",
-};
-
-/** M12.2: selected cells (mark/region in vi visual or emacs Ctrl-Space)
- *  are painted with an accent background so the user can see what will
- *  be operated on. The shell already broadcasts the selection via SGR 7
- *  (reverse video) — the mirror renderer captures it as the per-cell
- *  `selected` bit, and this style is applied to any run whose cells
- *  carry it. Kept to a soft accent tone so it doesn't compete with
- *  attention going to the cursor. */
-const SELECTED_TEXT: CSSProperties = {
-  background: "var(--accent-soft)",
-  color: "var(--fg)",
-  borderRadius: 2,
-};
-
-interface StyledRun {
-  text: string;
-  styled: boolean;
-  selected: boolean;
-  /** M12.5 shell-syntax kind, from `promptSyntax.tokenize`. `null`
-   *  means "plain text" (either the tokenizer marked it as `text` or
-   *  it threw and we fell back to monochrome). */
-  syntaxKind: SyntaxKind | null;
-}
-
 /**
- * Per-character syntax kind array. Empty on tokenizer failure, or when
- * the row's text is empty — both cases render as monochrome (see
- * `styledRuns`).
+ * Render helper: slice `row.text` / `.styled` / `.selected` at
+ * `endCol` and pass through `<CommandSpans>`. Used twice per row —
+ * once for the pre-cursor half and once for the post-cursor half —
+ * so the cursor bar can sit between them in document order.
+ *
+ * The tokenizer, styled-runs grouping, and colour selection all
+ * live in `CommandSpans` now (M12.6a). This function just handles
+ * the cursor-split slicing so the strip's row layout stays
+ * self-contained.
  */
-function syntaxPerChar(text: string): (SyntaxKind | null)[] {
-  if (text.length === 0) return [];
-  const out: (SyntaxKind | null)[] = new Array<SyntaxKind | null>(text.length).fill(null);
-  try {
-    for (const tok of tokenize(text)) {
-      const kind = tok.kind === "text" ? null : tok.kind;
-      for (let i = tok.start; i < tok.end && i < text.length; i++) {
-        out[i] = kind;
-      }
-    }
-  } catch {
-    // Fidelity contract: any tokenizer throw drops the whole row back
-    // to monochrome. Never break input rendering because a highlighter
-    // hit an unexpected shape.
-    return new Array<SyntaxKind | null>(text.length).fill(null);
-  }
-  return out;
-}
-
-/**
- * Group consecutive characters that share all three axes
- * (styled + selected + syntaxKind) into runs. Empty input → empty
- * array. `styled` / `selected` arrays are assumed same length as
- * `text`; mismatches fall back to treating extra chars as unstyled +
- * unselected.
- */
-function styledRuns(text: string, styled: boolean[], selected: boolean[]): StyledRun[] {
-  if (text.length === 0) return [];
-  const syntax = syntaxPerChar(text);
-  const runs: StyledRun[] = [];
-  let runText = "";
-  let runStyled = styled[0] ?? false;
-  let runSelected = selected[0] ?? false;
-  let runSyntax = syntax[0] ?? null;
-  for (let i = 0; i < text.length; i++) {
-    const s = styled[i] ?? false;
-    const sel = selected[i] ?? false;
-    const syn = syntax[i] ?? null;
-    if (s !== runStyled || sel !== runSelected || syn !== runSyntax) {
-      runs.push({
-        text: runText,
-        styled: runStyled,
-        selected: runSelected,
-        syntaxKind: runSyntax,
-      });
-      runText = "";
-      runStyled = s;
-      runSelected = sel;
-      runSyntax = syn;
-    }
-    runText += text.charAt(i);
-  }
-  if (runText.length > 0) {
-    runs.push({
-      text: runText,
-      styled: runStyled,
-      selected: runSelected,
-      syntaxKind: runSyntax,
-    });
-  }
-  return runs;
-}
-
-/**
- * Map a syntax kind to its CSS color variable. `null` (plain text /
- * tokenizer failure) yields no color override so the run renders in
- * the ambient `--fg`.
- */
-function syntaxColor(kind: SyntaxKind | null): string | undefined {
-  switch (kind) {
-    case "command":
-      return "var(--syntax-command)";
-    case "subcommand":
-      return "var(--syntax-subcommand)";
-    case "flag":
-      return "var(--syntax-flag)";
-    case "operator":
-      return "var(--syntax-operator)";
-    case "string":
-      return "var(--syntax-string)";
-    case "variable":
-      return "var(--syntax-variable)";
-    case "comment":
-      return "var(--syntax-comment)";
-    default:
-      return undefined;
-  }
-}
-
-/** Compose the three per-run flags into an inline style. Precedence
- *  (per spec §18 M12.5):
- *    selected (accent background) > styled (ghost-text dim) > syntax color.
- *  Selected wins because the background bar needs foreground contrast;
- *  dim wins over syntax because autosuggestion ghost text must stay
- *  visibly-secondary regardless of what the tokenizer paints it as. */
-function runStyle(run: StyledRun): CSSProperties | undefined {
-  if (run.selected) return SELECTED_TEXT;
-  if (run.styled) return STYLED_TEXT;
-  const color = syntaxColor(run.syntaxKind);
-  return color === undefined ? undefined : { color };
+function rowSpans(row: PromptRow, startCol: number, endCol: number): ReactElement {
+  const text = row.text.slice(startCol, endCol);
+  const styled = row.styled.slice(startCol, endCol);
+  const selected = row.selected.slice(startCol, endCol);
+  return <CommandSpans text={text} styled={styled} selected={selected} />;
 }
 
 function PromptStripInner(
@@ -554,18 +439,11 @@ function PromptRowView({
   const langChip = languageChip(language);
   const showAhead = gitAhead !== null && gitAhead > 0;
   const showBehind = gitBehind !== null && gitBehind > 0;
-  const beforeText = cursorCol !== null ? row.text.slice(0, cursorCol) : row.text;
-  const afterText = cursorCol !== null ? row.text.slice(cursorCol) : "";
-  const beforeRuns = styledRuns(
-    beforeText,
-    row.styled.slice(0, beforeText.length),
-    row.selected.slice(0, beforeText.length),
-  );
-  const afterRuns = styledRuns(
-    afterText,
-    row.styled.slice(beforeText.length),
-    row.selected.slice(beforeText.length),
-  );
+  // Split around the cursor so the CURSOR_BAR sits between the two
+  // halves in document order. `CommandSpans` (M12.6a) handles the
+  // tokenizer + colour selection for each half; the strip just
+  // handles the slicing here.
+  const splitCol = cursorCol ?? row.text.length;
   return (
     <div style={ROW} data-testid={`prompt-row-${rowIdx}`}>
       <span style={{ ...META_GROUP, ...chromeStyle }}>
@@ -629,21 +507,11 @@ function PromptRowView({
       </span>
       <span style={LINE_AREA} data-testid={isFirst ? "prompt-line" : undefined} data-row={rowIdx}>
         <span data-testid={isFirst ? "prompt-line-text" : undefined}>
-          {beforeRuns.map((run, idx) => (
-            <span key={`before-${idx}`} style={runStyle(run)}>
-              {run.text}
-            </span>
-          ))}
+          {rowSpans(row, 0, splitCol)}
         </span>
         {cursorCol !== null && <span style={CURSOR_BAR} data-testid="prompt-cursor" />}
         {row.text.length > 0 || cursorCol !== null ? (
-          <span>
-            {afterRuns.map((run, idx) => (
-              <span key={`after-${idx}`} style={runStyle(run)}>
-                {run.text}
-              </span>
-            ))}
-          </span>
+          <span>{rowSpans(row, splitCol, row.text.length)}</span>
         ) : null}
         {showPlaceholder && (
           <span style={LINE_TEXT_PLACEHOLDER}>
