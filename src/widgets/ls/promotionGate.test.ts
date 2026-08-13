@@ -42,13 +42,28 @@ describe("ls promotionGate", () => {
     expect(isWidgetPromotable(["ls", "-laF"])).toBe(false);
   });
 
+  // Regression: Fedora / Ubuntu ship `alias ls='ls --color=auto'`
+  // in their default rc files. Rejecting that alias silently
+  // degraded every Linux user's ls to the non-interactive
+  // formatter — "renders perfectly but can't navigate."
+  it("promotes --color and all of its --color=WHEN variants", () => {
+    expect(isWidgetPromotable(["ls", "--color"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "--color=auto"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "--color=always"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "--color=never"])).toBe(true);
+    // Novel/unknown values still promote — the widget probes the
+    // filesystem, so the value never reaches our render.
+    expect(isWidgetPromotable(["ls", "--color=tty"])).toBe(true);
+    // Combined with other accepted flags — still promotes.
+    expect(isWidgetPromotable(["ls", "-la", "--color=auto"])).toBe(true);
+  });
+
   it("rejects unknown long flags", () => {
-    expect(isWidgetPromotable(["ls", "--color=always"])).toBe(false);
     expect(isWidgetPromotable(["ls", "--sort=size"])).toBe(false);
     expect(isWidgetPromotable(["ls", "--group-directories-first"])).toBe(false);
   });
 
   it("rejects when any single arg trips the killswitch", () => {
-    expect(isWidgetPromotable(["ls", "-a", "--color=always"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "-a", "--sort=size"])).toBe(false);
   });
 });
