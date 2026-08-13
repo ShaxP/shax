@@ -84,7 +84,11 @@
   font-size: 0.92em;
   padding: 0 4px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  /* Theme-aware surface (M12.6c fix): the earlier
+   * `rgba(255,255,255,0.08)` overlay was invisible on the
+   * light-theme pane; `--surface` yields a subtle warm off-white
+   * in light mode and a low-contrast dark tint in dark mode. */
+  background: var(--surface);
 }
 
 .chat-markdown pre {
@@ -93,7 +97,13 @@
   font-size: var(--font-size-secondary);
   padding: 6px 8px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.35);
+  /* Theme-aware surface (M12.6c fix): the earlier
+   * `rgba(0,0,0,0.35)` overlay was very dark on the light-theme
+   * pane, hurting comment / syntax legibility. `--surface` is a
+   * super-light warm grey in light mode and a subtle dark surface
+   * in dark mode — matches the app's surface hierarchy without
+   * per-mode overrides. */
+  background: var(--surface);
   overflow-x: auto;
   white-space: pre;
   line-height: 1.35;
@@ -104,6 +114,38 @@
   padding: 0;
   font-size: inherit;
   border-radius: 0;
+}
+
+/*
+ * M12.6c: shell fences (```bash, ```sh, ```shell, ```zsh) render
+ * with these Shax-specific syntax classes instead of hljs's
+ * `hljs-*` classes. Same `--syntax-*` theme tokens the prompt
+ * strip / block header / search overlay use — every command-
+ * rendering surface reaches the same palette.
+ *
+ * Class-based (not inline styles) so the output survives the
+ * chat sanitiser's `style` attribute stripping.
+ */
+.chat-markdown .shax-syntax-command {
+  color: var(--syntax-command);
+}
+.chat-markdown .shax-syntax-subcommand {
+  color: var(--syntax-subcommand);
+}
+.chat-markdown .shax-syntax-flag {
+  color: var(--syntax-flag);
+}
+.chat-markdown .shax-syntax-operator {
+  color: var(--syntax-operator);
+}
+.chat-markdown .shax-syntax-string {
+  color: var(--syntax-string);
+}
+.chat-markdown .shax-syntax-variable {
+  color: var(--syntax-variable);
+}
+.chat-markdown .shax-syntax-comment {
+  color: var(--syntax-comment);
 }
 
 .chat-markdown blockquote {

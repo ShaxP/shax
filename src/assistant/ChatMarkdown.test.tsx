@@ -68,3 +68,101 @@ describe("ChatMarkdown", () => {
     expect(screen.getByTestId("chat-markdown")).toBeInTheDocument();
   });
 });
+
+// ── M12.6c: shell fences route through the Shax tokenizer ─────────
+
+describe("ChatMarkdown / shell fences (M12.6c)", () => {
+  /** All four aliases the interceptor recognises should behave
+   *  identically. Parametrised so a regression in one language
+   *  registration shows up as one specific failure, not four. */
+  const SHELL_ALIASES = ["bash", "sh", "shell", "zsh"] as const;
+
+  for (const lang of SHELL_ALIASES) {
+    it(`\`\`\`${lang} fences render with shax-syntax-* classes, not hljs`, () => {
+      render(<ChatMarkdown text={`\`\`\`${lang}\ngit commit -m "hi"\n\`\`\``} />);
+      const host = screen.getByTestId("chat-markdown");
+      const code = host.querySelector("pre code");
+      expect(code).not.toBeNull();
+      // Shax classes present.
+      expect(code?.querySelector(".shax-syntax-command")?.textContent).toBe("git");
+      expect(code?.querySelector(".shax-syntax-subcommand")?.textContent).toBe("commit");
+      expect(code?.querySelector(".shax-syntax-flag")?.textContent).toBe("-m");
+      expect(code?.querySelector(".shax-syntax-string")?.textContent).toBe('"hi"');
+      // hljs classes absent — the interceptor bypassed hljs for
+      // this fence.
+      expect(code?.querySelector('[class*="hljs-"]')).toBeNull();
+    });
+  }
+
+  it("non-shell fences (e.g. rust) still use hljs classes", () => {
+    render(<ChatMarkdown text={"```rust\nlet x: u32 = 1;\n```"} />);
+    const host = screen.getByTestId("chat-markdown");
+    const code = host.querySelector("pre code");
+    expect(code).not.toBeNull();
+    // hljs classes present for rust.
+    expect(code?.querySelector('[class*="hljs-"]')).not.toBeNull();
+    // Shax syntax classes absent — the interceptor left hljs
+    // alone for non-shell languages.
+    expect(code?.querySelector('[class*="shax-syntax-"]')).toBeNull();
+  });
+
+  it("mixed shell + rust in the same message: each fence uses its own renderer", () => {
+    const md = "```bash\nls -la\n```\n\n```rust\nlet x = 1;\n```";
+    render(<ChatMarkdown text={md} />);
+    const host = screen.getByTestId("chat-markdown");
+    const codes = host.querySelectorAll("pre code");
+    expect(codes).toHaveLength(2);
+    // First code block is bash → Shax classes.
+    expect(codes[0]?.querySelector(".shax-syntax-command")?.textContent).toBe("ls");
+    expect(codes[0]?.querySelector('[class*="hljs-"]')).toBeNull();
+    // Second is rust → hljs classes.
+    expect(codes[1]?.querySelector('[class*="hljs-"]')).not.toBeNull();
+    expect(codes[1]?.querySelector('[class*="shax-syntax-"]')).toBeNull();
+  });
+
+  it("unfenced inline `code` stays plain (no shell interception)", () => {
+    render(<ChatMarkdown text="Try `git status` for details." />);
+    const host = screen.getByTestId("chat-markdown");
+    // Inline code has no `language-*` class, so the interceptor's
+    // regex doesn't match and it renders as a plain <code>.
+    const code = host.querySelector("code");
+    expect(code?.textContent).toBe("git status");
+    expect(code?.querySelector('[class*="shax-syntax-"]')).toBeNull();
+    expect(code?.querySelector('[class*="hljs-"]')).toBeNull();
+  });
+
+  it("unknown language (e.g. `foo`) falls through to hljs (auto-detect)", () => {
+    // rehype-highlight auto-detects language when the fence tag
+    // isn't a registered one. Behaviour depends on hljs's picker;
+    // the guarantee that matters here is we DON'T route unknown
+    // languages through our shell tokenizer.
+    render(<ChatMarkdown text={"```foo\nsome text\n```"} />);
+    const host = screen.getByTestId("chat-markdown");
+    const code = host.querySelector("pre code");
+    expect(code?.querySelector('[class*="shax-syntax-"]')).toBeNull();
+  });
+
+  it("multi-line shell fence: each line tokenizes with its own segment", () => {
+    // The tokenizer treats `\n` as a segment reset (M12.5 spec),
+    // so `echo` on line 2 gets `command` color despite being
+    // preceded by `ls` on line 1.
+    render(<ChatMarkdown text={"```bash\nls -la\necho done\n```"} />);
+    const host = screen.getByTestId("chat-markdown");
+    const commands = host.querySelectorAll("pre code .shax-syntax-command");
+    const commandTexts = Array.from(commands).map((el) => el.textContent);
+    expect(commandTexts).toContain("ls");
+    expect(commandTexts).toContain("echo");
+  });
+
+  it("fidelity fallback: an unbalanced quote still renders the fence", () => {
+    // The tokenizer never throws (M12.5 contract), but even if
+    // it did, `renderShellSpans` catches and returns raw text.
+    // Regardless: the fence must render its content, even if
+    // colouring degrades to monochrome.
+    render(<ChatMarkdown text={'```bash\necho "unterminated\n```'} />);
+    const host = screen.getByTestId("chat-markdown");
+    const code = host.querySelector("pre code");
+    // The raw text is present regardless of colouring.
+    expect(code?.textContent).toContain('echo "unterminated');
+  });
+});
