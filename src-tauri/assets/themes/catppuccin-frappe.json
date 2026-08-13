@@ -1,6 +1,6 @@
 {
   "id": "catppuccin-frappe",
-  "name": "Catppuccin Frappé",
+  "name": "Catppuccin Frapp\u00e9",
   "mode": "dark",
   "source": "https://github.com/catppuccin/catppuccin",
   "license": "MIT",
@@ -58,7 +58,12 @@
     "builtin": "#e5c890",
     "name": "#e78284",
     "title": "#8caaee",
-    "type": "#e5c890"
+    "type": "#e5c890",
+    "command": "#8caaee",
+    "subcommand": "#81c8be",
+    "flag": "#e5c890",
+    "variable": "#e78284",
+    "operator": "#ca9ee6"
   },
   "warning": "#e78284",
   "caution": "#e5c890",

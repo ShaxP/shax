@@ -79,10 +79,15 @@ pub struct AnsiPalette {
 }
 
 /// Syntax-highlighting colours applied to the CodeMirror
-/// file viewer (`06`) and to `highlight.js` output inside
-/// the assistant dock and markdown viewer. Names track the
-/// hljs token kinds `src/theme/syntax.css` already targets
-/// so the M10.2 CSS injection is a one-to-one mapping.
+/// file viewer (`06`), `highlight.js` output inside the
+/// assistant dock and markdown viewer, AND (M12.5) the
+/// prompt-strip's live tokenizer. hljs-style names cover
+/// the editor cases; the five `command` / `subcommand` /
+/// `flag` / `variable` / `operator` fields carry the shell-
+/// specific kinds the prompt tokenizer emits. `string` and
+/// `comment` are reused across both surfaces so a green
+/// string in a Rust file matches a green quoted arg in
+/// the prompt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyntaxPalette {
     pub comment: String,
@@ -95,6 +100,19 @@ pub struct SyntaxPalette {
     pub title: String,
     #[serde(rename = "type")]
     pub type_: String,
+    // ── Prompt-strip shell tokenizer (M12.5) ────────────────
+    /// The first word on a compound (`ls`, `git`, `echo`).
+    pub command: String,
+    /// The second word when the first is a known multi-tool
+    /// (`git commit`, `docker run`).
+    pub subcommand: String,
+    /// Any word starting with `-` (`-la`, `--color=auto`).
+    pub flag: String,
+    /// `$name`, `${…}`, `$?`, `$0`..`$9`.
+    pub variable: String,
+    /// Pipeline / redirect / grouping glyphs — `|`, `&&`,
+    /// `||`, `;`, `>`, `>>`, `<`, `<<`, `(`, `)`.
+    pub operator: String,
 }
 
 /// A complete theme preset. `chrome` is a free-form

@@ -186,6 +186,12 @@ function writePresetToRoot(preset: Theme): void {
   root.setProperty("--syntax-name", s.name);
   root.setProperty("--syntax-title", s.title);
   root.setProperty("--syntax-type", s.type);
+  // M12.5 prompt-strip tokenizer kinds.
+  root.setProperty("--syntax-command", s.command);
+  root.setProperty("--syntax-subcommand", s.subcommand);
+  root.setProperty("--syntax-flag", s.flag);
+  root.setProperty("--syntax-variable", s.variable);
+  root.setProperty("--syntax-operator", s.operator);
   // xterm consumers read `--fg-terminal` / `--bg-terminal`
   // when a preset ships terminal-specific overrides distinct
   // from the chrome foreground / background. Kept aliased to

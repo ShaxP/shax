@@ -79,6 +79,12 @@ const DARK_PRESET: Theme = {
     name: "#e06c75",
     title: "#61aeee",
     type: "#d19a66",
+    // M12.5 prompt-strip tokenizer keys.
+    command: "#61aeee",
+    subcommand: "#56b6c2",
+    flag: "#e6c07b",
+    variable: "#e06c75",
+    operator: "#c678dd",
   },
   warning: "#f00",
   caution: "#ff0",

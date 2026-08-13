@@ -58,7 +58,12 @@
     "builtin": "#e6c07b",
     "name": "#e06c75",
     "title": "#61aeee",
-    "type": "#d19a66"
+    "type": "#d19a66",
+    "command": "#61aeee",
+    "subcommand": "#56b6c2",
+    "flag": "#e6c07b",
+    "variable": "#e06c75",
+    "operator": "#c678dd"
   },
   "warning": "#e05561",
   "caution": "#d4bf70",

@@ -58,7 +58,12 @@
     "builtin": "#88ff88",
     "name": "#66ff66",
     "title": "#66ff66",
-    "type": "#88ff88"
+    "type": "#88ff88",
+    "command": "#66ff66",
+    "subcommand": "#66ff66",
+    "flag": "#88ff88",
+    "variable": "#66ff66",
+    "operator": "#66ff66"
   },
   "warning": "#66ff66",
   "caution": "#66ff66",
