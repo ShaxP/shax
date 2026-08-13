@@ -109,6 +109,64 @@ describe("CommandSpans / precedence rules", () => {
   });
 });
 
+describe("CommandSpans / marks axis (M12.6b)", () => {
+  it("wraps marked ranges in a <mark> with the search-hit style", () => {
+    // Mark [0, 3) covers `git`. `commit` remains a plain span
+    // with subcommand color.
+    render(<CommandSpans text="git commit" marks={[[0, 3]]} />);
+    const marks = document.querySelectorAll<HTMLElement>("mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe("git");
+    expect(marks[0]?.style.background).toBe("var(--accent-soft)");
+    // The unmarked portion still gets its syntax color.
+    expect(colorOfSpan("commit")).toBe("var(--syntax-subcommand)");
+  });
+
+  it("marks win over syntax color (mark background + --fg foreground)", () => {
+    // `git` would be `--syntax-command` without a mark; with the
+    // mark, foreground is `--fg` and background is `--accent-soft`.
+    render(<CommandSpans text="git" marks={[[0, 3]]} />);
+    const mark = document.querySelector<HTMLElement>("mark");
+    expect(mark?.style.color).toBe("var(--fg)");
+    expect(mark?.style.background).toBe("var(--accent-soft)");
+  });
+
+  it("overlapping mark ranges collapse to a single marked run", () => {
+    // [0, 3) and [2, 5) overlap on index 2; the OR-across-marks
+    // handling produces a single continuous marked run [0, 5).
+    // Uses `hellox` (one syntax token, no boundary inside) so the
+    // run grouping doesn't split on kind change.
+    render(
+      <CommandSpans
+        text="hellox"
+        marks={[
+          [0, 3],
+          [2, 5],
+        ]}
+      />,
+    );
+    const marks = document.querySelectorAll<HTMLElement>("mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe("hello");
+  });
+
+  it("empty marks array = no <mark>s, syntax-only rendering", () => {
+    render(<CommandSpans text="git commit" marks={[]} />);
+    expect(document.querySelectorAll<HTMLElement>("mark")).toHaveLength(0);
+    expect(colorOfSpan("git")).toBe("var(--syntax-command)");
+    expect(colorOfSpan("commit")).toBe("var(--syntax-subcommand)");
+  });
+
+  it("out-of-range indices are clamped", () => {
+    // `[10, 100)` extends past the 3-char text; the mark clamps
+    // to length and covers nothing (no chars in [10, 3)).
+    render(<CommandSpans text="git" marks={[[10, 100]]} />);
+    expect(document.querySelectorAll<HTMLElement>("mark")).toHaveLength(0);
+    // Syntax color still applies to the unmarked run.
+    expect(colorOfSpan("git")).toBe("var(--syntax-command)");
+  });
+});
+
 describe("CommandSpans / omitted axis arrays", () => {
   it("styled and selected default to all-false when omitted", () => {
     // BlockRow / search-snippet callers pass text only; the

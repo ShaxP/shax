@@ -33,6 +33,7 @@ import {
 } from "../lib/ipc";
 import type { EmbeddingProgress, SearchHit, SearchStatus, SemanticHit } from "../lib/ipc";
 import { formatDuration, formatTimestamp } from "./blockFormat";
+import { CommandSpans } from "./CommandSpans";
 
 export interface SearchOverlayProps {
   /** Caller closes the overlay (Esc or backdrop click). */
@@ -388,31 +389,38 @@ function statusColor(b: SearchHit["block"]): string {
 }
 
 /**
- * Highlight every occurrence of every query token inside the command
- * string. We don't get a backend snippet for the command line — the
- * FTS5 `snippet()` call targets the output column — so the frontend
- * does its own pass. Tokens are split on whitespace; trailing `*`
- * (FTS prefix wildcard) and surrounding quotes are stripped so the
- * highlight matches what the index matched. Case-insensitive, with
- * overlapping ranges merged so we never emit nested `<mark>`s. Empty
- * query short-circuits to the raw string.
+ * Compute half-open `[start, end)` mark ranges for every occurrence
+ * of every query token inside the command string. Tokens are split
+ * on whitespace; trailing `*` (FTS prefix wildcard) and surrounding
+ * quotes are stripped so the highlight matches what the index
+ * matched. Case-insensitive, with overlapping ranges merged so
+ * `CommandSpans` doesn't have to.
+ *
+ * M12.6b: this replaces the previous inline `<mark>` renderer —
+ * the mark overlay is now an axis inside `CommandSpans` (alongside
+ * syntax coloring and the mirror renderer's styled/selected bits),
+ * so both syntax colours AND hit highlights coexist on the same
+ * command line. Precedence (mark > syntax) is handled in
+ * `CommandSpans`'s `runStyle`.
+ *
+ * Returns an empty array on empty query or zero hits, which `<CommandSpans
+ * marks={[]}>` renders as plain syntax-only.
  */
-function highlightCommand(command: string, query: string): ReactNode {
+function commandMarkRanges(command: string, query: string): [number, number][] {
   const trimmed = query.trim();
-  if (trimmed.length === 0) return command;
+  if (trimmed.length === 0) return [];
   const tokens = trimmed
     .replace(/"([^"]+)"/g, "$1")
     .split(/\s+/)
     .map((t) => t.replace(/\*+$/, ""))
     .filter((t) => t.length > 0);
-  if (tokens.length === 0) return command;
+  if (tokens.length === 0) return [];
   const lower = command.toLowerCase();
   const ranges: Array<[number, number]> = [];
   for (const tok of tokens) {
     const needle = tok.toLowerCase();
     if (needle.length === 0) continue;
     let from = 0;
-    // Scan all matches for this token; bail if `indexOf` returns -1.
     while (true) {
       const idx = lower.indexOf(needle, from);
       if (idx === -1) break;
@@ -420,7 +428,7 @@ function highlightCommand(command: string, query: string): ReactNode {
       from = idx + needle.length;
     }
   }
-  if (ranges.length === 0) return command;
+  if (ranges.length === 0) return [];
   ranges.sort((a, b) => a[0] - b[0]);
   const merged: Array<[number, number]> = [];
   for (const r of ranges) {
@@ -431,19 +439,7 @@ function highlightCommand(command: string, query: string): ReactNode {
       merged.push([r[0], r[1]]);
     }
   }
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  merged.forEach(([s, e], i) => {
-    if (s > cursor) parts.push(command.slice(cursor, s));
-    parts.push(
-      <mark key={i} style={MARK_STYLE}>
-        {command.slice(s, e)}
-      </mark>,
-    );
-    cursor = e;
-  });
-  if (cursor < command.length) parts.push(command.slice(cursor));
-  return parts;
+  return merged;
 }
 
 /**
@@ -1301,7 +1297,11 @@ function SearchResultRow({
       <div style={COMMAND_LINE}>
         <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
         <span style={COMMAND_TEXT}>
-          {block.command !== null ? highlightCommand(block.command, query) : "(no command)"}
+          {block.command !== null ? (
+            <CommandSpans text={block.command} marks={commandMarkRanges(block.command, query)} />
+          ) : (
+            "(no command)"
+          )}
         </span>
         {hit.fuzzy === true && (
           <span
@@ -1446,7 +1446,11 @@ function SemanticResultRow({
       <div style={COMMAND_LINE}>
         <span style={{ color: statusColor(block), flexShrink: 0 }}>{statusGlyph(block)}</span>
         <span style={COMMAND_TEXT}>
-          {block.command !== null ? highlightCommand(block.command, query) : "(no command)"}
+          {block.command !== null ? (
+            <CommandSpans text={block.command} marks={commandMarkRanges(block.command, query)} />
+          ) : (
+            "(no command)"
+          )}
         </span>
         <span
           data-testid="search-result-similarity"

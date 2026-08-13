@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { gitBranches, type GitBranch } from "../../../lib/ipc";
 import { shellEscape } from "../../../lib/shellEscape";
+import { CommandSpans } from "../../../panes/CommandSpans";
 import type { PaneContext } from "../../registry";
 import {
   ERROR_BOX,
@@ -294,7 +295,11 @@ export function GitRebasePanel({ ctx, onSubmit }: GitRebasePanelProps): React.Re
       {preview.length > 0 && (
         <div style={PREVIEW}>
           <div style={PREVIEW_LABEL}>Preview — destructive; safety gate confirms again</div>
-          <div data-testid="palette-git-rebase-preview">{preview}</div>
+          {/* M12.6b: syntax-highlight the preview so the panel
+              matches other command-rendering surfaces. */}
+          <div data-testid="palette-git-rebase-preview">
+            <CommandSpans text={preview} />
+          </div>
         </div>
       )}
 
