@@ -40,6 +40,7 @@ import { hasDistinctSource } from "../viewer/ContentView";
 import { detectContentType } from "../viewer/detectContentType";
 import { formatDuration, formatTimestamp } from "./blockFormat";
 import type { UiBlock } from "./blockReducer";
+import { CommandSpans } from "./CommandSpans";
 import "./BlockRow.css";
 
 const TEXT_DECODER = new TextDecoder();
@@ -293,7 +294,11 @@ function CommandText({ command }: { command: string | null }): React.ReactElemen
         minWidth: 0,
       }}
     >
-      {visible}
+      {/* M12.6a: syntax-highlight the command via the shared
+          CommandSpans component. Same tokenizer + palette as the
+          prompt strip; text-only call (no styled/selected axes) —
+          block headers show committed commands, not live edits. */}
+      <CommandSpans text={visible} />
       {shouldCollapse && (
         <>
           {"\n"}

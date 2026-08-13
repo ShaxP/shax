@@ -614,15 +614,16 @@ describe("PromptStrip / chrome enrichment (M12.4)", () => {
   });
 });
 
-// ── M12.5 syntax highlighting ─────────────────────────────────────
+// ── M12.5 / M12.6a syntax highlighting integration ────────────────
+//
+// The render-behaviour tests (kind → color mapping, precedence rules,
+// fidelity fallback) moved to `CommandSpans.test.tsx` in M12.6a when
+// the render logic was extracted. What stays here is a single
+// integration check that the composition still works — the strip
+// wires row text through `CommandSpans` correctly, and the cursor
+// split doesn't fracture syntax coloring on either side.
 
-describe("PromptStrip / syntax highlighting (M12.5)", () => {
-  /** Find the leaf span (no child spans) whose textContent equals
-   *  `text`, and return its inline `color` — that's the run-level
-   *  style applied by `runStyle`. Wrapper spans upstream inherit
-   *  the same textContent from their children, so filtering to
-   *  leaves is how we pin the actual styled run without depending
-   *  on DOM tree depth. `null` when nothing matches. */
+describe("PromptStrip / syntax highlighting integration (M12.6a)", () => {
   function leafSpan(text: string): HTMLSpanElement | null {
     return (
       Array.from(document.querySelectorAll<HTMLSpanElement>("span")).find(
@@ -630,71 +631,26 @@ describe("PromptStrip / syntax highlighting (M12.5)", () => {
       ) ?? null
     );
   }
-  function colorOfSpanContaining(text: string): string | null {
-    return leafSpan(text)?.style.color || null;
-  }
 
-  it("paints a bare command with --syntax-command", () => {
-    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
-    expect(colorOfSpanContaining("ls")).toBe("var(--syntax-command)");
-  });
-
-  it("paints a subcommand of a multi-tool with --syntax-subcommand", () => {
-    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("git commit")} onInput={noop} />);
-    expect(colorOfSpanContaining("git")).toBe("var(--syntax-command)");
-    expect(colorOfSpanContaining("commit")).toBe("var(--syntax-subcommand)");
-  });
-
-  it("paints flags, strings, variables, and operators", () => {
+  it("wires row text through CommandSpans on both sides of the cursor", () => {
+    // With a mid-line cursor, `git` sits before and `commit` sits
+    // after. Both halves independently tokenize (from their own
+    // segment-start), so both `git` and `commit` should reach the
+    // matching --syntax-* colours.
     render(
       <PromptStrip
         cwd="/tmp"
         branch="main"
-        line={singleRow('echo -n $HOME | grep "hi"')}
+        line={singleRow("git commit", { cursorCol: 4 })}
         onInput={noop}
       />,
     );
-    expect(colorOfSpanContaining("echo")).toBe("var(--syntax-command)");
-    expect(colorOfSpanContaining("-n")).toBe("var(--syntax-flag)");
-    expect(colorOfSpanContaining("$HOME")).toBe("var(--syntax-variable)");
-    expect(colorOfSpanContaining("|")).toBe("var(--syntax-operator)");
-    expect(colorOfSpanContaining("grep")).toBe("var(--syntax-command)");
-    expect(colorOfSpanContaining('"hi"')).toBe("var(--syntax-string)");
-  });
-
-  it("selection (SGR-7) wins over syntax color", () => {
-    // Mark every char selected; the selection background style
-    // takes precedence over any syntax color. `styledRuns` still
-    // splits runs on the syntax-kind axis (so `ls`, ` `, and `-la`
-    // are separate leaves), but each leaf inherits the SELECTED
-    // style rather than its syntax color.
-    const line = singleRow("ls -la", {
-      selected: [true, true, true, true, true, true],
-    });
-    render(<PromptStrip cwd="/tmp" branch="main" line={line} onInput={noop} />);
-    for (const text of ["ls", "-la"]) {
-      const span = leafSpan(text);
-      expect(span, `expected leaf span for ${text}`).not.toBeNull();
-      expect(span?.style.background).toBe("var(--accent-soft)");
-      // Selection foreground is `--fg` — never a syntax color.
-      expect(span?.style.color).toBe("var(--fg)");
-    }
-  });
-
-  it("styled (autosuggestion ghost) wins over syntax color", () => {
-    // Simulate zsh-autosuggestions ghost text: the shell painted
-    // it with a non-default fg SGR, so the mirror renderer sets
-    // `styled: true` for those cells. Even though the tokenizer
-    // would call `ls` a command, ghost text must render dim.
-    const line = singleRow("ls", { styled: [true, true] });
-    render(<PromptStrip cwd="/tmp" branch="main" line={line} onInput={noop} />);
-    expect(leafSpan("ls")?.style.color).toBe("var(--fg-faint)");
-  });
-
-  it("plain text (arg to a non-multi-tool command) gets no syntax color", () => {
-    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("echo hello")} onInput={noop} />);
-    // `hello` is a plain arg (echo isn't a multi-tool); no color
-    // override, so style.color is empty.
-    expect(colorOfSpanContaining("hello")).toBe(null);
+    expect(leafSpan("git")?.style.color).toBe("var(--syntax-command)");
+    expect(leafSpan("commit")?.style.color).toBe("var(--syntax-command)");
+    // Note: the "after" half re-tokenizes from its own start, so
+    // `commit` renders as a command (first word of its segment),
+    // not a subcommand — the split at the cursor is intentional
+    // and the visual matches the mirror renderer's own
+    // char-by-char state.
   });
 });
