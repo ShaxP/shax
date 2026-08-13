@@ -1828,6 +1828,36 @@ mod tests {
         }
     }
 
+    /// Whether the given bash binary understands `set show-mode-in-prompt`
+    /// (readline feature added in bash 4.3). macOS ships bash 3.2 as
+    /// `/bin/bash` permanently (GPL v3 licence), so vi-mode integration
+    /// tests need to skip cleanly on that host. Returns `false` on any
+    /// version-probe error to be conservative — if we can't tell, we
+    /// treat the shell as unsupported rather than run a test that will
+    /// spuriously fail.
+    #[cfg(unix)]
+    fn bash_supports_show_mode_in_prompt(bash: &str) -> bool {
+        let Ok(output) = std::process::Command::new(bash)
+            .args([
+                "-c",
+                "printf '%s.%s' \"${BASH_VERSINFO[0]}\" \"${BASH_VERSINFO[1]}\"",
+            ])
+            .output()
+        else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let Ok(text) = String::from_utf8(output.stdout) else {
+            return false;
+        };
+        let mut parts = text.trim().split('.');
+        let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        major > 4 || (major == 4 && minor >= 3)
+    }
+
     /// Spawn a real `bash -i` through the rcfile shim, run a command in a
     /// disposable cwd, and assert that a clean BlockCompleted with cwd
     /// from `shax.bash` arrives. This is the smallest end-to-end proof that
@@ -2165,6 +2195,19 @@ mod tests {
             eprintln!("skipping bash vi-mode test: bash not on PATH");
             return;
         };
+        // The shim's vi-mode emission uses readline's
+        // `show-mode-in-prompt` + `vi-{ins,cmd}-mode-string` vars,
+        // which arrived in bash 4.3 (2014). macOS ships bash 3.2
+        // permanently (GPL v3 licence issue), so the macos-15 CI
+        // runner's `/bin/bash` can't test this path — the shim's
+        // `bind 'set …' 2>/dev/null` silently no-ops on 3.2 and no
+        // OSC 133;M ever emits. Skip cleanly rather than fail; the
+        // ubuntu-latest and windows-latest CI legs (both bash 5+)
+        // still exercise the real path.
+        if !bash_supports_show_mode_in_prompt(&bash) {
+            eprintln!("skipping bash vi-mode test: {bash} is < 4.3, no show-mode-in-prompt");
+            return;
+        }
         let manager = Arc::new(PtyManager::new());
         set_global_manager(Arc::clone(&manager));
 
