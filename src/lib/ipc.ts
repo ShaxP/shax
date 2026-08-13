@@ -778,9 +778,14 @@ export interface TerminalPalette {
   ansi: AnsiPalette;
 }
 
-/** Syntax-highlighting colours consumed by the code viewer +
- *  hljs-rendered code fences. Names track the hljs token
- *  kinds so the CSS mapping in ThemeProvider stays one-to-one. */
+/** Syntax-highlighting colours consumed by the code viewer,
+ *  hljs-rendered code fences, and (M12.5) the prompt-strip's
+ *  live shell tokenizer. hljs-flavoured names cover the editor
+ *  side; `command`/`subcommand`/`flag`/`variable`/`operator`
+ *  carry the shell-specific kinds. `string` and `comment` are
+ *  shared across both so quoted-arg-in-prompt matches
+ *  string-in-Rust-file. Mirrors `SyntaxPalette` in
+ *  `src-tauri/src/themes.rs`. */
 export interface SyntaxPalette {
   comment: string;
   keyword: string;
@@ -791,6 +796,11 @@ export interface SyntaxPalette {
   name: string;
   title: string;
   type: string;
+  command: string;
+  subcommand: string;
+  flag: string;
+  variable: string;
+  operator: string;
 }
 
 /**

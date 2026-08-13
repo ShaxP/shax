@@ -43,6 +43,7 @@ import type { PromptLine, PromptRow } from "./promptRenderer";
 import { keyToBytes } from "./keyToBytes";
 import { ConfirmPasteModal } from "./ConfirmPasteModal";
 import { languageChip } from "./languageIcons";
+import { tokenize, type SyntaxKind } from "./promptSyntax";
 
 const TEXT_ENCODER = new TextEncoder();
 
@@ -270,43 +271,117 @@ interface StyledRun {
   text: string;
   styled: boolean;
   selected: boolean;
+  /** M12.5 shell-syntax kind, from `promptSyntax.tokenize`. `null`
+   *  means "plain text" (either the tokenizer marked it as `text` or
+   *  it threw and we fell back to monochrome). */
+  syntaxKind: SyntaxKind | null;
 }
 
 /**
- * Group consecutive characters that share both flags (styled + selected)
- * into runs. Empty input → empty array. Arrays are assumed to be the same
- * length as `text`; mismatches fall back to treating extra chars as
- * unstyled + unselected.
+ * Per-character syntax kind array. Empty on tokenizer failure, or when
+ * the row's text is empty — both cases render as monochrome (see
+ * `styledRuns`).
+ */
+function syntaxPerChar(text: string): (SyntaxKind | null)[] {
+  if (text.length === 0) return [];
+  const out: (SyntaxKind | null)[] = new Array<SyntaxKind | null>(text.length).fill(null);
+  try {
+    for (const tok of tokenize(text)) {
+      const kind = tok.kind === "text" ? null : tok.kind;
+      for (let i = tok.start; i < tok.end && i < text.length; i++) {
+        out[i] = kind;
+      }
+    }
+  } catch {
+    // Fidelity contract: any tokenizer throw drops the whole row back
+    // to monochrome. Never break input rendering because a highlighter
+    // hit an unexpected shape.
+    return new Array<SyntaxKind | null>(text.length).fill(null);
+  }
+  return out;
+}
+
+/**
+ * Group consecutive characters that share all three axes
+ * (styled + selected + syntaxKind) into runs. Empty input → empty
+ * array. `styled` / `selected` arrays are assumed same length as
+ * `text`; mismatches fall back to treating extra chars as unstyled +
+ * unselected.
  */
 function styledRuns(text: string, styled: boolean[], selected: boolean[]): StyledRun[] {
   if (text.length === 0) return [];
+  const syntax = syntaxPerChar(text);
   const runs: StyledRun[] = [];
   let runText = "";
   let runStyled = styled[0] ?? false;
   let runSelected = selected[0] ?? false;
+  let runSyntax = syntax[0] ?? null;
   for (let i = 0; i < text.length; i++) {
     const s = styled[i] ?? false;
     const sel = selected[i] ?? false;
-    if (s !== runStyled || sel !== runSelected) {
-      runs.push({ text: runText, styled: runStyled, selected: runSelected });
+    const syn = syntax[i] ?? null;
+    if (s !== runStyled || sel !== runSelected || syn !== runSyntax) {
+      runs.push({
+        text: runText,
+        styled: runStyled,
+        selected: runSelected,
+        syntaxKind: runSyntax,
+      });
       runText = "";
       runStyled = s;
       runSelected = sel;
+      runSyntax = syn;
     }
     runText += text.charAt(i);
   }
-  if (runText.length > 0) runs.push({ text: runText, styled: runStyled, selected: runSelected });
+  if (runText.length > 0) {
+    runs.push({
+      text: runText,
+      styled: runStyled,
+      selected: runSelected,
+      syntaxKind: runSyntax,
+    });
+  }
   return runs;
 }
 
-/** Compose the two per-run flags into an inline style. Selected wins the
- *  colour axis (the accent background needs contrast; dimming a selected
- *  run to `--fg-faint` would kill the point). */
+/**
+ * Map a syntax kind to its CSS color variable. `null` (plain text /
+ * tokenizer failure) yields no color override so the run renders in
+ * the ambient `--fg`.
+ */
+function syntaxColor(kind: SyntaxKind | null): string | undefined {
+  switch (kind) {
+    case "command":
+      return "var(--syntax-command)";
+    case "subcommand":
+      return "var(--syntax-subcommand)";
+    case "flag":
+      return "var(--syntax-flag)";
+    case "operator":
+      return "var(--syntax-operator)";
+    case "string":
+      return "var(--syntax-string)";
+    case "variable":
+      return "var(--syntax-variable)";
+    case "comment":
+      return "var(--syntax-comment)";
+    default:
+      return undefined;
+  }
+}
+
+/** Compose the three per-run flags into an inline style. Precedence
+ *  (per spec §18 M12.5):
+ *    selected (accent background) > styled (ghost-text dim) > syntax color.
+ *  Selected wins because the background bar needs foreground contrast;
+ *  dim wins over syntax because autosuggestion ghost text must stay
+ *  visibly-secondary regardless of what the tokenizer paints it as. */
 function runStyle(run: StyledRun): CSSProperties | undefined {
-  if (run.selected && run.styled) return SELECTED_TEXT;
   if (run.selected) return SELECTED_TEXT;
   if (run.styled) return STYLED_TEXT;
-  return undefined;
+  const color = syntaxColor(run.syntaxKind);
+  return color === undefined ? undefined : { color };
 }
 
 function PromptStripInner(

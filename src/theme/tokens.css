@@ -133,6 +133,17 @@
   --syntax-name: #e06c75;
   --syntax-title: #61aeee;
   --syntax-type: #d19a66;
+  /*
+   * M12.5 prompt-strip shell tokenizer palette. Shares
+   * `--syntax-string` and `--syntax-comment` with the
+   * hljs / CodeMirror palette above; adds five kinds the
+   * shell tokenizer emits that don't map onto hljs kinds.
+   */
+  --syntax-command: #61aeee;
+  --syntax-subcommand: #56b6c2;
+  --syntax-flag: #e6c07b;
+  --syntax-variable: #e06c75;
+  --syntax-operator: #c678dd;
 }
 
 /* --- Light palette (transitional) -----------------------
