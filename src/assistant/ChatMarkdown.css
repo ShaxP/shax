@@ -106,6 +106,38 @@
   border-radius: 0;
 }
 
+/*
+ * M12.6c: shell fences (```bash, ```sh, ```shell, ```zsh) render
+ * with these Shax-specific syntax classes instead of hljs's
+ * `hljs-*` classes. Same `--syntax-*` theme tokens the prompt
+ * strip / block header / search overlay use — every command-
+ * rendering surface reaches the same palette.
+ *
+ * Class-based (not inline styles) so the output survives the
+ * chat sanitiser's `style` attribute stripping.
+ */
+.chat-markdown .shax-syntax-command {
+  color: var(--syntax-command);
+}
+.chat-markdown .shax-syntax-subcommand {
+  color: var(--syntax-subcommand);
+}
+.chat-markdown .shax-syntax-flag {
+  color: var(--syntax-flag);
+}
+.chat-markdown .shax-syntax-operator {
+  color: var(--syntax-operator);
+}
+.chat-markdown .shax-syntax-string {
+  color: var(--syntax-string);
+}
+.chat-markdown .shax-syntax-variable {
+  color: var(--syntax-variable);
+}
+.chat-markdown .shax-syntax-comment {
+  color: var(--syntax-comment);
+}
+
 .chat-markdown blockquote {
   border-left: 3px solid var(--border-strong);
   padding: 2px 10px;
