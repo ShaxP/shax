@@ -15,7 +15,7 @@
  * selection border that follows a search jump.
  */
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import shaxIconUrl from "../assets/shax-icon.svg";
 import type { BlockId, PtyId } from "../lib/ipc";
@@ -230,10 +230,48 @@ export function BlockList({
     }
   }, [selectedBlockId]);
 
+  // M12 close-out: click-to-focus on any non-block, non-focusable
+  // area of the block list dispatches `shax:refocus-pane` so the
+  // active pane focuses its prompt (or xterm in alt-screen). Covers
+  // two cases the pane-root capture handler wasn't consistently
+  // catching in the real WebView:
+  //
+  //   1. The M7.5a empty-state hero (icon / "Ready" label / prose
+  //      description / gaps between chip buttons) shown before any
+  //      command runs.
+  //   2. The empty area below the last block when blocks exist —
+  //      clicking whitespace in the scrollback used to leave focus
+  //      floating on `<body>`.
+  //
+  // The block-list header, block rows, and chip buttons all bail
+  // out (block rows have their own selection logic; buttons keep
+  // their own focus / click semantics).
+  const onBackgroundMouseDown = (e: ReactMouseEvent<HTMLElement>): void => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target === null) return;
+    // Inside a block row — the pane-root handler engages block-focus
+    // and selects the block; we don't want to compete with that.
+    if (target.closest("[data-block-id]") !== null) return;
+    // Native focusable (a chip button, a link) — leave it alone;
+    // the user is interacting with that specific control.
+    if (
+      target.closest(
+        "button, a[href], input, textarea, select, [contenteditable=''], [contenteditable='true']",
+      ) !== null
+    )
+      return;
+    // Non-block, non-focusable: focus the prompt. Uses the shared
+    // `shax:refocus-pane` bus so only the active pane responds (the
+    // event listener in `TerminalPane` is gated on `active`).
+    window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+  };
+
   return (
     <aside
       ref={scrollRef}
       data-testid="block-list"
+      onMouseDown={onBackgroundMouseDown}
       style={{
         flex: 1,
         minWidth: 0,
