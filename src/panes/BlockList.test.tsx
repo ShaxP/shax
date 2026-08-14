@@ -291,4 +291,40 @@ describe("BlockList / click-to-focus dispatches shax:refocus-pane", () => {
     const n = countRefocusEvents(() => fireEvent.mouseDown(empty, { button: 2 }));
     expect(n).toBe(0);
   });
+
+  it("calls preventDefault on the qualifying mousedown", () => {
+    // Regression guard for the "mode chip flips to COMMAND but
+    // typing still doesn't work" bug. mousedown's default
+    // behaviour on a non-focusable element is to blur whatever
+    // currently owns focus — that blur races our
+    // `shax:refocus-pane` → focus() call, and focus lands on
+    // `<body>` instead of the prompt. `preventDefault` on the
+    // mousedown stops the browser from running its own focus/
+    // blur logic, letting our focus() call stick.
+    render(<BlockList pty={null} blocks={[]} />);
+    const empty = screen.getByTestId("block-list-empty");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    empty.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(true);
+  });
+
+  it("does NOT call preventDefault on a chip-button mousedown", () => {
+    // Belt on the belt-and-suspenders: chip buttons handle their
+    // own focus / click semantics. If we preventDefault'd their
+    // mousedown, the browser's native button-click behaviour would
+    // be blocked.
+    render(<BlockList pty={null} blocks={[]} />);
+    const chip = screen.getByTestId("block-list-empty-hint-search");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    chip.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+  });
 });

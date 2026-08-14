@@ -261,9 +261,20 @@ export function BlockList({
       ) !== null
     )
       return;
-    // Non-block, non-focusable: focus the prompt. Uses the shared
-    // `shax:refocus-pane` bus so only the active pane responds (the
-    // event listener in `TerminalPane` is gated on `active`).
+    // Non-block, non-focusable: focus the prompt. `preventDefault`
+    // is load-bearing — mousedown's default behaviour on a non-
+    // focusable element is to blur whatever currently owns focus
+    // (assistant textarea, prompt strip, wherever). That blur races
+    // any focus() call our handler makes, so without preventDefault
+    // the sequence "click empty area → prompt still doesn't get
+    // keys" reliably reproduces (mode chip flips to COMMAND because
+    // the assistant lost focus, but the prompt element never
+    // actually gains it — focus ends up on `<body>`). Blocking the
+    // default lets our subsequent focus() call stick.
+    e.preventDefault();
+    // Uses the shared `shax:refocus-pane` bus so only the active
+    // pane responds (the event listener in `TerminalPane` is gated
+    // on `active`).
     window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
   };
 
