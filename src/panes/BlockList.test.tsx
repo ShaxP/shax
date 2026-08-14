@@ -196,3 +196,135 @@ describe("BlockList", () => {
     expect(state2.blocks[3]).not.toBe(state1.blocks[3]);
   });
 });
+
+// ── M12 close-out: click-to-focus on non-block, non-focusable areas
+//
+// The pane-root capture-phase handler from M12.1 was supposed to
+// catch these clicks but wasn't reliably reaching them in the real
+// WebView. The explicit `onMouseDown` on the BlockList outer
+// wrapper is the reliable path. Tests below pin the four click
+// regions the fix must cover.
+
+describe("BlockList / click-to-focus dispatches shax:refocus-pane", () => {
+  /** Listen for `shax:refocus-pane` for the duration of `fn`.
+   *  Returns the number of times it fired. */
+  function countRefocusEvents(fn: () => void): number {
+    let count = 0;
+    const listener = (): void => {
+      count += 1;
+    };
+    window.addEventListener("shax:refocus-pane", listener);
+    try {
+      fn();
+    } finally {
+      window.removeEventListener("shax:refocus-pane", listener);
+    }
+    return count;
+  }
+
+  it("clicking the empty-state hero wrapper fires shax:refocus-pane", () => {
+    render(<BlockList pty={null} blocks={[]} />);
+    const empty = screen.getByTestId("block-list-empty");
+    const n = countRefocusEvents(() => fireEvent.mouseDown(empty, { button: 0 }));
+    expect(n).toBe(1);
+  });
+
+  it("clicking the empty-state description text fires the event", () => {
+    // Real users click the paragraph text — a `<strong>` inside a
+    // `<p>` inside the hero. The handler must walk up and treat it
+    // as a non-focusable inside the block list.
+    render(<BlockList pty={null} blocks={[]} />);
+    const strong = screen.getByTestId("block-list-empty").querySelector("strong");
+    expect(strong).not.toBeNull();
+    const n = countRefocusEvents(() => fireEvent.mouseDown(strong as HTMLElement, { button: 0 }));
+    expect(n).toBe(1);
+  });
+
+  it("clicking the empty-state shax icon fires the event", () => {
+    // The icon is an `<img>` — not a native focusable, sits inside
+    // the hero wrapper. Should route to refocus like any other
+    // decorative element.
+    render(<BlockList pty={null} blocks={[]} />);
+    const img = screen.getByRole("img", { name: /shax/i });
+    const n = countRefocusEvents(() => fireEvent.mouseDown(img, { button: 0 }));
+    expect(n).toBe(1);
+  });
+
+  it("clicking a chip button does NOT fire refocus (button keeps its own click)", () => {
+    // Regression guard: the chip buttons open search / assistant /
+    // settings. Their own click handling must not be shadowed by
+    // refocus — the button's `onClick` still runs, and no
+    // refocus event fires from the mousedown path.
+    render(<BlockList pty={null} blocks={[]} />);
+    const chip = screen.getByTestId("block-list-empty-hint-search");
+    const n = countRefocusEvents(() => fireEvent.mouseDown(chip, { button: 0 }));
+    expect(n).toBe(0);
+  });
+
+  it("clicking the block-list background below the last block fires the event", () => {
+    // When blocks exist, the outer `<aside>` still has whitespace
+    // below the last row (the flex column grows past the visible
+    // viewport). Clicking that whitespace lands on the `<aside>`
+    // itself — non-block, non-focusable — and must refocus.
+    render(<BlockList pty="pty-1" blocks={[makeBlock({ id: "b1" })]} />);
+    const list = screen.getByTestId("block-list");
+    const n = countRefocusEvents(() => fireEvent.mouseDown(list, { button: 0 }));
+    expect(n).toBe(1);
+  });
+
+  it("clicking inside a block row does NOT fire refocus (row selection wins)", () => {
+    // Regression guard: block-row clicks engage block-focus /
+    // selection via the pane-root handler. We must not compete
+    // with that by also firing refocus.
+    render(<BlockList pty="pty-1" blocks={[makeBlock({ id: "b1" })]} />);
+    const row = screen.getByTestId("block-list").querySelector("[data-block-id]");
+    expect(row).not.toBeNull();
+    const n = countRefocusEvents(() => fireEvent.mouseDown(row as HTMLElement, { button: 0 }));
+    expect(n).toBe(0);
+  });
+
+  it("non-primary-button (right-click) does not fire refocus", () => {
+    // Right-clicking to open a context menu shouldn't yank focus
+    // away from wherever it was. Guard the button gate.
+    render(<BlockList pty={null} blocks={[]} />);
+    const empty = screen.getByTestId("block-list-empty");
+    const n = countRefocusEvents(() => fireEvent.mouseDown(empty, { button: 2 }));
+    expect(n).toBe(0);
+  });
+
+  it("calls preventDefault on the qualifying mousedown", () => {
+    // Regression guard for the "mode chip flips to COMMAND but
+    // typing still doesn't work" bug. mousedown's default
+    // behaviour on a non-focusable element is to blur whatever
+    // currently owns focus — that blur races our
+    // `shax:refocus-pane` → focus() call, and focus lands on
+    // `<body>` instead of the prompt. `preventDefault` on the
+    // mousedown stops the browser from running its own focus/
+    // blur logic, letting our focus() call stick.
+    render(<BlockList pty={null} blocks={[]} />);
+    const empty = screen.getByTestId("block-list-empty");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    empty.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(true);
+  });
+
+  it("does NOT call preventDefault on a chip-button mousedown", () => {
+    // Belt on the belt-and-suspenders: chip buttons handle their
+    // own focus / click semantics. If we preventDefault'd their
+    // mousedown, the browser's native button-click behaviour would
+    // be blocked.
+    render(<BlockList pty={null} blocks={[]} />);
+    const chip = screen.getByTestId("block-list-empty-hint-search");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    chip.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+  });
+});

@@ -257,6 +257,38 @@ describe("TerminalPane", () => {
     // Our handler did not call prompt.focus() on this click.
     expect(focusSpy).not.toHaveBeenCalled();
   });
+
+  it("preventDefaults the qualifying mousedown so browser blur doesn't undo focus (M12 close-out)", () => {
+    // Regression guard for the "mode chip flips but typing still
+    // doesn't work" bug. mousedown's default behaviour on a non-
+    // focusable element is to blur the currently-focused element.
+    // That blur races our prompt.focus() call and focus ends up
+    // on <body>. preventDefault stops the browser's own focus/
+    // blur logic so our focus() call sticks.
+    render(<TerminalPane />);
+    const empty = screen.getByTestId("block-list-empty");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    empty.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(true);
+  });
+
+  it("does NOT preventDefault when clicking a chip button (M12 close-out)", () => {
+    // The chip's native click semantics — including any focus ring
+    // the browser applies — must not be blocked by our handler.
+    render(<TerminalPane />);
+    const chip = screen.getByTestId("block-list-empty-hint-search");
+    const evt = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    chip.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+  });
 });
 
 describe("TerminalPane / dead-shell handling (M2 slice 2.3b)", () => {

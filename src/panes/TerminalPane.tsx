@@ -969,6 +969,13 @@ function TerminalPaneInner({
       if (prompt.contains(target)) return;
       if (target.closest('[data-testid="assistant-overlay"]') !== null) return;
       if (isNativelyFocusable(target)) return;
+      // preventDefault is load-bearing (see the same-shape comment
+      // on `onBackgroundMouseDown` in `BlockList.tsx`): without it,
+      // the browser blurs the currently-focused element as part of
+      // the mousedown default and our subsequent `prompt.focus()`
+      // gets undone. With it, the browser leaves focus alone and
+      // our call sticks.
+      e.preventDefault();
       prompt.focus();
     };
     root.addEventListener("mousedown", onMouseDown, true);
