@@ -231,6 +231,43 @@ export function TitleBar({
               data-active={isActive ? "true" : "false"}
               data-tauri-drag-region="false"
               style={isActive ? TAB_ACTIVE : TAB_INACTIVE}
+              onMouseDown={(e) => {
+                // M12 focus close-out: clicking a tab pill (even
+                // the ALREADY-active one) must land keyboard focus
+                // on the target pane's prompt. Two things fix this:
+                //
+                //   1. preventDefault — the tab pill is a <div>,
+                //      not a native focusable. mousedown's default
+                //      on a non-focusable target blurs whatever
+                //      currently owns focus (e.g. the assistant
+                //      textarea), racing any focus() call our
+                //      handler makes. Blocking the default keeps
+                //      focus stable until we move it deliberately.
+                //   2. shax:refocus-pane dispatch — makes the
+                //      active pane's listener claim focus for its
+                //      prompt. For a different-tab click the
+                //      new pane's mount effect also focuses; this
+                //      dispatch is redundant then but idempotent.
+                //      For a same-tab click (bug the user hit —
+                //      mode chip flips to COMMAND but typing
+                //      doesn't work), the switch is a no-op so no
+                //      mount effect runs, and this dispatch is the
+                //      only path that puts focus back on the prompt.
+                //
+                // Bail-out: the close button (× glyph) handles its
+                // own click via stopPropagation on click; if the
+                // user mousedowns on the close button we don't want
+                // to fight it. `nodeName === "SPAN"` and the close
+                // testid together identify the close glyph without
+                // reaching for a ref.
+                const target = e.target as HTMLElement | null;
+                if (target !== null && target.getAttribute("data-testid") === "title-tab-close") {
+                  return;
+                }
+                if (e.button !== 0) return;
+                e.preventDefault();
+                window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
+              }}
               onClick={() => onSwitch(tab.id)}
             >
               <span style={TAB_ACCENT_DOT} />

@@ -861,3 +861,66 @@ describe("App / open-event bus for onboarding chips (M12.1)", () => {
     expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
   });
 });
+
+// ── M12 focus close-out: Cmd+K close routes focus back to the pane
+
+describe("App / Cmd+K assistant close (M12 close-out)", () => {
+  it("dispatches shax:refocus-pane when Cmd+K closes an assistant with focused input", () => {
+    // Regression guard for the "Cmd+K closes assistant → mode
+    // chip flips to COMMAND → typing goes nowhere" bug. The chord
+    // fires setAssistantOpen(false) which by itself leaves focus
+    // floating on `<body>` (the textarea unmounts, no other
+    // element auto-claims). shax:refocus-pane is the app-wide
+    // "give focus back to the active pane" signal — TerminalPane's
+    // listener runs promptStripRef.current?.focus() in response.
+    render(<App />);
+    // 1. Open the assistant via the event bus (same path Cmd+K
+    //    uses when the dock is closed).
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:assistant-open"));
+    });
+    // 2. Mark the assistant textarea as focused so the Cmd+K
+    //    handler picks the "close" branch. The ref updates
+    //    synchronously via the effect chained to state.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:assistant-input-focus", { detail: { focused: true } }),
+      );
+    });
+
+    let refocused = 0;
+    const listener = (): void => {
+      refocused += 1;
+    };
+    window.addEventListener("shax:refocus-pane", listener);
+    try {
+      act(() => {
+        fireEvent.keyDown(window, { key: "k", metaKey: true });
+      });
+      expect(refocused).toBe(1);
+    } finally {
+      window.removeEventListener("shax:refocus-pane", listener);
+    }
+  });
+
+  it("does NOT dispatch shax:refocus-pane when Cmd+K opens the assistant", () => {
+    // The open branch delegates to the assistant's own mount
+    // effect to focus the textarea — dispatching refocus-pane
+    // there would fight it.
+    render(<App />);
+    let refocused = 0;
+    const listener = (): void => {
+      refocused += 1;
+    };
+    window.addEventListener("shax:refocus-pane", listener);
+    try {
+      act(() => {
+        fireEvent.keyDown(window, { key: "k", metaKey: true });
+      });
+      // Assistant is now OPEN.
+      expect(refocused).toBe(0);
+    } finally {
+      window.removeEventListener("shax:refocus-pane", listener);
+    }
+  });
+});

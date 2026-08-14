@@ -1103,6 +1103,16 @@ export default function App(): React.ReactElement {
           setAssistantOpen(true);
         } else if (assistantInputFocusedRef.current) {
           setAssistantOpen(false);
+          // M12 focus close-out: without this dispatch, closing
+          // the assistant via ⌘K leaves focus floating on `<body>`
+          // (the textarea is about to unmount, and no other
+          // element auto-claims focus). The mode chip flips to
+          // COMMAND because assistant-input-focused becomes false,
+          // but typing hits `<body>` and does nothing. The
+          // shax:refocus-pane bus makes the active pane claim
+          // focus for its prompt strip immediately, matching what
+          // Escape-close and click-outside close already do.
+          window.dispatchEvent(new CustomEvent("shax:refocus-pane"));
         } else {
           window.dispatchEvent(new CustomEvent("shax:assistant-focus-input"));
         }
