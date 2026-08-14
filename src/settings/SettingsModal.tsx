@@ -916,7 +916,7 @@ function AppearanceSection({
           checked={appearance.ligatures}
           onChange={(e) => void onPatchAppearance({ ligatures: e.target.checked })}
         />
-        <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
+        <span style={{ ...LANE_STATUS, marginTop: 0, marginLeft: 4 }}>
           Fuses `==`, `!=`, `=&gt;` etc. when the font supports it.
         </span>
       </div>
@@ -962,7 +962,7 @@ function PromptSection({
           checked={appearance.cursor_blink}
           onChange={(e) => void onPatchAppearance({ cursor_blink: e.target.checked })}
         />
-        <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
+        <span style={{ ...LANE_STATUS, marginTop: 0, marginLeft: 4 }}>
           Blinks the prompt cursor once every second.
         </span>
       </div>
