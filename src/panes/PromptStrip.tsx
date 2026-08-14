@@ -311,17 +311,6 @@ const CURSOR_LINE_FOCUSED: CSSProperties = {
   marginRight: -2,
 };
 
-const CURSOR_LINE_BLURRED: CSSProperties = {
-  display: "inline-block",
-  width: 2,
-  height: CURSOR_HEIGHT,
-  background: "transparent",
-  border: "1.5px solid var(--accent)",
-  boxSizing: "border-box",
-  verticalAlign: CURSOR_VERTICAL_ALIGN,
-  marginRight: -2,
-};
-
 const CURSOR_BLOCK_FOCUSED: CSSProperties = {
   display: "inline-block",
   minWidth: "1ch",
@@ -360,9 +349,24 @@ const CURSOR_BLOCK_BLURRED: CSSProperties = {
   marginRight: -1.5,
 };
 
+/**
+ * Whether the cursor should render at all for a given (kind, focused)
+ * combination. The line caret is hidden entirely when blurred — the
+ * 2px hollow outline was barely visible at typical font sizes and
+ * read as a rendering glitch. The block cursor keeps its blurred
+ * outline because a full-cell outline stays legible at any size and
+ * still communicates position (useful when a user tabs away in vi
+ * NORMAL and wants to see where the cursor sat).
+ */
+function shouldRenderCursor(kind: CursorKind, focused: boolean): boolean {
+  if (kind === "line" && !focused) return false;
+  return true;
+}
+
 function cursorStyle(kind: CursorKind, focused: boolean): CSSProperties {
   if (kind === "block") return focused ? CURSOR_BLOCK_FOCUSED : CURSOR_BLOCK_BLURRED;
-  return focused ? CURSOR_LINE_FOCUSED : CURSOR_LINE_BLURRED;
+  // Line only ever renders when focused (see `shouldRenderCursor`).
+  return CURSOR_LINE_FOCUSED;
 }
 
 /**
@@ -661,7 +665,7 @@ function PromptRowView({
         <span data-testid={isFirst ? "prompt-line-text" : undefined}>
           {rowSpans(row, 0, beforeEnd)}
         </span>
-        {cursorCol !== null && (
+        {cursorCol !== null && shouldRenderCursor(cursorKind, cursorFocused) && (
           <span
             style={cursorStyle(cursorKind, cursorFocused)}
             data-testid="prompt-cursor"

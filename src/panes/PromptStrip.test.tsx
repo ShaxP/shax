@@ -65,17 +65,22 @@ describe("PromptStrip / layout", () => {
     expect(screen.getByTestId("prompt-branch")).toHaveTextContent("—");
   });
 
-  it("shows the placeholder hint AND a visible cursor when the line is empty", () => {
+  it("shows the placeholder hint AND a visible cursor when focused on an empty line", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={emptyPromptLine} onInput={noop} />);
     expect(screen.getByTestId("prompt-line")).toHaveTextContent("type a command");
-    // The cursor must be visible from the start so the user sees a clear
-    // insertion point even before typing.
+    // The line caret is hidden entirely when the strip is blurred
+    // (see M12.8a — the 2px hollow outline read as a glitch). In
+    // production the pane's mount effect focuses the strip; in this
+    // test we do so explicitly so the caret renders.
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
   });
 
   it("renders the typed line with the cursor at the end by default", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls -la")} onInput={noop} />);
     expect(screen.getByTestId("prompt-line-text")).toHaveTextContent("ls -la");
+    // Line caret only renders when the strip owns focus (M12.8a).
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
   });
 
@@ -330,6 +335,8 @@ describe("PromptStrip / multi-row rendering (M12.3)", () => {
         onInput={noop}
       />,
     );
+    // Line caret only renders when focused (M12.8a).
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     const row1 = screen.getByTestId("prompt-row-1");
     expect(row1.querySelector('[data-testid="prompt-cursor"]')).not.toBeNull();
     const row0 = screen.getByTestId("prompt-row-0");
@@ -660,6 +667,8 @@ describe("PromptStrip / syntax highlighting integration (M12.6a)", () => {
 describe("PromptStrip / cursor shape by mode (M12.8)", () => {
   it("defaults to a thin line caret when viKeymap is null (emacs default)", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    // Line caret only renders when focused (M12.8a).
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     const cursor = screen.getByTestId("prompt-cursor");
     expect(cursor).toHaveAttribute("data-cursor-kind", "line");
     // Line cursor: 2px wide, filled with accent (no border).
@@ -679,6 +688,7 @@ describe("PromptStrip / cursor shape by mode (M12.8)", () => {
         viKeymap="viins"
       />,
     );
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-kind", "line");
   });
 
@@ -692,6 +702,7 @@ describe("PromptStrip / cursor shape by mode (M12.8)", () => {
         viKeymap="main"
       />,
     );
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-kind", "line");
   });
 
@@ -769,16 +780,17 @@ describe("PromptStrip / cursor shape by mode (M12.8)", () => {
 });
 
 describe("PromptStrip / cursor focus state (M12.8)", () => {
-  it("starts blurred (hollow outline)", () => {
+  it("line caret is hidden entirely when the strip is blurred (M12.8a)", () => {
+    // Regression pin: the earlier "hollow outline" for a blurred
+    // line caret was barely visible at typical font sizes and read
+    // as a rendering glitch. The line variant now renders only
+    // when focused; blurred = no DOM element at all. Block cursors
+    // keep their outline (see next test).
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
-    const cursor = screen.getByTestId("prompt-cursor");
-    expect(cursor).toHaveAttribute("data-cursor-focused", "false");
-    // Hollow: transparent background + accent border.
-    expect(cursor.style.background).toBe("transparent");
-    expect(cursor.style.border).toContain("var(--accent)");
+    expect(screen.queryByTestId("prompt-cursor")).toBeNull();
   });
 
-  it("switches to solid fill when the strip gains focus", () => {
+  it("line caret appears with solid fill when the strip gains focus", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
     fireEvent.focus(screen.getByTestId("prompt-strip"));
     const cursor = screen.getByTestId("prompt-cursor");
@@ -788,13 +800,35 @@ describe("PromptStrip / cursor focus state (M12.8)", () => {
     expect(cursor.style.border).toBe("");
   });
 
-  it("switches back to hollow when the strip blurs", () => {
+  it("line caret disappears again when the strip blurs", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
     const strip = screen.getByTestId("prompt-strip");
     fireEvent.focus(strip);
-    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-focused", "true");
+    expect(screen.getByTestId("prompt-cursor")).toBeInTheDocument();
     fireEvent.blur(strip);
-    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-focused", "false");
+    expect(screen.queryByTestId("prompt-cursor")).toBeNull();
+  });
+
+  it("block cursor STAYS visible (outlined) when the strip is blurred (M12.8a)", () => {
+    // Contrast with the line-cursor case: the block variant
+    // remains legible at any font size when outlined, so hiding
+    // it would lose the "here's where you were in NORMAL" signal.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    const cursor = screen.getByTestId("prompt-cursor");
+    // Present in the DOM even though blurred.
+    expect(cursor).toBeInTheDocument();
+    expect(cursor).toHaveAttribute("data-cursor-focused", "false");
+    // Outlined: transparent bg, accent border.
+    expect(cursor.style.background).toBe("transparent");
+    expect(cursor.style.border).toContain("var(--accent)");
   });
 
   it("focus state applies to the block cursor too", () => {
@@ -847,6 +881,8 @@ describe("PromptStrip / cursor alignment (M12.8)", () => {
 
   it("line cursor also gets the 1.3em height (same alignment rule)", () => {
     render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    // Line caret only renders when focused (M12.8a).
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
     const cursor = screen.getByTestId("prompt-cursor");
     expect(cursor.style.height).toBe("1.3em");
   });
