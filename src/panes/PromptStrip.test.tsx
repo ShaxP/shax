@@ -900,3 +900,56 @@ describe("PromptStrip / cursor alignment (M12.8)", () => {
     expect(lineArea.style.lineHeight).toBe("1.3");
   });
 });
+
+// ── M12.8b: blink animation wired via CSS var ─────────────────────
+
+describe("PromptStrip / cursor blink (M12.8b)", () => {
+  it("focused line caret consumes --cursor-blink-animation via `animation`", () => {
+    // The preference toggle in Appearance writes the CSS var at
+    // the document root; this test just verifies the cursor span
+    // reads it. `theme.ts::writeAppearanceToRoot` is covered
+    // separately for the var-value → keyframes mapping.
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
+    const cursor = screen.getByTestId("prompt-cursor");
+    // Style.animation stringifies to include the var(...) call
+    // as-is (jsdom preserves the shorthand).
+    expect(cursor.style.animation).toContain("var(--cursor-blink-animation)");
+  });
+
+  it("focused block cursor also consumes --cursor-blink-animation", () => {
+    // Consistency guard: both focused variants blink when the
+    // preference is on. If only one wired up the var, one shape
+    // would blink and the other wouldn't.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor.style.animation).toContain("var(--cursor-blink-animation)");
+  });
+
+  it("blurred block cursor does NOT consume the blink var", () => {
+    // Blurred cursors are the "parked, not attention-getting"
+    // state. Blinking a hollow outline reads as "the pane is
+    // broken." Only focused variants animate.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    // No focus fired — cursor is blurred.
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor.style.animation).toBe("");
+  });
+});

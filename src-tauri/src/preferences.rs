@@ -143,6 +143,13 @@ pub struct AppearancePreferences {
     /// and matches every supported shell's own default).
     #[serde(default = "default_line_editing")]
     pub line_editing: LineEditing,
+    /// M12.8b: whether the prompt-strip cursor blinks when the
+    /// strip owns focus. Blurred cursors never blink regardless.
+    /// Default `false` matches modern-editor convention (VS Code,
+    /// iTerm2 default, Ghostty) and avoids the constant-motion
+    /// distraction some users find in blinking cursors.
+    #[serde(default)]
+    pub cursor_blink: bool,
 }
 
 impl Default for AppearancePreferences {
@@ -154,6 +161,7 @@ impl Default for AppearancePreferences {
             font_size: DEFAULT_FONT_SIZE,
             ligatures: true,
             line_editing: LineEditing::default(),
+            cursor_blink: false,
         }
     }
 }
@@ -354,6 +362,9 @@ mod tests {
         assert_eq!(a.font_size, DEFAULT_FONT_SIZE);
         assert!(a.ligatures);
         assert_eq!(a.line_editing, LineEditing::Emacs);
+        // M12.8b: cursor blink defaults off — matches VS Code /
+        // iTerm2 default and avoids constant motion.
+        assert!(!a.cursor_blink);
     }
 
     #[test]
@@ -366,6 +377,7 @@ mod tests {
                 font_size: 15,
                 ligatures: false,
                 line_editing: LineEditing::Vi,
+                cursor_blink: true,
             },
             ..Preferences::default()
         };
@@ -377,6 +389,17 @@ mod tests {
         assert_eq!(back.appearance.font_size, 15);
         assert!(!back.appearance.ligatures);
         assert_eq!(back.appearance.line_editing, LineEditing::Vi);
+        assert!(back.appearance.cursor_blink);
+    }
+
+    #[test]
+    fn appearance_without_cursor_blink_field_defaults_off() {
+        // Backward compatibility: a preferences.json written before
+        // M12.8b has no `cursor_blink` field. `#[serde(default)]`
+        // resolves it to `false` (matching Default impl).
+        let old_json = r#"{"appearance":{"theme_light":"shax-light","theme_dark":"shax-dark","font_size":13,"ligatures":true,"line_editing":"emacs"}}"#;
+        let p: Preferences = serde_json::from_str(old_json).unwrap();
+        assert!(!p.appearance.cursor_blink);
     }
 
     // ── M12.2 line-editing mode ─────────────────────────────

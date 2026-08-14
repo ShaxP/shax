@@ -341,4 +341,36 @@ describe("applyTheme", () => {
       '"liga" 0, "clig" 0, "calt" 0',
     );
   });
+
+  // M12.8b — cursor blink CSS var
+  it("writes --cursor-blink-animation = none when cursor_blink is false", () => {
+    applyTheme(
+      prefsWith({
+        theme: "dark",
+        appearance: { ...DEFAULT_APPEARANCE, cursor_blink: false },
+      }),
+      CATALOG,
+    );
+    expect(document.documentElement.style.getPropertyValue("--cursor-blink-animation")).toBe(
+      "none",
+    );
+  });
+
+  it("writes --cursor-blink-animation to the cursor-blink keyframes when cursor_blink is true", () => {
+    // Regression guard: the CSS var must resolve to a real
+    // animation shorthand so PromptStrip's cursor spans (which
+    // consume it via `animation: var(--cursor-blink-animation)`)
+    // actually blink. Cadence pinned to 1s (500ms visible / 500ms
+    // invisible via the `step-end` keyframe at 50%).
+    applyTheme(
+      prefsWith({
+        theme: "dark",
+        appearance: { ...DEFAULT_APPEARANCE, cursor_blink: true },
+      }),
+      CATALOG,
+    );
+    expect(document.documentElement.style.getPropertyValue("--cursor-blink-animation")).toBe(
+      "cursor-blink 1s step-end infinite",
+    );
+  });
 });

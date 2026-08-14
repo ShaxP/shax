@@ -152,6 +152,18 @@ function writeAppearanceToRoot(preferences: Preferences): void {
   const on = preferences.appearance.ligatures;
   root.setProperty("--terminal-ligatures", on ? "normal" : "none");
   root.setProperty("--terminal-font-features", on ? "normal" : '"liga" 0, "clig" 0, "calt" 0');
+  // M12.8b: cursor blink is a CSS animation on the prompt-strip
+  // cursor. The animation value is `1s step-end infinite cursor-
+  // blink` when enabled, `none` when disabled. The strip's cursor
+  // spans consume this via `animation: var(--cursor-blink-
+  // animation)`. Keeping the toggle in a variable (rather than
+  // adding/removing a class on the strip) means switching the
+  // preference at runtime takes effect instantly on any pane
+  // without re-rendering anything.
+  root.setProperty(
+    "--cursor-blink-animation",
+    preferences.appearance.cursor_blink ? "cursor-blink 1s step-end infinite" : "none",
+  );
 }
 
 function writePresetToRoot(preset: Theme): void {

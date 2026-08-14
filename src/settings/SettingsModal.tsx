@@ -911,6 +911,23 @@ function AppearanceSection({
         </span>
       </div>
 
+      {/* ── Cursor blink (M12.8b) ───────────────────────── */}
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-cursor-blink" style={APPEARANCE_LABEL}>
+          Cursor blink
+        </label>
+        <input
+          id="settings-cursor-blink"
+          data-testid="settings-cursor-blink"
+          type="checkbox"
+          checked={appearance.cursor_blink}
+          onChange={(e) => void onPatchAppearance({ cursor_blink: e.target.checked })}
+        />
+        <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
+          Blinks the prompt cursor at 1 Hz. Off by default — matches VS Code / iTerm2.
+        </span>
+      </div>
+
       {/* ── Line editing (M12.2) ────────────────────────── */}
       <hr style={SUB_DIVIDER} />
       <div style={SECTION_TITLE}>Line editing</div>

@@ -485,4 +485,35 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
     });
     expect(lastSaved().appearance.line_editing).toBe("emacs");
   });
+
+  // M12.8b — cursor blink toggle
+  it("cursor blink defaults off (matches DEFAULT_APPEARANCE)", async () => {
+    await open();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("toggling cursor blink on persists true", async () => {
+    await open();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.cursor_blink).toBe(true);
+  });
+
+  it("toggling cursor blink off after on persists false", async () => {
+    await open();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.cursor_blink).toBe(false);
+  });
 });
