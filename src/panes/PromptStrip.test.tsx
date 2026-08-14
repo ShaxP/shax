@@ -819,3 +819,48 @@ describe("PromptStrip / cursor focus state (M12.8)", () => {
     expect(cursor.style.border).toContain("var(--accent)");
   });
 });
+
+describe("PromptStrip / cursor alignment (M12.8)", () => {
+  it("cursor height matches the line-area's explicit line-height", () => {
+    // Regression guard for "cursor is short — leaves a top/bottom
+    // gap around the character it covers." Both the LINE_AREA and
+    // every cursor variant use the same 1.3em vertical extent, so
+    // the cursor's line-box aligns exactly with the character's
+    // line-box. If either value drifts, this test breaks first.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    const cursor = screen.getByTestId("prompt-cursor");
+    // Block cursor should be 1.3em tall (matching LINE_AREA
+    // lineHeight of 1.3).
+    expect(cursor.style.height).toBe("1.3em");
+    // And `line-height` inside the block itself is set so the
+    // character centers inside the box.
+    expect(cursor.style.lineHeight).toBe("1.3em");
+  });
+
+  it("line cursor also gets the 1.3em height (same alignment rule)", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor.style.height).toBe("1.3em");
+  });
+
+  it("prompt-line area sets an explicit line-height so cursor 1.3em is meaningful", () => {
+    // The default browser `line-height: normal` (font-dependent,
+    // ~1.2-1.4) makes the cursor's `height: 1.3em` a rough
+    // approximation. Setting the line-height explicitly on the
+    // LINE_AREA pins the line-box to a known value the cursor
+    // can match exactly.
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    const lineArea = screen.getByTestId("prompt-line");
+    // Style.lineHeight can be "1.3" (unitless) — the browser stores
+    // what we set.
+    expect(lineArea.style.lineHeight).toBe("1.3");
+  });
+});

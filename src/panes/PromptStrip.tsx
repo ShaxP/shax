@@ -245,6 +245,13 @@ const LINE_AREA: CSSProperties = {
   whiteSpace: "pre",
   overflow: "hidden",
   minHeight: 18,
+  // M12.8: explicit line-height so the cursor's `1.3em` height
+  // matches the surrounding characters' line-box exactly. Without
+  // this, the browser's default `normal` line-height (font-
+  // dependent, ~1.2-1.4) leaves a visible gap top/bottom on the
+  // cursor — very obvious on the block variant. 1.3 is mild enough
+  // to keep multi-line prompts readable without extra leading.
+  lineHeight: 1.3,
 };
 
 const LINE_TEXT_PLACEHOLDER: CSSProperties = {
@@ -282,12 +289,24 @@ const LINE_TEXT_PLACEHOLDER: CSSProperties = {
  */
 type CursorKind = "line" | "block";
 
+/** Cursor height. `1.3em` matches `LINE_AREA.lineHeight` × 1em so
+ *  the cursor's line-box aligns exactly with the surrounding text's
+ *  line-box. Prior `1em` value undershot the box by ~0.3em, visible
+ *  as a top/bottom gap around the block cursor. */
+const CURSOR_HEIGHT = "1.3em";
+
+/** All cursor variants share the same vertical alignment — `top`
+ *  anchors the cursor's top edge to the line-box top, so with
+ *  matching heights the cursor and the character it covers occupy
+ *  the same vertical extent. */
+const CURSOR_VERTICAL_ALIGN = "top";
+
 const CURSOR_LINE_FOCUSED: CSSProperties = {
   display: "inline-block",
   width: 2,
-  height: "1em",
+  height: CURSOR_HEIGHT,
   background: "var(--accent)",
-  verticalAlign: "text-bottom",
+  verticalAlign: CURSOR_VERTICAL_ALIGN,
   // Sit tight against the following character.
   marginRight: -2,
 };
@@ -295,24 +314,27 @@ const CURSOR_LINE_FOCUSED: CSSProperties = {
 const CURSOR_LINE_BLURRED: CSSProperties = {
   display: "inline-block",
   width: 2,
-  height: "1em",
+  height: CURSOR_HEIGHT,
   background: "transparent",
   border: "1.5px solid var(--accent)",
   boxSizing: "border-box",
-  verticalAlign: "text-bottom",
+  verticalAlign: CURSOR_VERTICAL_ALIGN,
   marginRight: -2,
 };
 
 const CURSOR_BLOCK_FOCUSED: CSSProperties = {
   display: "inline-block",
   minWidth: "1ch",
-  height: "1em",
+  height: CURSOR_HEIGHT,
   background: "var(--accent)",
   color: "var(--bg)",
-  verticalAlign: "text-bottom",
+  verticalAlign: CURSOR_VERTICAL_ALIGN,
   // Zero horizontal padding so the block aligns with the
-  // underlying character's width exactly.
+  // underlying character's width exactly. `lineHeight` matches
+  // the block's height so the character inside centers naturally
+  // within the block.
   padding: 0,
+  lineHeight: CURSOR_HEIGHT,
   // `pre` preserves any whitespace char (space, tab) under the
   // block so the width matches the actual character rather than
   // collapsing to zero.
@@ -322,13 +344,14 @@ const CURSOR_BLOCK_FOCUSED: CSSProperties = {
 const CURSOR_BLOCK_BLURRED: CSSProperties = {
   display: "inline-block",
   minWidth: "1ch",
-  height: "1em",
+  height: CURSOR_HEIGHT,
   background: "transparent",
   color: "var(--fg)",
   border: "1.5px solid var(--accent)",
   boxSizing: "border-box",
-  verticalAlign: "text-bottom",
+  verticalAlign: CURSOR_VERTICAL_ALIGN,
   padding: 0,
+  lineHeight: CURSOR_HEIGHT,
   whiteSpace: "pre",
   // 1.5px border subtracts from the visible cell area; pull it
   // back with a tiny negative margin so the visible width still
