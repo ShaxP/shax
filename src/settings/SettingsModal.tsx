@@ -928,12 +928,13 @@ function AppearanceSection({
 
 /**
  * M12.8c: the shell-prompt-specific preferences moved out of
- * Appearance into their own left-nav section. Currently holds:
+ * Appearance into their own left-nav section. Two sub-groups
+ * under mini section-titles matching the Appearance pane's
+ * Theme / Presets / Font pattern:
  *
- *   - Cursor blink toggle (M12.8b).
- *   - Line editing radio pair (M12.2), previously under an
- *     "Appearance → Line editing" sub-heading. The section header
- *     is enough context; no in-section sub-title anymore.
+ *   - Cursor      — cursor blink toggle (M12.8b).
+ *   - Editing mode — Emacs / Vi radio pair (M12.2), previously
+ *                    under an "Appearance → Line editing" heading.
  *
  * As this grows (syntax highlighting toggle, autosuggestion
  * plugin toggle, paste-confirm threshold, …), everything
@@ -948,7 +949,8 @@ function PromptSection({
 }): React.ReactElement {
   return (
     <section>
-      {/* ── Cursor blink (M12.8b) ───────────────────────── */}
+      {/* ── Cursor (M12.8b) ─────────────────────────────── */}
+      <div style={SECTION_TITLE}>Cursor</div>
       <div style={APPEARANCE_ROW}>
         <label htmlFor="settings-cursor-blink" style={APPEARANCE_LABEL}>
           Cursor blink
@@ -961,20 +963,21 @@ function PromptSection({
           onChange={(e) => void onPatchAppearance({ cursor_blink: e.target.checked })}
         />
         <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
-          Blinks the prompt cursor at 1 Hz. Off by default — matches VS Code / iTerm2.
+          Blinks the prompt cursor once every second.
         </span>
       </div>
 
-      {/* ── Line editing (M12.2) ─────────────────────────
-          No sub-title — the "Prompt" section header is context
-          enough (M12.8c). The two cards render the choice inline
-          with visible radios (same shape as the assistant lane
-          cards) so it reads as "pick one." */}
+      {/* ── Editing mode (M12.2) ─────────────────────────
+          The two cards render the choice inline with visible
+          radios (same shape as the assistant lane cards) so it
+          reads as "pick one." */}
+      <hr style={SUB_DIVIDER} />
+      <div style={SECTION_TITLE}>Editing mode</div>
       <div
         data-testid="settings-line-editing"
         role="radiogroup"
-        aria-label="Line editing"
-        style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}
+        aria-label="Editing mode"
+        style={{ display: "flex", flexDirection: "column", gap: 8 }}
       >
         <LineEditingOption
           value="emacs"
