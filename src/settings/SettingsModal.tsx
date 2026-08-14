@@ -429,7 +429,7 @@ const DEFAULT_CONFIG: AssistantConfig = {
 
 // ── Component ──────────────────────────────────────────────────────────
 
-type NavSection = "appearance" | "assistant";
+type NavSection = "appearance" | "prompt" | "assistant";
 
 export function SettingsModal({ onClose }: { onClose: () => void }): React.ReactElement {
   useModalLayer("settings-modal");
@@ -660,6 +660,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
               onSelect={() => setActiveSection("appearance")}
             />
             <NavItem
+              testId="settings-nav-prompt"
+              label="Prompt"
+              icon={<PromptIcon />}
+              active={activeSection === "prompt"}
+              onSelect={() => setActiveSection("prompt")}
+            />
+            <NavItem
               testId="settings-nav-assistant"
               label="Assistant"
               icon={<AssistantIcon />}
@@ -681,6 +688,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
                 catalog={themeCatalog}
                 onPatchAppearance={persistAppearance}
               />
+            )}
+            {activeSection === "prompt" && (
+              <PromptSection appearance={appearance} onPatchAppearance={persistAppearance} />
             )}
             {activeSection === "assistant" && (
               <AssistantSection
@@ -906,22 +916,68 @@ function AppearanceSection({
           checked={appearance.ligatures}
           onChange={(e) => void onPatchAppearance({ ligatures: e.target.checked })}
         />
-        <span style={{ ...LANE_STATUS, marginLeft: 4 }}>
+        <span style={{ ...LANE_STATUS, marginTop: 0, marginLeft: 4 }}>
           Fuses `==`, `!=`, `=&gt;` etc. when the font supports it.
         </span>
       </div>
+    </section>
+  );
+}
 
-      {/* ── Line editing (M12.2) ────────────────────────── */}
-      <hr style={SUB_DIVIDER} />
-      <div style={SECTION_TITLE}>Line editing</div>
-      <div style={SECTION_DESCRIPTION}>
-        How you edit the shell prompt. Takes effect on the next pane you open.
+// ── Section: Prompt ────────────────────────────────────────────────
+
+/**
+ * M12.8c: the shell-prompt-specific preferences moved out of
+ * Appearance into their own left-nav section. Two sub-groups
+ * under mini section-titles matching the Appearance pane's
+ * Theme / Presets / Font pattern:
+ *
+ *   - Cursor      — cursor blink toggle (M12.8b).
+ *   - Editing mode — Emacs / Vi radio pair (M12.2), previously
+ *                    under an "Appearance → Line editing" heading.
+ *
+ * As this grows (syntax highlighting toggle, autosuggestion
+ * plugin toggle, paste-confirm threshold, …), everything
+ * prompt-strip-scoped lands here.
+ */
+function PromptSection({
+  appearance,
+  onPatchAppearance,
+}: {
+  appearance: AppearancePreferences;
+  onPatchAppearance: (patch: Partial<AppearancePreferences>) => Promise<void>;
+}): React.ReactElement {
+  return (
+    <section>
+      {/* ── Cursor (M12.8b) ─────────────────────────────── */}
+      <div style={SECTION_TITLE}>Cursor</div>
+      <div style={APPEARANCE_ROW}>
+        <label htmlFor="settings-cursor-blink" style={APPEARANCE_LABEL}>
+          Cursor blink
+        </label>
+        <input
+          id="settings-cursor-blink"
+          data-testid="settings-cursor-blink"
+          type="checkbox"
+          checked={appearance.cursor_blink}
+          onChange={(e) => void onPatchAppearance({ cursor_blink: e.target.checked })}
+        />
+        <span style={{ ...LANE_STATUS, marginTop: 0, marginLeft: 4 }}>
+          Blinks the prompt cursor once every second.
+        </span>
       </div>
+
+      {/* ── Editing mode (M12.2) ─────────────────────────
+          The two cards render the choice inline with visible
+          radios (same shape as the assistant lane cards) so it
+          reads as "pick one." */}
+      <hr style={SUB_DIVIDER} />
+      <div style={SECTION_TITLE}>Editing mode</div>
       <div
         data-testid="settings-line-editing"
         role="radiogroup"
-        aria-label="Line editing"
-        style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}
+        aria-label="Editing mode"
+        style={{ display: "flex", flexDirection: "column", gap: 8 }}
       >
         <LineEditingOption
           value="emacs"
@@ -942,9 +998,12 @@ function AppearanceSection({
   );
 }
 
-/** One card in the line-editing radio pair (M12.2). Same card treatment
- *  as the assistant-lane cards: selected → accent outline; unselected →
- *  subdued border. */
+/** One card in the line-editing radio pair (M12.2, radio-inside-box
+ *  refresh in M12.8c). Matches the assistant-lane card shape: title
+ *  + description with a visible radio circle on the left so the
+ *  "pick one" nature is obvious without relying only on the border
+ *  colour. Selected → accent outline + accent-soft background;
+ *  unselected → subdued border. */
 function LineEditingOption({
   value,
   active,
@@ -976,12 +1035,24 @@ function LineEditingOption({
         fontFamily: "inherit",
         cursor: "pointer",
         display: "flex",
-        flexDirection: "column",
-        gap: 4,
+        alignItems: "flex-start",
+        gap: 12,
+        width: "100%",
       }}
     >
-      <span style={{ fontWeight: 600, fontSize: 13 }}>{title}</span>
-      <span style={{ fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.45 }}>{description}</span>
+      {/* Visible radio circle — matches the assistant-lane cards
+          (M12.8c). The border+background combo alone reads as
+          "hover / active state" more than "pick one"; the explicit
+          radio glyph makes the semantics obvious at a glance. */}
+      <span aria-hidden="true" style={active ? RADIO_OUTER_ACTIVE : RADIO_OUTER}>
+        {active && <span style={RADIO_INNER} />}
+      </span>
+      <span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{title}</span>
+        <span style={{ fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.45 }}>
+          {description}
+        </span>
+      </span>
     </button>
   );
 }
@@ -1443,6 +1514,24 @@ function AssistantIcon(): React.ReactElement {
         d="M 8 2.2 L 9.2 6.4 L 13.4 7.6 L 9.2 8.8 L 8 13 L 6.8 8.8 L 2.6 7.6 L 6.8 6.4 Z"
         fill="currentColor"
       />
+    </svg>
+  );
+}
+
+/** M12.8c: nav icon for the Prompt section — a shell-prompt
+ *  chevron (`>`) rendered as a chunky glyph so it's readable at
+ *  16×16. Matches the `❯` symbol the prompt strip itself uses. */
+function PromptIcon(): React.ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M 4 4 L 9 8 L 4 12"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M 10 12 L 13 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }

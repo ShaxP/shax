@@ -262,23 +262,55 @@ async function open(): Promise<void> {
   });
 }
 
+/**
+ * M12.8c: cursor-blink and line-editing widgets moved out of the
+ * Appearance section into a new "Prompt" left-nav section. Tests
+ * that touch either widget open the modal then navigate to Prompt
+ * via this helper.
+ */
+async function openPrompt(): Promise<void> {
+  await open();
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("settings-nav-prompt"));
+    await Promise.resolve();
+  });
+}
+
 // ── Nav layout ─────────────────────────────────────────────────────────
 
-describe("SettingsModal — left nav (M7.5b)", () => {
-  it("renders two nav entries: Appearance and Assistant", async () => {
+describe("SettingsModal — left nav (M7.5b, M12.8c added Prompt)", () => {
+  it("renders three nav entries: Appearance, Prompt, Assistant", async () => {
     await open();
     expect(screen.getByTestId("settings-nav-appearance")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-nav-prompt")).toBeInTheDocument();
     expect(screen.getByTestId("settings-nav-assistant")).toBeInTheDocument();
   });
 
   it("defaults to Appearance active", async () => {
     await open();
     expect(screen.getByTestId("settings-nav-appearance")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("settings-nav-prompt")).toHaveAttribute("data-active", "false");
     expect(screen.getByTestId("settings-nav-assistant")).toHaveAttribute("data-active", "false");
     // The Appearance section shows the theme radiogroup.
     expect(screen.getByTestId("settings-theme")).toBeInTheDocument();
+    // Prompt-section widgets aren't in the tree yet.
+    expect(screen.queryByTestId("settings-cursor-blink")).toBeNull();
+    expect(screen.queryByTestId("settings-line-editing")).toBeNull();
     // The Assistant section's Off lane is not in the tree yet.
     expect(screen.queryByTestId("settings-lane-none")).toBeNull();
+  });
+
+  it("clicking Prompt swaps the right pane to the cursor-blink + line-editing widgets (M12.8c)", async () => {
+    await open();
+    fireEvent.click(screen.getByTestId("settings-nav-prompt"));
+    expect(screen.getByTestId("settings-nav-prompt")).toHaveAttribute("data-active", "true");
+    // Cursor blink checkbox + line editing radiogroup + both option cards.
+    expect(screen.getByTestId("settings-cursor-blink")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-line-editing")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-line-editing-emacs")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-line-editing-vi")).toBeInTheDocument();
+    // Appearance widgets are unmounted.
+    expect(screen.queryByTestId("settings-theme")).toBeNull();
   });
 
   it("clicking Assistant swaps the right pane to the Claude + Ollama surface", async () => {
@@ -454,9 +486,9 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
     expect(lastSaved().appearance.ligatures).toBe(false);
   });
 
-  // M12.2 — line-editing radio
+  // M12.2 — line-editing radio (moved from Appearance to Prompt in M12.8c)
   it("emacs is the visible default and marked active", async () => {
-    await open();
+    await openPrompt();
     const emacs = screen.getByTestId("settings-line-editing-emacs");
     const vi = screen.getByTestId("settings-line-editing-vi");
     expect(emacs).toHaveAttribute("data-active", "true");
@@ -465,7 +497,7 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
   });
 
   it("clicking Vi persists line_editing: vi", async () => {
-    await open();
+    await openPrompt();
     await act(async () => {
       fireEvent.click(screen.getByTestId("settings-line-editing-vi"));
       await Promise.resolve();
@@ -474,7 +506,7 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
   });
 
   it("clicking Emacs after Vi restores emacs", async () => {
-    await open();
+    await openPrompt();
     await act(async () => {
       fireEvent.click(screen.getByTestId("settings-line-editing-vi"));
       await Promise.resolve();
@@ -484,5 +516,53 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
       await Promise.resolve();
     });
     expect(lastSaved().appearance.line_editing).toBe("emacs");
+  });
+
+  it("M12.8c: each line-editing option renders a visible radio circle", async () => {
+    // The card has an aria-hidden span that carries the radio
+    // glyph — matches the assistant-lane visual pattern. Belt-
+    // and-suspenders check: the active card's span contains ONE
+    // inner dot; the inactive card's span contains none.
+    await openPrompt();
+    const emacsCard = screen.getByTestId("settings-line-editing-emacs");
+    const viCard = screen.getByTestId("settings-line-editing-vi");
+    // Both cards have exactly one aria-hidden radio wrapper.
+    expect(emacsCard.querySelectorAll('[aria-hidden="true"]')).toHaveLength(1);
+    expect(viCard.querySelectorAll('[aria-hidden="true"]')).toHaveLength(1);
+    // Active (emacs default): inner dot present. Inactive (vi):
+    // wrapper renders but has no inner child.
+    expect(emacsCard.querySelector('[aria-hidden="true"]')?.children.length).toBe(1);
+    expect(viCard.querySelector('[aria-hidden="true"]')?.children.length).toBe(0);
+  });
+
+  // M12.8b — cursor blink toggle (moved from Appearance to Prompt in M12.8c)
+  it("cursor blink defaults off (matches DEFAULT_APPEARANCE)", async () => {
+    await openPrompt();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("toggling cursor blink on persists true", async () => {
+    await openPrompt();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.cursor_blink).toBe(true);
+  });
+
+  it("toggling cursor blink off after on persists false", async () => {
+    await openPrompt();
+    const toggle = screen.getByTestId<HTMLInputElement>("settings-cursor-blink");
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+      await Promise.resolve();
+    });
+    expect(lastSaved().appearance.cursor_blink).toBe(false);
   });
 });

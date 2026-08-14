@@ -301,6 +301,18 @@ const CURSOR_HEIGHT = "1.3em";
  *  the same vertical extent. */
 const CURSOR_VERTICAL_ALIGN = "top";
 
+/**
+ * M12.8b: blink animation. Wired through the CSS var
+ * `--cursor-blink-animation`, which `theme.ts::writeAppearanceToRoot`
+ * writes as either `"cursor-blink 1s step-end infinite"` (blink on)
+ * or `"none"` (blink off, default). ONLY the focused variants
+ * consume it — a blurred cursor never blinks because a) the line
+ * variant isn't rendered when blurred anyway (M12.8a), and b) an
+ * outlined block cursor blinking would read as "the pane is
+ * broken" rather than "here's where the cursor was."
+ */
+const CURSOR_ANIMATION_FOCUSED = "var(--cursor-blink-animation)";
+
 const CURSOR_LINE_FOCUSED: CSSProperties = {
   display: "inline-block",
   width: 2,
@@ -309,6 +321,7 @@ const CURSOR_LINE_FOCUSED: CSSProperties = {
   verticalAlign: CURSOR_VERTICAL_ALIGN,
   // Sit tight against the following character.
   marginRight: -2,
+  animation: CURSOR_ANIMATION_FOCUSED,
 };
 
 const CURSOR_BLOCK_FOCUSED: CSSProperties = {
@@ -328,6 +341,7 @@ const CURSOR_BLOCK_FOCUSED: CSSProperties = {
   // block so the width matches the actual character rather than
   // collapsing to zero.
   whiteSpace: "pre",
+  animation: CURSOR_ANIMATION_FOCUSED,
 };
 
 const CURSOR_BLOCK_BLURRED: CSSProperties = {
@@ -347,6 +361,8 @@ const CURSOR_BLOCK_BLURRED: CSSProperties = {
   // matches a plain character cell.
   marginLeft: -1.5,
   marginRight: -1.5,
+  // Blurred cursors never blink — see comment on
+  // CURSOR_ANIMATION_FOCUSED.
 };
 
 /**

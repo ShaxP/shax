@@ -58,6 +58,14 @@ export interface AppearancePreferences {
   ligatures: boolean;
   /** M12.2: how the user wants to edit the shell prompt line. */
   line_editing: LineEditing;
+  /**
+   * M12.8b: whether the prompt-strip cursor blinks when the strip
+   * owns focus. Blurred cursors never blink regardless. Default
+   * `false` — matches modern-editor convention (VS Code, iTerm2
+   * default, Ghostty) and avoids the constant-motion distraction
+   * some users find in blinking cursors.
+   */
+  cursor_blink: boolean;
 }
 
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
@@ -67,6 +75,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   font_size: DEFAULT_FONT_SIZE,
   ligatures: true,
   line_editing: "emacs",
+  cursor_blink: false,
 };
 
 export interface Preferences {

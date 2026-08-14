@@ -282,6 +282,35 @@
    * `appearance.ligatures` preference.
    */
   --terminal-font-features: normal;
+  /*
+   * Prompt-strip cursor blink animation (M12.8b).
+   *
+   * `theme.ts::writeAppearanceToRoot` writes this to
+   * `"cursor-blink 1s step-end infinite"` when
+   * `appearance.cursor_blink` is on, `"none"` otherwise. Cursor
+   * spans in `PromptStrip.tsx` consume it via
+   * `animation: var(--cursor-blink-animation)`. Keeping the
+   * toggle in a CSS var (rather than a class on the strip) means
+   * flipping the preference takes effect instantly on every pane
+   * with no re-render.
+   *
+   * `step-end` = 0-to-50% opaque, 50-to-100% invisible — no fade
+   * ramp. Matches VS Code / iTerm2 blink; smoother animations
+   * feel out of place in a terminal cursor.
+   */
+  --cursor-blink-animation: none;
+}
+
+/*
+ * Prompt-strip cursor blink keyframes (M12.8b). Only fires when
+ * `--cursor-blink-animation` is not `none` — i.e., when the user
+ * turned blink on in Appearance. Cadence is 500ms visible / 500ms
+ * invisible (`50%` breakpoint).
+ */
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /*
