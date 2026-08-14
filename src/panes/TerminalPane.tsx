@@ -1652,6 +1652,7 @@ function TerminalPaneInner({
           line={blockState.promptLine}
           onInput={handlePromptInput}
           altScreen={altScreen}
+          viKeymap={viKeymap}
         />
       )}
     </div>
