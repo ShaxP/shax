@@ -303,19 +303,20 @@ Detail in `17-pdf-viewer.md`. Sliced M11.1 – M11.3 (detection + routing, pdf.j
 
 ## M12 Prompt overhaul
 
-**Goal:** the prompt strip becomes worthy of a daily driver — multi-line editing, focus-on-click, an honest three-mode indicator, a Shax-owned prompt header rich enough to replace what starship / p10k gave up, and per-token syntax highlighting on the input line. **Lead:** frontend, with core for the shell-integration hardening.
+**Goal:** the prompt strip becomes worthy of a daily driver — multi-line editing, focus-on-click, an honest three-mode indicator, a Shax-owned prompt header rich enough to replace what starship / p10k gave up, per-token syntax highlighting on every command surface, and a caret that carries the keymap and focus state of the pane it lives in. **Lead:** frontend, with core for the shell-integration hardening.
 
 - Focus-on-click and mode-pill three-way (`COMMAND` for prompt focus, `CHAT` for assistant focus, `BLOCK` for block-focus mode); onboarding shortcut chips become real buttons.
 - Shell integration hardening: shim resets PS1 / `PROMPT` to a bare OSC 133 A+B marker, forces `bindkey -e` / `set -o emacs`, and unloads `zsh-syntax-highlighting` in the new `appearance.shell_integration = "assertive"` default. Cooperative mode is the escape hatch (restores today's chain-only behavior). Fish is out of scope for the hardening.
 - Multi-line prompt input: `\n` grows a row in the mirror renderer, `Shift+Enter` sends `\` + `\n` for shell PS2 continuation, bracketed-paste always on, large-paste (`≥ 5 lines OR ≥ 500 bytes`) gated behind a confirmation modal.
-- Custom prompt header: `user@host · cwd · ⎇ branch ↑n ↓n` on the left, live `HH:MM:SS` on the right, ticking from a single App-level interval.
-- Client-side syntax highlighting on the input line via a hand-rolled POSIX tokenizer (command / subcommand / flag / operator / string / variable / comment); colors from new `--syntax-*` theme tokens.
+- Custom prompt header: `user@host · cwd · ⎇ branch ↑n ↓n` on the left, live `HH:MM:SS` on the right, ticking from a single App-level interval. Native battery + local-IP chips join the statusbar right cluster in M12.4b.
+- Client-side syntax highlighting on the input line via a hand-rolled POSIX tokenizer (command / subcommand / flag / operator / string / variable / comment); colors from new `--syntax-*` theme tokens. Extended in M12.6 to every command-rendering surface (block headers, search snippets, palette command-recall, assistant chat shell fences).
+- Cursor personality (M12.8): shape follows the line-editing keymap (line for Emacs / vi INSERT, block for vi NORMAL); focus state follows the strip (filled focused, hollow-block outlined blurred, line hidden on blur); optional 1 Hz blink under a new `appearance.cursor_blink` preference. A new **Prompt** settings-modal section houses the blink toggle and the Emacs / Vi line-editing radios.
 
-**Exit:** clicking anywhere in the pane background focuses the prompt; the pill accurately reflects one of three surfaces; a default install lands on a bare Shax-owned prompt with no starship / p10k paint; `Shift+Enter` composes multi-line commands; the header renders enriched content that ticks; commands color as you type; every path has a cooperative-mode / fallback escape hatch.
+**Exit:** clicking anywhere in the pane background focuses the prompt; the pill accurately reflects one of three surfaces; a default install lands on a bare Shax-owned prompt with no starship / p10k paint; `Shift+Enter` composes multi-line commands; the header renders enriched content that ticks; the statusbar carries battery + local-IP chips on all three platforms; commands color as you type and stay coloured across every surface that shows them; the caret's shape follows the keymap and its focus state follows the pane; every path has a cooperative-mode / fallback escape hatch.
 
 **Explicitly out of scope:** a local line editor (history / completion / kill-ring in-strip — we keep mirroring the shell), full-grammar argv-aware tokenization, prompt fidelity inside SSH / `docker exec` / nested subshells, per-cluster header preferences, editing the user's dotfiles.
 
-Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.5 (focus + mode pill, shell integration hardening, multi-line input, custom header, syntax highlighting).
+Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.8 (focus + mode pill, shell integration hardening, multi-line input, custom header + native status probes, syntax highlighting on the input line, extending highlighting to every surface, cursor personality).
 
 ## Post-M8 candidates
 

@@ -316,6 +316,50 @@ Tests:
 
 **Exit:** ask the assistant "how do I check disk usage?", get back a response with `` ```bash df -h ``. The rendered fence shows `df` colored as command, `-h` as flag — same palette as the prompt strip. A `` ```rust ` fence in the same response still renders with hljs classes for keyword / string / number.
 
+### M12.8 — Cursor personality (shapes, blur, blink)
+
+Added after live-driving the M12.1 – M12.6 prompt on both macOS and Fedora and finding the caret felt "plastic" — a fixed steady line that gave no signal about focus or vi mode. This slice makes the cursor a real personality trait of the prompt strip: its shape follows the active line-editing keymap, its state follows focus, and its blink is a user preference.
+
+Three sub-PRs — each one review-sized, each one shippable alone:
+
+#### M12.8 — Keymap-aware shape + focus states
+
+**Scope:**
+
+- **Shape follows keymap.** Emacs (or vi INSERT) renders a **line** caret (`|`) between characters. Vi NORMAL renders a **block** caret covering the character under the cursor. The switch is driven by the same `viKeymap` state that M12.2's INSERT / NORMAL / VISUAL chip already listens to, so no new signal is needed — one source of truth per keymap change.
+- **Focus state.** Both shapes have a focused and a blurred variant. Focused = filled accent color. Blurred block = **hollow outline** of the same shape, same position — the classic native-terminal cue that "you were here, but this pane isn't accepting keys right now."
+- **Height alignment.** Caret height is `1.3em`, matched to the mirror renderer's `line-height: 1.3`. Earlier drafts used `1em` and the block caret visibly clipped the descenders of characters underneath it.
+
+**Exit:** in a fresh pane, the line caret sits centered on the baseline row and matches the character height. Toggle vi mode → cursor becomes a block. Click a block row → cursor becomes a hollow outline in whichever shape it was in.
+
+#### M12.8a — Hide the line caret on blur
+
+**Scope:** the line caret's hollow-outline blur state (a thin vertical rectangle) reads as "the pane is broken" rather than "you were here" — a 2px-wide outlined column has no visual anchor the way a hollow block does. Hide it entirely on blur; the block caret's hollow-outline blur stays as designed.
+
+Implemented via a `shouldRenderCursor` helper: `focused || (shape === "block")`. One decision point, no branching across renderers.
+
+**Exit:** with the line caret active, blurring the strip removes the caret entirely; refocusing brings it back. With the block caret active, blurring produces a hollow outlined block; refocusing fills it.
+
+#### M12.8b — Cursor blink preference
+
+**Scope:** expose blinking as a user preference. New `appearance.cursor_blink: bool`, default `false` (off). When on, both focused shapes blink at 1 Hz (`@keyframes cursor-blink { 50% { opacity: 0 } }`, `1s step-end infinite`). Blurred cursors never blink regardless — an outlined-and-blinking cursor reads worse than the "steady outline" affordance it replaces.
+
+**Wire path:** a single CSS custom property `--cursor-blink-animation` (default `none`, set to the animation string when preference is on). `PromptStrip.tsx`'s `CURSOR_LINE_FOCUSED` and `CURSOR_BLOCK_FOCUSED` consume it via `animation: var(--cursor-blink-animation)`; `CURSOR_BLOCK_BLURRED` explicitly omits it. Preference toggles refresh every pane's cursor without re-rendering any React tree.
+
+**Backend:** `AppearancePreferences::cursor_blink` in `preferences.rs`, gated on `#[serde(default)]` so pre-M12.8b JSON deserialises onto `false`.
+
+**Exit:** with blink off, cursor sits steady in either shape. Toggle on → cursor blinks at ~1 Hz in the focused state, stays steady when blurred. Cadence pinned to `step-end` (no fade / expand) — matches VS Code and iTerm2 defaults, avoids the "web widget" feel a smoother easing would give.
+
+#### M12.8c — Prompt settings section
+
+**Scope:** the Cursor blink toggle from M12.8b initially landed inside the Appearance / Font section — the wrong home. Prompt-scoped preferences deserve their own left-nav entry in `SettingsModal.tsx`.
+
+- New nav entry **Prompt**, inserted between **Appearance** and **Assistant**. `PromptIcon` is a chevron (`>`) glyph matching the prompt-strip's `❯`.
+- **Cursor** sub-heading (using the same `SECTION_TITLE` / `SUB_DIVIDER` pattern as Appearance's Theme / Presets / Font sub-headings) hosts the Cursor blink checkbox with the copy "Blinks the prompt cursor once every second."
+- **Editing mode** sub-heading below hosts the Emacs / Vi radio cards (moved from Appearance's Line editing sub-section). Each card grows a visible radio circle (`RADIO_OUTER` / `RADIO_INNER`) on the left, matching the assistant-lane visual pattern — the two options now read as "pick one" without needing a repeated sub-title.
+
+**Exit:** `⌘,` shows three nav entries in order — Appearance, Prompt, Assistant. Clicking Prompt shows Cursor blink and the Emacs / Vi cards under their respective sub-headings, and nothing else. Appearance no longer contains either widget.
+
 ## Non-goals (explicit, not deferred)
 
 - **A local line editor.** M12 keeps the mirror-the-shell model. Building our own readline replacement — with history, completion, kill-ring, incremental search — is a multi-milestone rewrite with heavy compatibility risk. Rejected as a category, not delayed. If the shell's line editor ever becomes the blocker, the conversation is separate.
@@ -336,8 +380,9 @@ Every slice writes tests alongside per CLAUDE.md §"Testing policy".
 - **M12.6a** — new `CommandSpans.test.tsx` inherits the render-path tests; `BlockRow.test.tsx` gains a syntax-coloring case for the block header. `PromptStrip.test.tsx` shrinks to a composition test that the strip still renders coloured spans (component ownership moved out).
 - **M12.6b** — `SearchResults.test.tsx` gains (i) command-snippet renders coloured spans + preserves `<mark>` overlay, (ii) output-snippet stays monochrome. Palette command-recall tests get one syntax-render case each.
 - **M12.6c** — `ChatMarkdown.test.tsx` gains three cases: `bash` fence → `CommandSpans`, `rust` fence → hljs classes untouched, `bash` fence with unbalanced quote → monochrome fallback.
+- **M12.8** — `PromptStrip.test.tsx` gains cases for line vs block cursor per `viKeymap`, focused vs blurred variants, and line-height alignment. `M12.8a` adds the hide-line-on-blur case; `M12.8b` adds Rust `preferences.rs` round-trip + missing-field defaults, `theme.test.ts` for the `--cursor-blink-animation` CSS var flip, and `SettingsModal.test.tsx` for the checkbox persistence. `M12.8c` adds three-entry nav, Prompt-pane swap, and the visible radio circle inside each Emacs / Vi card.
 
-Playwright end-to-end: one flow per slice under `tests/e2e/prompt-overhaul.spec.ts`, all added in M12.5 as a final integration pass. M12.6 does not add new e2e flows — the visual coverage sits in the component tests, and the end-to-end paths (search a command, expand a block, open a chat with a shell fence) are already covered by earlier milestones' e2e specs.
+Playwright end-to-end: one flow per slice under `tests/e2e/prompt-overhaul.spec.ts`, all added in M12.5 as a final integration pass. M12.6 and M12.8 do not add new e2e flows — the visual coverage sits in the component tests, and the end-to-end paths (search a command, expand a block, open a chat with a shell fence, toggle a settings pref) are already covered by earlier milestones' e2e specs.
 
 ## Cross-cutting concerns
 
