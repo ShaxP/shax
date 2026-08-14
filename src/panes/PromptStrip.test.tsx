@@ -654,3 +654,168 @@ describe("PromptStrip / syntax highlighting integration (M12.6a)", () => {
     // char-by-char state.
   });
 });
+
+// ── M12.8: vi-aware caret/cursor with focus states ───────────────
+
+describe("PromptStrip / cursor shape by mode (M12.8)", () => {
+  it("defaults to a thin line caret when viKeymap is null (emacs default)", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor).toHaveAttribute("data-cursor-kind", "line");
+    // Line cursor: 2px wide, filled with accent (no border).
+    expect(cursor.style.width).toBe("2px");
+    // Empty text content — the caret is a positional bar between
+    // characters, not covering one.
+    expect(cursor.textContent).toBe("");
+  });
+
+  it("keeps the line caret in vi INSERT mode (`viins`)", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls")}
+        onInput={noop}
+        viKeymap="viins"
+      />,
+    );
+    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-kind", "line");
+  });
+
+  it("keeps the line caret in `main` (bash / zsh alias for the active keymap)", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls")}
+        onInput={noop}
+        viKeymap="main"
+      />,
+    );
+    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-kind", "line");
+  });
+
+  it("switches to a block cursor in vi NORMAL mode (`vicmd`)", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor).toHaveAttribute("data-cursor-kind", "block");
+    // Block cursor: 1ch wide (a character cell), foreground inverted.
+    expect(cursor.style.minWidth).toBe("1ch");
+    // The block contains the character at cursorCol — `l` here.
+    expect(cursor.textContent).toBe("l");
+  });
+
+  it("uses a block cursor in vi VISUAL mode as well", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="visual"
+      />,
+    );
+    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-kind", "block");
+  });
+
+  it("block cursor at end of text wraps a space so it stays visible", () => {
+    // `ls` has length 2. cursorCol = 2 → past the last char → the
+    // block wraps a space rather than an empty string; without this,
+    // the block would collapse to zero width at end-of-line.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 2 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor).toHaveAttribute("data-cursor-kind", "block");
+    // `.textContent` for a single-space span is " " — asserting the
+    // exact whitespace character.
+    expect(cursor.textContent).toBe(" ");
+  });
+
+  it("block cursor consumes ONE character; text after that character stays visible", () => {
+    // With text "abc" and cursor at 1: `a` is before, `b` is inside
+    // the block, `c` is after. Regression guard against the earlier
+    // "cursor sits between chars" split, which would render `b` twice
+    // (once in beforeText, once in the cursor) or lose it entirely.
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("abc", { cursorCol: 1 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor.textContent).toBe("b");
+    // The whole line's rendered text is still "abc" (b via the cursor
+    // block, a and c via CommandSpans on either side).
+    expect(screen.getByTestId("prompt-line").textContent).toBe("abc");
+  });
+});
+
+describe("PromptStrip / cursor focus state (M12.8)", () => {
+  it("starts blurred (hollow outline)", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor).toHaveAttribute("data-cursor-focused", "false");
+    // Hollow: transparent background + accent border.
+    expect(cursor.style.background).toBe("transparent");
+    expect(cursor.style.border).toContain("var(--accent)");
+  });
+
+  it("switches to solid fill when the strip gains focus", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
+    const cursor = screen.getByTestId("prompt-cursor");
+    expect(cursor).toHaveAttribute("data-cursor-focused", "true");
+    // Solid: accent background, no border.
+    expect(cursor.style.background).toBe("var(--accent)");
+    expect(cursor.style.border).toBe("");
+  });
+
+  it("switches back to hollow when the strip blurs", () => {
+    render(<PromptStrip cwd="/tmp" branch="main" line={singleRow("ls")} onInput={noop} />);
+    const strip = screen.getByTestId("prompt-strip");
+    fireEvent.focus(strip);
+    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-focused", "true");
+    fireEvent.blur(strip);
+    expect(screen.getByTestId("prompt-cursor")).toHaveAttribute("data-cursor-focused", "false");
+  });
+
+  it("focus state applies to the block cursor too", () => {
+    render(
+      <PromptStrip
+        cwd="/tmp"
+        branch="main"
+        line={singleRow("ls", { cursorCol: 0 })}
+        onInput={noop}
+        viKeymap="vicmd"
+      />,
+    );
+    fireEvent.focus(screen.getByTestId("prompt-strip"));
+    const cursor = screen.getByTestId("prompt-cursor");
+    // Focused block: accent bg, bg-inverse fg.
+    expect(cursor.style.background).toBe("var(--accent)");
+    expect(cursor.style.color).toBe("var(--bg)");
+    fireEvent.blur(screen.getByTestId("prompt-strip"));
+    // Blurred block: transparent bg, fg text color, accent border.
+    expect(cursor.style.background).toBe("transparent");
+    expect(cursor.style.color).toBe("var(--fg)");
+    expect(cursor.style.border).toContain("var(--accent)");
+  });
+});

@@ -89,6 +89,18 @@ export interface PromptStripProps {
   /** The current git branch, sourced from OSC 133 A. */
   branch: string | null;
   /**
+   * M12.8: raw zsh KEYMAP / bash-readline mode-string value from the
+   * most recent OSC 133;M. Drives the caret/cursor shape:
+   *   - `null` / `main` / `emacs` / `viins` → thin insertion caret
+   *     (2px vertical bar between chars).
+   *   - `vicmd` / `visual` → block cursor over the character at the
+   *     cursor position (inverts fg/bg, or hollow outline when the
+   *     strip is blurred).
+   * Same value the statusline sub-mode chip already consumes; this
+   * prop just threads it into the cursor render.
+   */
+  viKeymap?: string | null;
+  /**
    * M12.4: commit counts vs upstream. `null` when the shim omitted
    * the field (no upstream, or both zero). The chrome renders
    * `↑N` / `↓M` in muted tone only when at least one is non-null.
@@ -241,15 +253,94 @@ const LINE_TEXT_PLACEHOLDER: CSSProperties = {
   fontSize: 13,
 };
 
-const CURSOR_BAR: CSSProperties = {
+/**
+ * M12.8 cursor shapes.
+ *
+ * `line` — thin insertion caret. Sits BETWEEN characters (the
+ * classic `|` cursor). Used for emacs, vi INSERT (`viins`), and
+ * when the shim isn't reporting a keymap (default to the safer
+ * "insertion" shape).
+ *
+ * `block` — full-cell block over the character at `cursorCol`.
+ * Used for vi NORMAL (`vicmd`) and VISUAL. Inverts the character
+ * (`background: accent, color: bg`) so the letter under the cursor
+ * stays readable against the fill. When the cursor sits past the
+ * last character, we render an empty block containing a space so
+ * it stays visible at end-of-line.
+ *
+ * Each has a focused and a blurred variant:
+ *
+ *   - Focused → solid fill (accent).
+ *   - Blurred → hollow outline (1.5px border, no fill). Same
+ *     shape, so the mode read stays consistent whether or not the
+ *     strip owns keys; the SOLIDITY tells you the focus state.
+ *
+ * Height uses `1em` (relative to the strip's font-size, currently
+ * `var(--font-size-terminal)`) so the cursor scales with the
+ * terminal font-size preference — the same reason mode strings on
+ * the statusline scale, not a magic number.
+ */
+type CursorKind = "line" | "block";
+
+const CURSOR_LINE_FOCUSED: CSSProperties = {
   display: "inline-block",
-  width: 8,
-  height: 16,
+  width: 2,
+  height: "1em",
   background: "var(--accent)",
-  opacity: 0.85,
-  verticalAlign: "middle",
-  marginLeft: 1,
+  verticalAlign: "text-bottom",
+  // Sit tight against the following character.
+  marginRight: -2,
 };
+
+const CURSOR_LINE_BLURRED: CSSProperties = {
+  display: "inline-block",
+  width: 2,
+  height: "1em",
+  background: "transparent",
+  border: "1.5px solid var(--accent)",
+  boxSizing: "border-box",
+  verticalAlign: "text-bottom",
+  marginRight: -2,
+};
+
+const CURSOR_BLOCK_FOCUSED: CSSProperties = {
+  display: "inline-block",
+  minWidth: "1ch",
+  height: "1em",
+  background: "var(--accent)",
+  color: "var(--bg)",
+  verticalAlign: "text-bottom",
+  // Zero horizontal padding so the block aligns with the
+  // underlying character's width exactly.
+  padding: 0,
+  // `pre` preserves any whitespace char (space, tab) under the
+  // block so the width matches the actual character rather than
+  // collapsing to zero.
+  whiteSpace: "pre",
+};
+
+const CURSOR_BLOCK_BLURRED: CSSProperties = {
+  display: "inline-block",
+  minWidth: "1ch",
+  height: "1em",
+  background: "transparent",
+  color: "var(--fg)",
+  border: "1.5px solid var(--accent)",
+  boxSizing: "border-box",
+  verticalAlign: "text-bottom",
+  padding: 0,
+  whiteSpace: "pre",
+  // 1.5px border subtracts from the visible cell area; pull it
+  // back with a tiny negative margin so the visible width still
+  // matches a plain character cell.
+  marginLeft: -1.5,
+  marginRight: -1.5,
+};
+
+function cursorStyle(kind: CursorKind, focused: boolean): CSSProperties {
+  if (kind === "block") return focused ? CURSOR_BLOCK_FOCUSED : CURSOR_BLOCK_BLURRED;
+  return focused ? CURSOR_LINE_FOCUSED : CURSOR_LINE_BLURRED;
+}
 
 /**
  * Render helper: slice `row.text` / `.styled` / `.selected` at
@@ -279,6 +370,7 @@ function PromptStripInner(
     line,
     onInput,
     assistantDocked: assistantDockedProp,
+    viKeymap = null,
   }: PromptStripProps,
   ref: Ref<HTMLDivElement>,
 ): React.ReactElement {
@@ -289,6 +381,23 @@ function PromptStripInner(
   // isolation; App-level rendering always relies on context.
   const assistantDocked = assistantDockedProp ?? contextDocked;
   const displayCwd = compactCwd(cwd, home);
+
+  // M12.8: cursor shape derives from the shell's active keymap.
+  //   `vicmd` / `visual` → block cursor over the char at cursorCol.
+  //   everything else (viins, main, emacs, null) → thin insertion
+  //     caret between chars.
+  // The statusline's `viSubModeFromKeymap` normalises these strings
+  // already; we reuse that logic to keep the two surfaces in sync
+  // (if the pill says NORMAL, the cursor shows the block; if the
+  // pill says INSERT or hides, the cursor shows the caret).
+  const cursorKind: CursorKind = viKeymap === "vicmd" || viKeymap === "visual" ? "block" : "line";
+
+  // Focus tracked internally rather than accepted as a prop: the
+  // strip's focus state is naturally a DOM concern, and threading
+  // it as a prop from every caller would be tedious. `focus` and
+  // `blur` bubble through the outer div; we listen on the same
+  // element the ref points to.
+  const [isFocused, setIsFocused] = useState(false);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     // `?` on an empty prompt opens the assistant, matching the strip's
@@ -361,6 +470,8 @@ function PromptStripInner(
       aria-label="Shell prompt"
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
       style={WRAPPER}
     >
       {line.rows.map((row, rowIdx) => (
@@ -375,6 +486,8 @@ function PromptStripInner(
           gitBehind={gitBehind}
           language={language}
           cursorCol={rowIdx === line.cursorRow ? line.cursorCol : null}
+          cursorKind={cursorKind}
+          cursorFocused={isFocused}
           showPlaceholder={rowIdx === 0 && !hasTyping}
           assistantDocked={assistantDocked}
         />
@@ -418,6 +531,8 @@ function PromptRowView({
   gitBehind,
   language,
   cursorCol,
+  cursorKind,
+  cursorFocused,
   showPlaceholder,
   assistantDocked,
 }: {
@@ -432,6 +547,12 @@ function PromptRowView({
   /** Column the cursor sits at within this row, or `null` if the cursor
    *  is on a different row. */
   cursorCol: number | null;
+  /** M12.8 cursor shape (line vs block). Only meaningful when
+   *  `cursorCol` is non-null; ignored otherwise. */
+  cursorKind: CursorKind;
+  /** True while the outer prompt-strip div owns focus. Drives the
+   *  solid-vs-hollow rendering of the cursor. */
+  cursorFocused: boolean;
   showPlaceholder: boolean;
   assistantDocked: boolean;
 }): React.ReactElement {
@@ -439,11 +560,19 @@ function PromptRowView({
   const langChip = languageChip(language);
   const showAhead = gitAhead !== null && gitAhead > 0;
   const showBehind = gitBehind !== null && gitBehind > 0;
-  // Split around the cursor so the CURSOR_BAR sits between the two
-  // halves in document order. `CommandSpans` (M12.6a) handles the
-  // tokenizer + colour selection for each half; the strip just
-  // handles the slicing here.
-  const splitCol = cursorCol ?? row.text.length;
+  // Split around the cursor. For a `line` cursor (thin caret), the
+  // cursor sits BETWEEN characters at `cursorCol`, so the row splits
+  // into `[0..cursorCol) | cursor | [cursorCol..end)`. For a `block`
+  // cursor, the block covers ONE character at `cursorCol`, so the
+  // row splits into `[0..cursorCol) | block(text[cursorCol]) |
+  // [cursorCol+1..end)`. When `cursorCol` is past the last
+  // character (i.e., at end-of-line), the block wraps a single
+  // space so it stays visible.
+  const cursorCharCol = cursorCol ?? row.text.length;
+  const isBlockCursor = cursorCol !== null && cursorKind === "block";
+  const beforeEnd = cursorCharCol;
+  const afterStart = isBlockCursor ? cursorCharCol + 1 : cursorCharCol;
+  const cursorChar = cursorCharCol < row.text.length ? row.text.charAt(cursorCharCol) : " ";
   return (
     <div style={ROW} data-testid={`prompt-row-${rowIdx}`}>
       <span style={{ ...META_GROUP, ...chromeStyle }}>
@@ -507,11 +636,21 @@ function PromptRowView({
       </span>
       <span style={LINE_AREA} data-testid={isFirst ? "prompt-line" : undefined} data-row={rowIdx}>
         <span data-testid={isFirst ? "prompt-line-text" : undefined}>
-          {rowSpans(row, 0, splitCol)}
+          {rowSpans(row, 0, beforeEnd)}
         </span>
-        {cursorCol !== null && <span style={CURSOR_BAR} data-testid="prompt-cursor" />}
+        {cursorCol !== null && (
+          <span
+            style={cursorStyle(cursorKind, cursorFocused)}
+            data-testid="prompt-cursor"
+            data-cursor-kind={cursorKind}
+            data-cursor-focused={cursorFocused ? "true" : "false"}
+            aria-hidden="true"
+          >
+            {isBlockCursor ? cursorChar : ""}
+          </span>
+        )}
         {row.text.length > 0 || cursorCol !== null ? (
-          <span>{rowSpans(row, splitCol, row.text.length)}</span>
+          <span>{rowSpans(row, afterStart, row.text.length)}</span>
         ) : null}
         {showPlaceholder && (
           <span style={LINE_TEXT_PLACEHOLDER}>
