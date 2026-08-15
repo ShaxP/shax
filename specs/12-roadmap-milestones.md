@@ -318,9 +318,26 @@ Detail in `17-pdf-viewer.md`. Sliced M11.1 – M11.3 (detection + routing, pdf.j
 
 Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.8 (focus + mode pill, shell integration hardening, multi-line input, custom header + native status probes, syntax highlighting on the input line, extending highlighting to every surface, cursor personality).
 
+## M13 Sidebar with pinnable widgets (Phase 1)
+
+**Goal:** grow a new persistent left-column surface — a collapsible sidebar that hosts always-on utility widgets. Phase 1 ships the sidebar chrome and five Shax-authored built-in widgets (clock, CPU/memory, network, git branch of the active pane, caffeinate); no runtime, no schema, no sandbox — those come in Phase 2. **Lead:** frontend, with core for the new native probes (`sysinfo`, per-OS SSID lookup).
+
+- Sidebar chrome: 280px expanded / 44px icon-rail collapsed, `⌘B` toggle, per-window scope, first-run default icon rail. Focus never leaves the active pane on sidebar interaction.
+- Clock widget: `HH:MM` + date, tick-shares with the M12.4 header clock.
+- CPU/Memory widget: cross-platform via `sysinfo` v0.32, 2s refresh.
+- Network widget: SSID + default-route IP + up/down; SSID via a new per-OS probe (macOS `airport`, Linux `iwgetid`, Windows `netsh wlan`), IP reuses M12.4b `system_local_ip`, no ping (local-first, no telemetry).
+- Git-branch-of-active-pane widget: subscribes to the M12.4 prompt-header branch signal, updates on focus change + OSC 133 A, no additional polling.
+- Caffeinate widget: click emits the real OS command into the focused pane's scrollback per the honest-log non-negotiable (`caffeinate -di` / `systemd-inhibit`). Widget state derives from the emitted block's lifecycle. Windows caffeinate deferred (no clean honest-shell-command path).
+
+**Exit:** every window has a sidebar with an icon rail visible by default; `⌘B` expands and collapses; the five widgets render live data on macOS and Linux; the caffeinate widget makes its command visible in scrollback and reflects Ctrl+C from either the widget or the pane; focus stays with the terminal at all times.
+
+**Explicitly out of scope:** community widget sandbox (Phase 2), drag-to-reorder widgets, per-widget preferences panel, Windows caffeinate, weather / kubectl widgets, sidebar-hosted panes / editors, a third "fully hidden" sidebar state.
+
+Detail in `19-sidebar.md`. Sliced M13.1 – M13.4 (sidebar chrome + toggle, clock + git-branch, CPU/memory + network, caffeinate).
+
 ## Post-M8 candidates
 
-Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M12→M13+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
+Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M14+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
 
 ### PDF viewer follow-ups
 
@@ -330,11 +347,10 @@ Deferred from M11: zoom controls (in / out / fit-width toggle) for small-print P
 
 Follows M10. Users drop a `~/.config/shax/themes/<id>/theme.json` for any theme outside the built-in catalog. Same schema as the embedded catalog, plus a per-theme reload trigger in the palette. Pure data, no sandbox needed. Held for a follow-up milestone so M10 can ship without carrying schema-versioning and filesystem-watch UX.
 
-### Sidebar with pinnable widgets
+### Sidebar Phase 2 — community widget sandbox
 
-A collapsible sidebar (left, opposite the assistant dock on the right) holding always-on utility widgets that share Shax's visual language: clock/calendar, caffeinate toggle (which emits `caffeinate -di` into scrollback per the honest-log non-negotiable), network status, git-branch-of-active-pane, weather, kubectl context, and similar. Two phases:
+Follows M13. The Web Worker + declarative schema pattern already used for formatters and commands, extended for widget-specific needs (persistent state, timer ticks, richer rendering). Capability gates: theme yes, keyboard yes, timer yes; network only via an explicit user-granted permission at install time (`wttr.in` for weather, etc.); shell only through the safety gate, same rule as community commands. A per-widget max tick rate and a total widget-budget cap so twelve pinned widgets can't turn the app into a heater. Also picks up the drag-to-reorder story that Phase 1 deferred, and the Windows caffeinate follow-up if the honest-shell-command path is figured out by then.
 
-- **Phase 1: built-in widgets, no runtime.** Sidebar chrome, focus/interaction rules (click-to-interact, Escape returns focus to the active pane, keyboard focus never steals from the pane by default), and five or six Shax-authored React widgets in-repo. Establishes the visual pattern.
-- **Phase 2: community widget sandbox.** Same Web Worker + declarative schema pattern used for formatters and commands, extended for widget-specific needs (persistent state, timer ticks, richer rendering). Capability gates: theme yes, keyboard yes, timer yes; network only via an explicit user-granted permission at install time (`wttr.in` for weather, etc.); shell only through the safety gate, same rule as community commands. A per-widget max tick rate and a total widget-budget cap so twelve pinned widgets can't turn the app into a heater.
+### No in-Shax app runtime — a standing non-goal
 
-**Non-goals — explicit, not deferred.** A full "in-Shax app runtime" is out of scope: no Shax-native editor (users bring vim / Neovim / Helix / Zed in a pane), no cooler top-clone (btop and htop exist), no first-class pane-occupying apps. Every "app runtime" proposal that arises should be rerouted into either a widget in the sidebar or a real command running in a pane. The daily-driver non-negotiable is what draws the line here — Shax stays *a great terminal*, not an IDE-shaped dashboard.
+A full "in-Shax app runtime" is explicitly out of scope, not deferred: no Shax-native editor (users bring vim / Neovim / Helix / Zed in a pane), no cooler top-clone (btop and htop exist), no first-class pane-occupying apps. Every "app runtime" proposal that arises should be rerouted into either a widget in the sidebar or a real command running in a pane. The daily-driver non-negotiable is what draws the line here — Shax stays *a great terminal*, not an IDE-shaped dashboard.
