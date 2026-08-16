@@ -924,3 +924,107 @@ describe("App / Cmd+K assistant close (M12 close-out)", () => {
     }
   });
 });
+
+describe("App / sidebar (M13.1)", () => {
+  it("renders the sidebar in the rail state by default (spec §D2)", () => {
+    render(<App />);
+    const sidebar = screen.getByTestId("sidebar");
+    expect(sidebar).toBeInTheDocument();
+    expect(sidebar.getAttribute("data-visible")).toBe("false");
+  });
+
+  it("⌘B toggles sidebar visibility (spec §D2)", () => {
+    render(<App />);
+    const sidebar = screen.getByTestId("sidebar");
+    expect(sidebar.getAttribute("data-visible")).toBe("false");
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", metaKey: true });
+    });
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("true");
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", metaKey: true });
+    });
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("false");
+  });
+
+  it("clicking the chevron toggle flips visibility", () => {
+    render(<App />);
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("false");
+    fireEvent.click(screen.getByTestId("sidebar-toggle"));
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("true");
+  });
+
+  it("shax:toggle-sidebar event bus flips visibility (palette command path)", () => {
+    render(<App />);
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("false");
+    act(() => {
+      window.dispatchEvent(new CustomEvent("shax:toggle-sidebar"));
+    });
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("true");
+  });
+
+  it("persists sidebar.visible in the saved JSON blob (per-window)", async () => {
+    render(<App />);
+    await vi.waitFor(() => {
+      expect(mockAppStateLoad).toHaveBeenCalled();
+    });
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", metaKey: true });
+    });
+    await vi.waitFor(
+      () => {
+        expect(mockAppStateSave).toHaveBeenCalled();
+      },
+      { timeout: 1000 },
+    );
+    const calls = mockAppStateSave.mock.calls;
+    const lastCall = calls[calls.length - 1];
+    const json = lastCall?.[0] as string;
+    const parsed = JSON.parse(json) as { sidebar?: { visible?: boolean } };
+    expect(parsed.sidebar?.visible).toBe(true);
+  });
+
+  it("hydrates sidebar.visible from saved JSON on mount", async () => {
+    const saved = JSON.stringify({
+      tabs: [
+        {
+          id: "tab-saved",
+          label: "shax",
+          layout: { kind: "leaf", paneId: "pane-saved" },
+          focusedPaneId: "pane-saved",
+          panes: { "pane-saved": { cwd: null, branch: null } },
+        },
+      ],
+      activeId: "tab-saved",
+      sidebar: { visible: true },
+    });
+    mockAppStateLoad.mockResolvedValueOnce(saved);
+    render(<App />);
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("true");
+    });
+  });
+
+  it("hydrates sidebar.visible=false when the field is missing (pre-M13 blob)", async () => {
+    // Pre-M13 saved state has no `sidebar` field — it must default to
+    // the first-run icon-rail state, not throw or crash the hydrate.
+    const saved = JSON.stringify({
+      tabs: [
+        {
+          id: "tab-saved",
+          label: "shax",
+          layout: { kind: "leaf", paneId: "pane-saved" },
+          focusedPaneId: "pane-saved",
+          panes: { "pane-saved": { cwd: null, branch: null } },
+        },
+      ],
+      activeId: "tab-saved",
+    });
+    mockAppStateLoad.mockResolvedValueOnce(saved);
+    render(<App />);
+    await vi.waitFor(() => {
+      expect(screen.getAllByTestId("title-tab")).toHaveLength(1);
+    });
+    expect(screen.getByTestId("sidebar").getAttribute("data-visible")).toBe("false");
+  });
+});
