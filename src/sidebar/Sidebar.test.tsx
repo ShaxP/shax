@@ -1,17 +1,19 @@
 /**
- * Sidebar component tests (M13.1, spec §19).
+ * Sidebar component tests (M13, spec §19).
  *
- * Covers the chrome-only Phase-1 contract:
+ * Covers the sidebar chrome contract:
  *   - both states render at the expected widths
  *   - the toggle button fires onToggle
- *   - expanded state carries the "no widgets yet" placeholder
- *   - rail state does not carry the placeholder
+ *   - the built-in widgets (clock, git branch) render in the slot
  *   - mousedown on ANY sidebar target preventDefault's — including
  *     the toggle button — so clicks never blur whatever owns focus
  *     (spec §D4). preventDefault on mousedown does not cancel the
  *     click event, so the chevron still fires normally on mouseup.
  *   - right-click / middle-click mousedown is left to the browser
  *     default (only the primary button engages focus preservation).
+ *
+ * Widget rendering + data contracts have their own test files —
+ * this file just asserts the slot integration.
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -23,21 +25,24 @@ import { Sidebar } from "./Sidebar";
 afterEach(cleanup);
 
 describe("Sidebar / render", () => {
-  it("renders the rail (44px) when visible=false and no placeholder", () => {
+  it("renders the rail (44px) with rail-state widgets when visible=false", () => {
     render(<Sidebar visible={false} onToggle={vi.fn()} />);
     const root = screen.getByTestId("sidebar");
     expect(root.getAttribute("data-visible")).toBe("false");
     expect(root.style.width).toBe("44px");
-    // Widget slot is empty in the rail state — no "No widgets yet".
-    expect(screen.queryByText("No widgets yet")).not.toBeInTheDocument();
+    // Clock renders in its rail form; git branch is null (no repo in
+    // this bare Sidebar render — no FocusedPaneProvider ancestor).
+    expect(screen.getByTestId("sidebar-clock-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch-rail")).not.toBeInTheDocument();
   });
 
-  it("renders expanded (280px) with the placeholder when visible=true", () => {
+  it("renders expanded (280px) with expanded widgets when visible=true", () => {
     render(<Sidebar visible={true} onToggle={vi.fn()} />);
     const root = screen.getByTestId("sidebar");
     expect(root.getAttribute("data-visible")).toBe("true");
     expect(root.style.width).toBe("280px");
-    expect(screen.getByText("No widgets yet")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-clock")).toBeInTheDocument();
   });
 
   it("labels the toggle button by current state (aria-label + title)", () => {

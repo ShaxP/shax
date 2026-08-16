@@ -72,6 +72,8 @@ import {
   splitLeaf,
 } from "./panes/layout";
 import { AssistantDockProvider } from "./lib/AssistantDockContext";
+import { ClockProvider } from "./lib/ClockContext";
+import { FocusedPaneProvider, type FocusedPaneMeta } from "./lib/FocusedPaneContext";
 import { HomeDirProvider } from "./lib/HomeDirContext";
 import {
   appStateLoad,
@@ -93,6 +95,13 @@ import { loadCommunityFormatters } from "./formatters";
 interface PaneMeta {
   cwd: string | null;
   branch: string | null;
+  /** Commits ahead of upstream. Populated from OSC 133 A alongside
+   *  branch (M12.4). Lifted up to App scope in M13.2 so the sidebar
+   *  GitBranchWidget can render `↑n ↓n` — previously stranded in
+   *  `TerminalPane.promptMeta`. */
+  ahead: number | null;
+  /** Commits behind upstream. Same source and same lift as `ahead`. */
+  behind: number | null;
   altScreen: boolean;
   /**
    * Backend pty id assigned by `spawnPty`, populated once the spawn
@@ -132,6 +141,8 @@ type TabsAction =
       paneId: PaneId;
       cwd: string | null;
       branch: string | null;
+      ahead: number | null;
+      behind: number | null;
     }
   | { type: "update_alt_screen"; tabId: string; paneId: PaneId; altScreen: boolean }
   | { type: "update_pty_id"; tabId: string; paneId: PaneId; ptyId: string | null }
@@ -151,7 +162,7 @@ function freshTabId(): string {
 }
 
 function freshPaneMeta(): PaneMeta {
-  return { cwd: null, branch: null, altScreen: false, ptyId: null };
+  return { cwd: null, branch: null, ahead: null, behind: null, altScreen: false, ptyId: null };
 }
 
 /**
@@ -309,12 +320,25 @@ function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       return replaceTab(state, action.tabId, (tab) => {
         const current = tab.panes[action.paneId];
         if (current === undefined) return tab;
-        if (current.cwd === action.cwd && current.branch === action.branch) return tab;
+        if (
+          current.cwd === action.cwd &&
+          current.branch === action.branch &&
+          current.ahead === action.ahead &&
+          current.behind === action.behind
+        ) {
+          return tab;
+        }
         return {
           ...tab,
           panes: {
             ...tab.panes,
-            [action.paneId]: { ...current, cwd: action.cwd, branch: action.branch },
+            [action.paneId]: {
+              ...current,
+              cwd: action.cwd,
+              branch: action.branch,
+              ahead: action.ahead,
+              behind: action.behind,
+            },
           },
         };
       });
@@ -474,6 +498,10 @@ function hydrateFromJson(json: string): HydratedState | null {
       panes[paneId] = {
         cwd: meta?.cwd ?? null,
         branch: meta?.branch ?? null,
+        // ahead / behind are transient — the first OSC 133 A after
+        // the shell restarts repopulates them. Never persisted.
+        ahead: null,
+        behind: null,
         altScreen: false,
         // ptyId only becomes known after spawn resolves; restored panes
         // get fresh shells, so leave this null until then.
@@ -1040,8 +1068,15 @@ export default function App(): React.ReactElement {
   }, []);
 
   const handlePaneMeta = useCallback(
-    (tabId: string, paneId: PaneId, cwd: string | null, branch: string | null): void => {
-      dispatch({ type: "update_meta", tabId, paneId, cwd, branch });
+    (
+      tabId: string,
+      paneId: PaneId,
+      cwd: string | null,
+      branch: string | null,
+      ahead: number | null,
+      behind: number | null,
+    ): void => {
+      dispatch({ type: "update_meta", tabId, paneId, cwd, branch, ahead, behind });
     },
     [],
   );
@@ -1276,280 +1311,317 @@ export default function App(): React.ReactElement {
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const activeFocused = activeTab !== null ? activeTab.panes[activeTab.focusedPaneId] : null;
 
+  // FocusedPaneContext value (M13.2). Narrowed to the fields sidebar
+  // widgets need — `altScreen` stays App-private. Memoised on the
+  // PRIMITIVE fields, not on `activeFocused` itself — `activeFocused`
+  // is re-derived every render from `state.tabs.find(…).panes[…]`
+  // and so is a fresh object reference each time, which would defeat
+  // the memo. eslint-plugin-react-hooks can't tell the difference,
+  // hence the disable with justification.
+  //
+  // The primitive-field deps ensure subscribers only re-render when
+  // an actual value changes (e.g. a new OSC 133 A arrives with a new
+  // branch), not on every parent render (which would tick every 1s
+  // because the clock lives in the same component).
+  const focusedPaneMeta: FocusedPaneMeta | null = useMemo(() => {
+    if (activeFocused == null) return null;
+    return {
+      ptyId: activeFocused.ptyId,
+      cwd: activeFocused.cwd,
+      branch: activeFocused.branch,
+      ahead: activeFocused.ahead,
+      behind: activeFocused.behind,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeFocused?.ptyId,
+    activeFocused?.cwd,
+    activeFocused?.branch,
+    activeFocused?.ahead,
+    activeFocused?.behind,
+  ]);
+
   return (
     <HomeDirProvider value={home}>
-      <AssistantDockProvider value={assistantOpen}>
-        <div
-          style={{
-            width: "100%",
-            height: "100%",
-            display: "flex",
-            flexDirection: "column",
-            background: "var(--bg)",
-            color: "var(--fg)",
-            fontFamily: "var(--font-ui)",
-          }}
-        >
-          <TitleBar
-            tabs={titleTabs}
-            activeId={activeId}
-            onSwitch={handleSwitch}
-            onNew={handleNew}
-            onClose={handleCloseTab}
-            onSearch={() => setSearchOpen(true)}
-          />
-          <main
-            ref={tabHostRef}
-            data-testid="tab-host"
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: "flex",
-              flexDirection: "row",
-              background: "var(--bg)",
-            }}
-          >
-            {/* Left column: the sidebar (M13.1, spec §19). Fixed-width
+      <ClockProvider value={clockNow}>
+        <FocusedPaneProvider value={focusedPaneMeta}>
+          <AssistantDockProvider value={assistantOpen}>
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                background: "var(--bg)",
+                color: "var(--fg)",
+                fontFamily: "var(--font-ui)",
+              }}
+            >
+              <TitleBar
+                tabs={titleTabs}
+                activeId={activeId}
+                onSwitch={handleSwitch}
+                onNew={handleNew}
+                onClose={handleCloseTab}
+                onSearch={() => setSearchOpen(true)}
+              />
+              <main
+                ref={tabHostRef}
+                data-testid="tab-host"
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "row",
+                  background: "var(--bg)",
+                }}
+              >
+                {/* Left column: the sidebar (M13.1, spec §19). Fixed-width
               first sibling of the tab area — 44px icon rail or 280px
               expanded — with its own persistence and ⌘B toggle. */}
-            <Sidebar visible={sidebarVisible} onToggle={() => setSidebarVisible((prev) => !prev)} />
-            {/* Middle column: the tab area. Was the whole of `<main>` before
+                <Sidebar
+                  visible={sidebarVisible}
+                  onToggle={() => setSidebarVisible((prev) => !prev)}
+                />
+                {/* Middle column: the tab area. Was the whole of `<main>` before
               M7.7a; the assistant now sits to its right in the same row
               when docked. `position: relative` here so the absolutely-
               positioned per-tab wrappers layout against this column
               (they used to hang off `<main>` itself). */}
-            <div data-testid="tab-area" style={{ flex: 1, minWidth: 0, position: "relative" }}>
-              {tabs.map((tab) => {
-                const isActiveTab = tab.id === activeId;
-                return (
-                  <div
-                    key={tab.id}
-                    data-testid="tab-pane-wrapper"
-                    data-tab-id={tab.id}
-                    data-active={isActiveTab ? "true" : "false"}
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      visibility: isActiveTab ? "visible" : "hidden",
-                      pointerEvents: isActiveTab ? "auto" : "none",
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
-                  >
-                    <LayoutRender
-                      tabId={tab.id}
-                      node={tab.layout}
-                      focusedPaneId={tab.focusedPaneId}
-                      tabActive={isActiveTab}
-                      // The callbacks are kept reference-stable (useCallback
-                      // with `[]`) so LayoutRender can hand stable handlers
-                      // to every PaneLeaf — re-renders during a divider drag
-                      // no longer cascade into the TerminalPane subtree.
-                      onPaneFocus={handlePaneFocus}
-                      onPaneMeta={handlePaneMeta}
-                      onPaneAltScreen={handlePaneAltScreen}
-                      onPanePtyId={handlePanePtyId}
-                      onSetRatio={handleSetRatio}
-                      // Persisted per-pane cwd + branch surface at
-                      // first mount so restored panes spawn back
-                      // into their saved directory (cwd via
-                      // SpawnOpts) and render the correct branch
-                      // label in the prompt strip immediately (no
-                      // wait for the first OSC 133 A). Deliberately
-                      // excluded from `paneLeafEqual`, so the
-                      // mostly-pointless updates as the shell
-                      // cds / git-checkouts around don't cascade
-                      // into the pane subtree.
-                      initialPaneMeta={panePaneMeta(tab)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            {/* Right column: the docked assistant. Sibling of the tab
+                <div data-testid="tab-area" style={{ flex: 1, minWidth: 0, position: "relative" }}>
+                  {tabs.map((tab) => {
+                    const isActiveTab = tab.id === activeId;
+                    return (
+                      <div
+                        key={tab.id}
+                        data-testid="tab-pane-wrapper"
+                        data-tab-id={tab.id}
+                        data-active={isActiveTab ? "true" : "false"}
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          visibility: isActiveTab ? "visible" : "hidden",
+                          pointerEvents: isActiveTab ? "auto" : "none",
+                          display: "flex",
+                          flexDirection: "column",
+                        }}
+                      >
+                        <LayoutRender
+                          tabId={tab.id}
+                          node={tab.layout}
+                          focusedPaneId={tab.focusedPaneId}
+                          tabActive={isActiveTab}
+                          // The callbacks are kept reference-stable (useCallback
+                          // with `[]`) so LayoutRender can hand stable handlers
+                          // to every PaneLeaf — re-renders during a divider drag
+                          // no longer cascade into the TerminalPane subtree.
+                          onPaneFocus={handlePaneFocus}
+                          onPaneMeta={handlePaneMeta}
+                          onPaneAltScreen={handlePaneAltScreen}
+                          onPanePtyId={handlePanePtyId}
+                          onSetRatio={handleSetRatio}
+                          // Persisted per-pane cwd + branch surface at
+                          // first mount so restored panes spawn back
+                          // into their saved directory (cwd via
+                          // SpawnOpts) and render the correct branch
+                          // label in the prompt strip immediately (no
+                          // wait for the first OSC 133 A). Deliberately
+                          // excluded from `paneLeafEqual`, so the
+                          // mostly-pointless updates as the shell
+                          // cds / git-checkouts around don't cascade
+                          // into the pane subtree.
+                          initialPaneMeta={panePaneMeta(tab)}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Right column: the docked assistant. Sibling of the tab
               area in the same flex row so opening the dock shrinks
               the tab area rather than covering it. Rendered inside
               `<main>` (not as a floating overlay) so it participates
               in normal layout (M7.7a). */}
-            {assistantOpen && (
-              <>
-                <AssistantDockDivider
-                  width={assistantWidth}
-                  hostRef={tabHostRef}
-                  onResize={setAssistantWidth}
-                  onCommit={setAssistantWidth}
-                />
-                <div
-                  data-testid="assistant-dock"
-                  style={{ width: assistantWidth, flexShrink: 0, display: "flex" }}
-                >
-                  <AssistantOverlay
-                    seededPrompt={assistantSeed}
-                    onSeedConsumed={() => setAssistantSeed(null)}
-                    onClose={() => {
-                      setAssistantOpen(false);
-                      setAssistantSeed(null);
-                      refocusActivePane();
-                    }}
-                    onOpenSettings={() => setSettingsOpen(true)}
-                    targetPtyId={activeFocused?.ptyId ?? null}
-                  />
-                </div>
-              </>
-            )}
-          </main>
-          <Statusline
-            mode={
-              // Precedence: CHAT > INTERACTIVE > BLOCK > COMMAND. CHAT
-              // wins because it names where the keys ARE going (the
-              // assistant textarea); INTERACTIVE ranks above BLOCK
-              // because when an alt-screen program (vim / less / top)
-              // owns the pane, the block list is hidden and block-focus
-              // can't be entered anyway. See spec §18 M12.4.
-              assistantInputFocused
-                ? "CHAT"
-                : activeFocused?.altScreen
-                  ? "INTERACTIVE"
-                  : activePaneInBlockFocus
-                    ? "BLOCK"
-                    : "COMMAND"
-            }
-            interactiveCwd={
-              activeFocused?.altScreen && activeFocused.cwd
-                ? compactCwd(activeFocused.cwd, home)
-                : null
-            }
-            viKeymap={activePaneViKeymap}
-            user={activePaneIdentity.user}
-            host={activePaneIdentity.host}
-            clock={clockLabel}
-            clockTooltip={clockTooltip}
-            battery={batteryStatus}
-            localIp={localIp}
-            assistantActive={assistantOpen}
-            approvalsPending={approvalsPending}
-          />
-          {searchOpen && (
-            <SearchOverlay
-              currentCwd={activeFocused?.cwd ?? null}
-              currentBranch={activeFocused?.branch ?? null}
-              onClose={() => {
-                setSearchOpen(false);
-                refocusActivePane();
-              }}
-              onSelect={(hit) => {
-                // Search hand-off rule (slice 3.2 polish):
-                //
-                //   1. Live pane exists for this block (its PTY is still in
-                //      this session) → switch tabs + focus that pane, then
-                //      tell it to select the matching block row.
-                //   2. No live pane (block from a previous session, or its
-                //      pane was closed) → surface the block in the *current
-                //      active* pane via the `inspect_block` reducer action,
-                //      tagged "from history". Same selection treatment.
-                //
-                // Either way the user lands in a pane with the matched
-                // block visible and selected — no separate viewer modal.
-                setSearchOpen(false);
-                const live = findPaneByPtyId(state.tabs, hit.pane_id);
-                const target =
-                  live ??
-                  (() => {
-                    const tab = state.tabs.find((t) => t.id === state.activeId);
-                    if (tab === undefined) return null;
-                    return { tabId: tab.id, paneId: tab.focusedPaneId };
-                  })();
-                if (target === null) return;
-                if (target.tabId !== state.activeId) {
-                  dispatch({ type: "switch_tab", id: target.tabId });
+                {assistantOpen && (
+                  <>
+                    <AssistantDockDivider
+                      width={assistantWidth}
+                      hostRef={tabHostRef}
+                      onResize={setAssistantWidth}
+                      onCommit={setAssistantWidth}
+                    />
+                    <div
+                      data-testid="assistant-dock"
+                      style={{ width: assistantWidth, flexShrink: 0, display: "flex" }}
+                    >
+                      <AssistantOverlay
+                        seededPrompt={assistantSeed}
+                        onSeedConsumed={() => setAssistantSeed(null)}
+                        onClose={() => {
+                          setAssistantOpen(false);
+                          setAssistantSeed(null);
+                          refocusActivePane();
+                        }}
+                        onOpenSettings={() => setSettingsOpen(true)}
+                        targetPtyId={activeFocused?.ptyId ?? null}
+                      />
+                    </div>
+                  </>
+                )}
+              </main>
+              <Statusline
+                mode={
+                  // Precedence: CHAT > INTERACTIVE > BLOCK > COMMAND. CHAT
+                  // wins because it names where the keys ARE going (the
+                  // assistant textarea); INTERACTIVE ranks above BLOCK
+                  // because when an alt-screen program (vim / less / top)
+                  // owns the pane, the block list is hidden and block-focus
+                  // can't be entered anyway. See spec §18 M12.4.
+                  assistantInputFocused
+                    ? "CHAT"
+                    : activeFocused?.altScreen
+                      ? "INTERACTIVE"
+                      : activePaneInBlockFocus
+                        ? "BLOCK"
+                        : "COMMAND"
                 }
-                dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
-                refocusActivePane();
-                // Defer one tick so the tab/pane switch commits before we
-                // ask the (now-visible) BlockList to scroll + select. The
-                // listeners live in the matching TerminalPane.
-                setTimeout(() => {
-                  // `focus: true` opts the target pane into block-focus
-                  // mode along with the selection. Search jumps are an
-                  // explicit "I want to interact with this block" signal,
-                  // so the keymap (j/k/Enter/Esc/…) should be live the
-                  // moment the user lands. Click-to-select on a row
-                  // omits the flag and only updates the highlight.
-                  if (live !== null) {
-                    window.dispatchEvent(
-                      new CustomEvent("shax:select-block", {
-                        detail: { paneId: target.paneId, blockId: hit.block.id, focus: true },
-                      }),
-                    );
-                  } else {
-                    window.dispatchEvent(
-                      new CustomEvent("shax:inspect-block", {
-                        detail: { paneId: target.paneId, block: hit.block, focus: true },
-                      }),
-                    );
-                  }
-                }, 0);
-              }}
-            />
-          )}
-          {viewerTarget !== null && (
-            <BlockViewerModal
-              block={viewerTarget.block}
-              pty={viewerTarget.pty}
-              onClose={() => {
-                setViewerTarget(null);
-                refocusActivePane();
-              }}
-            />
-          )}
-          {paletteOpen && activeFocused?.ptyId != null && (
-            <PaletteOverlay
-              ctx={{
-                ptyId: activeFocused.ptyId,
-                cwd: activeFocused.cwd,
-                branch: activeFocused.branch,
-                gitRoot: null,
-              }}
-              onClose={() => {
-                setPaletteOpen(false);
-                refocusActivePane();
-              }}
-            />
-          )}
-          {/* One safety-gate instance for the whole app. Every
-           *  `shax:emit-command` from a widget, the assistant, or
-           *  the pane palette passes through this before it
-           *  reaches TerminalPane's PTY writer (spec §10). */}
-          <SafetyGate />
-          {settingsOpen && (
-            <SettingsModal
-              onClose={() => {
-                setSettingsOpen(false);
-                refocusActivePane();
-              }}
-            />
-          )}
-          {/* M9.6: close-confirmation modal. Rendered at App level
+                interactiveCwd={
+                  activeFocused?.altScreen && activeFocused.cwd
+                    ? compactCwd(activeFocused.cwd, home)
+                    : null
+                }
+                viKeymap={activePaneViKeymap}
+                user={activePaneIdentity.user}
+                host={activePaneIdentity.host}
+                clock={clockLabel}
+                clockTooltip={clockTooltip}
+                battery={batteryStatus}
+                localIp={localIp}
+                assistantActive={assistantOpen}
+                approvalsPending={approvalsPending}
+              />
+              {searchOpen && (
+                <SearchOverlay
+                  currentCwd={activeFocused?.cwd ?? null}
+                  currentBranch={activeFocused?.branch ?? null}
+                  onClose={() => {
+                    setSearchOpen(false);
+                    refocusActivePane();
+                  }}
+                  onSelect={(hit) => {
+                    // Search hand-off rule (slice 3.2 polish):
+                    //
+                    //   1. Live pane exists for this block (its PTY is still in
+                    //      this session) → switch tabs + focus that pane, then
+                    //      tell it to select the matching block row.
+                    //   2. No live pane (block from a previous session, or its
+                    //      pane was closed) → surface the block in the *current
+                    //      active* pane via the `inspect_block` reducer action,
+                    //      tagged "from history". Same selection treatment.
+                    //
+                    // Either way the user lands in a pane with the matched
+                    // block visible and selected — no separate viewer modal.
+                    setSearchOpen(false);
+                    const live = findPaneByPtyId(state.tabs, hit.pane_id);
+                    const target =
+                      live ??
+                      (() => {
+                        const tab = state.tabs.find((t) => t.id === state.activeId);
+                        if (tab === undefined) return null;
+                        return { tabId: tab.id, paneId: tab.focusedPaneId };
+                      })();
+                    if (target === null) return;
+                    if (target.tabId !== state.activeId) {
+                      dispatch({ type: "switch_tab", id: target.tabId });
+                    }
+                    dispatch({ type: "focus_pane", tabId: target.tabId, paneId: target.paneId });
+                    refocusActivePane();
+                    // Defer one tick so the tab/pane switch commits before we
+                    // ask the (now-visible) BlockList to scroll + select. The
+                    // listeners live in the matching TerminalPane.
+                    setTimeout(() => {
+                      // `focus: true` opts the target pane into block-focus
+                      // mode along with the selection. Search jumps are an
+                      // explicit "I want to interact with this block" signal,
+                      // so the keymap (j/k/Enter/Esc/…) should be live the
+                      // moment the user lands. Click-to-select on a row
+                      // omits the flag and only updates the highlight.
+                      if (live !== null) {
+                        window.dispatchEvent(
+                          new CustomEvent("shax:select-block", {
+                            detail: { paneId: target.paneId, blockId: hit.block.id, focus: true },
+                          }),
+                        );
+                      } else {
+                        window.dispatchEvent(
+                          new CustomEvent("shax:inspect-block", {
+                            detail: { paneId: target.paneId, block: hit.block, focus: true },
+                          }),
+                        );
+                      }
+                    }, 0);
+                  }}
+                />
+              )}
+              {viewerTarget !== null && (
+                <BlockViewerModal
+                  block={viewerTarget.block}
+                  pty={viewerTarget.pty}
+                  onClose={() => {
+                    setViewerTarget(null);
+                    refocusActivePane();
+                  }}
+                />
+              )}
+              {paletteOpen && activeFocused?.ptyId != null && (
+                <PaletteOverlay
+                  ctx={{
+                    ptyId: activeFocused.ptyId,
+                    cwd: activeFocused.cwd,
+                    branch: activeFocused.branch,
+                    gitRoot: null,
+                  }}
+                  onClose={() => {
+                    setPaletteOpen(false);
+                    refocusActivePane();
+                  }}
+                />
+              )}
+              {/* One safety-gate instance for the whole app. Every
+               *  `shax:emit-command` from a widget, the assistant, or
+               *  the pane palette passes through this before it
+               *  reaches TerminalPane's PTY writer (spec §10). */}
+              <SafetyGate />
+              {settingsOpen && (
+                <SettingsModal
+                  onClose={() => {
+                    setSettingsOpen(false);
+                    refocusActivePane();
+                  }}
+                />
+              )}
+              {/* M9.6: close-confirmation modal. Rendered at App level
             so it can appear for any of the four close scopes
             (pane / tab / window / app quit). onConfirm runs the
             captured close action (dispatch or IPC); onCancel
             just clears the pending state. */}
-          {pendingClose && (
-            <ConfirmCloseModal
-              count={pendingClose.count}
-              verb={pendingClose.verb}
-              onConfirm={() => {
-                const cb = pendingClose.onConfirm;
-                setPendingClose(null);
-                cb();
-              }}
-              onCancel={() => setPendingClose(null)}
-            />
-          )}
-          {/* AssistantOverlay lives inside <main> as a docked column (see
+              {pendingClose && (
+                <ConfirmCloseModal
+                  count={pendingClose.count}
+                  verb={pendingClose.verb}
+                  onConfirm={() => {
+                    const cb = pendingClose.onConfirm;
+                    setPendingClose(null);
+                    cb();
+                  }}
+                  onCancel={() => setPendingClose(null)}
+                />
+              )}
+              {/* AssistantOverlay lives inside <main> as a docked column (see
             above) as of M7.7a — no longer a fixed overlay here. */}
-        </div>
-      </AssistantDockProvider>
+            </div>
+          </AssistantDockProvider>
+        </FocusedPaneProvider>
+      </ClockProvider>
     </HomeDirProvider>
   );
 }

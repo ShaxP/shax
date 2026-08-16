@@ -1,5 +1,5 @@
 /**
- * Sidebar (M13.1, spec §19).
+ * Sidebar (M13, spec §19).
  *
  * The persistent left-column surface. Two states, controlled from
  * App:
@@ -11,24 +11,30 @@
  * collapse" palette command. All three routes ultimately call
  * `onToggle`.
  *
- * M13.1 ships the chrome only. The widget slot renders a "no widgets
- * yet" placeholder when expanded, and stays empty in the rail. M13.2
- * / M13.3 / M13.4 populate the slot.
+ * Widget list is hardcoded for Phase 1 (spec §D5 locks the set and
+ * order). Each widget accepts a `visible` prop so it can render
+ * differently in the expanded and rail states, and consumes its
+ * data via a Context (ClockContext, FocusedPaneContext) rather than
+ * receiving prop-drilled state through the Sidebar.
  *
  * Focus contract (spec §D4). The sidebar never steals keyboard focus
  * on click. Every mousedown on the sidebar root that lands on a
- * non-focusable target calls `preventDefault()`, which stops the
+ * non-text-input target calls `preventDefault()`, which stops the
  * browser's default blur behaviour — so whatever owns focus (prompt
- * strip, assistant textarea) keeps it after the click resolves. Same
- * pattern as BlockList and TitleBar's tab pill.
+ * strip, assistant textarea) keeps it after the click resolves.
+ * Buttons are included in this rule — spec §D4 requires clicks on
+ * sidebar buttons to preserve focus too (see the divergence note
+ * on `onRootMouseDown` below).
  *
- * Unlike those two, the sidebar does NOT dispatch `shax:refocus-pane`
- * because doing so would steal focus from the assistant back to the
- * pane on any sidebar click, which is wrong when the user is
- * mid-conversation.
+ * Unlike BlockList and TitleBar's tab pill, the sidebar does NOT
+ * dispatch `shax:refocus-pane` — doing so would steal focus from
+ * the assistant back to the pane on any sidebar click, which is
+ * wrong when the user is mid-conversation.
  */
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { ClockWidget } from "./widgets/ClockWidget";
+import { GitBranchWidget } from "./widgets/GitBranchWidget";
 
 const RAIL_WIDTH = 44;
 const EXPANDED_WIDTH = 280;
@@ -52,13 +58,6 @@ const WIDGET_SLOT: CSSProperties = {
   gap: 2,
   padding: 8,
   overflowY: "auto",
-};
-
-const EMPTY_HINT: CSSProperties = {
-  fontSize: 11.5,
-  color: "var(--fg-faint)",
-  padding: "12px 8px",
-  textAlign: "center",
 };
 
 const TOGGLE_BUTTON: CSSProperties = {
@@ -124,7 +123,8 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
       onMouseDown={onRootMouseDown}
     >
       <div data-testid="sidebar-widgets" style={WIDGET_SLOT}>
-        {visible && <div style={EMPTY_HINT}>No widgets yet</div>}
+        <ClockWidget visible={visible} />
+        <GitBranchWidget visible={visible} />
       </div>
       <button
         type="button"
