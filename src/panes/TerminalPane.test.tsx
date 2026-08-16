@@ -174,7 +174,8 @@ describe("TerminalPane", () => {
       />,
     );
     await vi.waitFor(() => {
-      expect(onMetaChange).toHaveBeenCalledWith("/Users/ada/proj", "feature/x");
+      // ahead/behind are null on mount — the OSC 133 A hasn't arrived yet.
+      expect(onMetaChange).toHaveBeenCalledWith("/Users/ada/proj", "feature/x", null, null);
     });
   });
 
@@ -195,10 +196,14 @@ describe("TerminalPane", () => {
         kind: "prompt_ready",
         cwd: "/tmp/scratch",
         git_branch: "main",
+        git_ahead: 2,
+        git_behind: 1,
       });
     });
     await vi.waitFor(() => {
-      expect(onMetaChange).toHaveBeenCalledWith("/tmp/scratch", "main");
+      // M13.2: ahead/behind now forward alongside cwd/branch so the
+      // sidebar's GitBranchWidget can render `↑n ↓n`.
+      expect(onMetaChange).toHaveBeenCalledWith("/tmp/scratch", "main", 2, 1);
     });
   });
 

@@ -155,11 +155,17 @@ export interface TerminalPaneProps {
    */
   active?: boolean;
   /**
-   * Notify the parent when this pane's cwd / branch changes (sourced from
-   * the latest OSC 133 A). Used by the App-level TitleBar and Statusline
-   * to show the active tab's metadata.
+   * Notify the parent when this pane's cwd / branch / ahead / behind
+   * changes (sourced from the latest OSC 133 A). Used by the App-level
+   * TitleBar, Statusline, and (M13.2) the sidebar's GitBranchWidget
+   * via FocusedPaneContext.
    */
-  onMetaChange?: (cwd: string | null, branch: string | null) => void;
+  onMetaChange?: (
+    cwd: string | null,
+    branch: string | null,
+    ahead: number | null,
+    behind: number | null,
+  ) => void;
   /**
    * Notify the parent when the alternate screen flips on or off so the
    * App can route focus and adjust chrome accordingly.
@@ -1258,6 +1264,8 @@ function TerminalPaneInner({
   // visible before that.
   const cwd = promptMeta.cwd;
   const branch = promptMeta.branch;
+  const ahead = promptMeta.ahead;
+  const behind = promptMeta.behind;
 
   // Tell the parent whenever cwd / branch / alt-screen changes so the
   // App-level chrome can mirror the active tab's state. We stash the
@@ -1277,8 +1285,8 @@ function TerminalPaneInner({
     onPtyIdChangeRef.current = onPtyIdChange;
   }, [onPtyIdChange]);
   useEffect(() => {
-    onMetaChangeRef.current?.(cwd, branch);
-  }, [cwd, branch]);
+    onMetaChangeRef.current?.(cwd, branch, ahead, behind);
+  }, [cwd, branch, ahead, behind]);
   useEffect(() => {
     onAltScreenChangeRef.current?.(altScreen);
   }, [altScreen]);

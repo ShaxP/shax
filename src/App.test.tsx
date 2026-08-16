@@ -1005,6 +1005,27 @@ describe("App / sidebar (M13.1)", () => {
     });
   });
 
+  it("M13.2: sidebar renders the clock widget in the initial rail state", () => {
+    render(<App />);
+    // Even in the default rail state (visible=false), the clock's
+    // rail variant renders — the sidebar is always populated with
+    // the built-in widgets in M13.2.
+    expect(screen.getByTestId("sidebar-clock-rail")).toBeInTheDocument();
+  });
+
+  it("M13.2: git-branch widget is hidden until the focused pane reports a branch", () => {
+    render(<App />);
+    // Expand the sidebar so the widget's expanded slot would render
+    // if the branch were present. The initial pane is a fresh shell
+    // with no OSC 133 A yet, so `activeFocused.branch` is null and
+    // the widget stays hidden.
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", metaKey: true });
+    });
+    expect(screen.queryByTestId("sidebar-git-branch")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch-rail")).not.toBeInTheDocument();
+  });
+
   it("hydrates sidebar.visible=false when the field is missing (pre-M13 blob)", async () => {
     // Pre-M13 saved state has no `sidebar` field — it must default to
     // the first-run icon-rail state, not throw or crash the hydrate.

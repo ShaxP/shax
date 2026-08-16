@@ -33,8 +33,15 @@ export interface LayoutRenderProps {
   tabActive: boolean;
   /** Click on a leaf → focus that pane in `tabId`. */
   onPaneFocus: (tabId: string, paneId: PaneId) => void;
-  /** Per-pane cwd / branch updates from OSC 133 A. */
-  onPaneMeta: (tabId: string, paneId: PaneId, cwd: string | null, branch: string | null) => void;
+  /** Per-pane cwd / branch / ahead / behind updates from OSC 133 A. */
+  onPaneMeta: (
+    tabId: string,
+    paneId: PaneId,
+    cwd: string | null,
+    branch: string | null,
+    ahead: number | null,
+    behind: number | null,
+  ) => void;
   /** Per-pane alt-screen toggle. */
   onPaneAltScreen: (tabId: string, paneId: PaneId, active: boolean) => void;
   /**
@@ -178,7 +185,13 @@ interface PaneLeafProps {
   showFocusRing: boolean;
   /** Stable; bound with `tabId` by the parent LayoutRender. */
   onFocus: (paneId: PaneId) => void;
-  onMeta: (paneId: PaneId, cwd: string | null, branch: string | null) => void;
+  onMeta: (
+    paneId: PaneId,
+    cwd: string | null,
+    branch: string | null,
+    ahead: number | null,
+    behind: number | null,
+  ) => void;
   onAltScreen: (paneId: PaneId, active: boolean) => void;
   onPtyId: (paneId: PaneId, ptyId: string | null) => void;
   /**
@@ -213,7 +226,8 @@ function PaneLeafInner({
   // (tabId-bound) callbacks are stable.
   const handleFocus = useCallback(() => onFocus(paneId), [paneId, onFocus]);
   const handleMeta = useCallback(
-    (cwd: string | null, branch: string | null) => onMeta(paneId, cwd, branch),
+    (cwd: string | null, branch: string | null, ahead: number | null, behind: number | null) =>
+      onMeta(paneId, cwd, branch, ahead, behind),
     [paneId, onMeta],
   );
   const handleAltScreen = useCallback(
@@ -366,8 +380,13 @@ export function LayoutRender({
     [tabId, onPaneFocus],
   );
   const handleMeta = useCallback(
-    (paneId: PaneId, cwd: string | null, branch: string | null) =>
-      onPaneMeta(tabId, paneId, cwd, branch),
+    (
+      paneId: PaneId,
+      cwd: string | null,
+      branch: string | null,
+      ahead: number | null,
+      behind: number | null,
+    ) => onPaneMeta(tabId, paneId, cwd, branch, ahead, behind),
     [tabId, onPaneMeta],
   );
   const handleAltScreen = useCallback(
