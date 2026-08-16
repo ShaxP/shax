@@ -130,6 +130,16 @@ vi.mock("./lib/ipc", () => ({
     charging: boolean;
   }> => Promise.resolve({ present: false, percent: null, on_ac_power: false, charging: false }),
   systemLocalIp: (): Promise<string | null> => Promise.resolve(null),
+  // M13.3 — sidebar CPU/mem + SSID probes. Same rule: return the
+  // benign fallback so the poll effects don't destabilise other
+  // tests (a real value would trigger the CpuMemWidget to render
+  // and could shift screen queries).
+  systemCpuAndMem: (): Promise<{
+    cpu_percent: number;
+    mem_used_bytes: number;
+    mem_total_bytes: number;
+  }> => Promise.resolve({ cpu_percent: 0, mem_used_bytes: 0, mem_total_bytes: 0 }),
+  systemSsid: (): Promise<string | null> => Promise.resolve(null),
 }));
 
 class StubResizeObserver {

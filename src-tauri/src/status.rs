@@ -1,20 +1,24 @@
-//! System status probes for the statusline (M12.4b, spec §18).
+//! Native OS probes. Started as statusbar-chip support in M12.4b
+//! and grew in M13.3 to cover the sidebar's CPU/memory and network
+//! widgets — all four probes share the same shape, cadence contract,
+//! and graceful-degradation rule, so they live in one module.
 //!
-//! Two Tauri commands driving two statusbar chips:
+//! Four Tauri commands:
 //!
-//! - [`system_battery`] returns [`BatteryStatus`] describing the
-//!   machine's power state (present? at what percent? on AC? actively
-//!   charging?). Desktops (no battery present) get `{present: false}`
-//!   and the frontend renders the plug-alone glyph.
-//! - [`system_local_ip`] returns the IPv4 address of the interface
-//!   carrying the default route (the one you'd use to reach
-//!   `1.1.1.1`). `None` when no network is reachable or the platform
-//!   probe fails.
+//! - [`system_battery`] — machine power state (M12.4b, statusbar).
+//! - [`system_local_ip`] — default-route IPv4 (M12.4b, statusbar +
+//!   M13.3 sidebar Network widget).
+//! - [`system_cpu_and_mem`] — CPU % + memory in use (M13.3, sidebar
+//!   CpuMem widget).
+//! - [`system_ssid`] — Wi-Fi SSID name (M13.3, sidebar Network
+//!   widget). macOS returns `None` unconditionally — see the note
+//!   on [`system_ssid`] for why.
 //!
-//! Both probes go through published, cross-platform crates rather
-//! than per-platform hand-rolled syscalls — the tradeoff is discussed
-//! in the M12.4b spec section. Failures are always non-fatal: the
-//! frontend hides the chip when the probe returns `None` / not-present.
+//! All four probes go through published, cross-platform crates or
+//! per-OS shell-outs rather than per-platform hand-rolled syscalls
+//! — the tradeoff is discussed in the M12.4b / M13.3 spec sections.
+//! Failures are always non-fatal: the frontend hides the chip / line
+//! when the probe returns `None` / not-present.
 //!
 //! The battery probe applies a phantom-entry filter documented on
 //! [`snapshot_from`]: Apple Silicon Mac desktops expose an
@@ -31,8 +35,11 @@
 //! sanity-check the shape of what the commands return; smoke tests
 //! cover the real values.
 
+use std::sync::Mutex;
+
 use serde::{Deserialize, Serialize};
 use starship_battery::State;
+use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 /// The machine's current power state, as reported by the OS.
 ///
@@ -198,6 +205,165 @@ pub fn system_local_ip() -> Option<String> {
     }
 }
 
+// ── M13.3: CPU + memory ────────────────────────────────────────────
+
+/// CPU-load and memory-use snapshot for the sidebar's CpuMem widget.
+///
+/// Percentages are 0..=100 floats to preserve the fractional detail
+/// (`sysinfo` reports fractional CPU usage). Memory is reported in
+/// bytes on both axes so the frontend can format ("3.4 GB / 16.0 GB")
+/// or derive a percentage as it prefers — passing pre-baked strings
+/// would lock the display in the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SystemLoad {
+    pub cpu_percent: f32,
+    pub mem_used_bytes: u64,
+    pub mem_total_bytes: u64,
+}
+
+/// Shared `System` instance so CPU deltas are meaningful. `sysinfo`
+/// computes CPU usage from the delta between two calls to
+/// `refresh_cpu_usage()`; a fresh `System::new()` per probe would
+/// always return 0. The mutex is held only for the duration of the
+/// refresh — microseconds — so a 2s poll cadence never contends.
+static SYS: Mutex<Option<System>> = Mutex::new(None);
+
+/// CPU + memory snapshot. Returns [`SystemLoad::zero`] when the
+/// probe can't run (e.g. the OS permission denies `/proc` access
+/// inside a sandbox) — same graceful-degradation shape as the other
+/// probes in this module.
+///
+/// Note the first call after startup returns `cpu_percent: 0.0`
+/// unconditionally — `sysinfo` needs at least
+/// [`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL`] between refreshes to
+/// compute a meaningful delta. The second poll (2s later) has the
+/// first real number.
+#[tauri::command]
+pub fn system_cpu_and_mem() -> SystemLoad {
+    let mut guard = match SYS.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let sys = guard.get_or_insert_with(|| {
+        // `RefreshKind::new()` builds an empty spec; we opt in only
+        // to CPU + memory so `sysinfo` doesn't scan disks, processes,
+        // or the network on every refresh (all defaulted off in our
+        // Cargo feature set anyway, but explicit here as belt +
+        // braces).
+        System::new_with_specifics(
+            RefreshKind::new()
+                .with_cpu(sysinfo::CpuRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
+        )
+    });
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    SystemLoad {
+        cpu_percent: sys.global_cpu_usage(),
+        mem_used_bytes: sys.used_memory(),
+        mem_total_bytes: sys.total_memory(),
+    }
+}
+
+// ── M13.3: Wi-Fi SSID ──────────────────────────────────────────────
+
+/// Wi-Fi SSID of the currently-connected network, or `None` when
+/// disconnected / probe failed / the platform withholds it.
+///
+/// **macOS returns `None` unconditionally.** The `airport -I` binary
+/// the spec was drafted against was removed in macOS 14, and every
+/// remaining API path (CoreWLAN, `system_profiler`, `networksetup`)
+/// returns `<redacted>` unless the app holds the CoreLocation
+/// entitlement — which requires an alarming "Shax wants your
+/// location" runtime prompt on first launch. Apple's stance is that
+/// SSID is location-adjacent data; Shax respects that rather than
+/// asking the user to opt in to a location prompt for a chip label.
+/// The Network widget hides the SSID line on macOS and renders IP +
+/// up/down only.
+///
+/// Linux: `iwgetid -r` (part of `wireless-tools`, present on any
+/// distro that ships Wi-Fi hardware — Ubuntu, Fedora, Arch all
+/// include it in the default install). Returns the SSID on stdout
+/// with no wrapping, or exits non-zero when disconnected.
+///
+/// Windows: `netsh wlan show interfaces`, parse the `SSID :`
+/// line. `netsh` ships with every Windows release since Vista.
+///
+/// Failures at any step (binary missing, wrong exit code, malformed
+/// output) collapse to `None` — the widget hides the SSID line and
+/// the IP + up/down dot still render.
+#[tauri::command]
+pub fn system_ssid() -> Option<String> {
+    ssid_impl()
+}
+
+#[cfg(target_os = "macos")]
+fn ssid_impl() -> Option<String> {
+    // See doc comment on `system_ssid`. macOS masks SSID without
+    // CoreLocation entitlement; we do not request it.
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn ssid_impl() -> Option<String> {
+    let out = std::process::Command::new("iwgetid").arg("-r").output();
+    let out = match out {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::debug!("iwgetid probe failed: {e}");
+            return None;
+        }
+    };
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn ssid_impl() -> Option<String> {
+    let out = std::process::Command::new("netsh")
+        .args(["wlan", "show", "interfaces"])
+        .output();
+    let out = match out {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::debug!("netsh wlan probe failed: {e}");
+            return None;
+        }
+    };
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // `netsh wlan show interfaces` prints an indented block whose
+    // "SSID :" line carries the network name. Watch out for the
+    // sibling "BSSID :" line (MAC address) — match on "SSID" with
+    // no leading 'B' to avoid it.
+    parse_netsh_ssid(&stdout)
+}
+
+#[cfg(target_os = "windows")]
+fn parse_netsh_ssid(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("SSID") || trimmed.starts_with("BSSID") {
+            continue;
+        }
+        let (_, rest) = trimmed.split_once(':')?;
+        let name = rest.trim();
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +496,96 @@ mod tests {
             }
             None => { /* offline sandbox — accept */ }
         }
+    }
+
+    // ── M13.3 ──────────────────────────────────────────────────
+
+    #[test]
+    fn cpu_and_mem_shape_is_sane() {
+        // Smoke test only — probe values are runtime-dependent
+        // (a beefy dev box vs a CI runner). Assert the shape, not
+        // the numbers.
+        let load = system_cpu_and_mem();
+        assert!(
+            (0.0..=100.0).contains(&load.cpu_percent) || load.cpu_percent.is_nan(),
+            "cpu_percent should be a %, got {}",
+            load.cpu_percent,
+        );
+        // First call after startup returns 0 for CPU (needs a
+        // second refresh to compute a delta). Memory numbers are
+        // available immediately though.
+        assert!(
+            load.mem_total_bytes > 0,
+            "mem_total_bytes should be non-zero on any real machine",
+        );
+        assert!(
+            load.mem_used_bytes <= load.mem_total_bytes,
+            "used ({}) must not exceed total ({})",
+            load.mem_used_bytes,
+            load.mem_total_bytes,
+        );
+    }
+
+    #[test]
+    fn cpu_and_mem_second_call_stabilises_cpu() {
+        // The first call primes the CPU stats; the second returns a
+        // real percentage. Just confirm both calls return finite,
+        // in-range values (some CIs stay at 0% between refreshes).
+        let _first = system_cpu_and_mem();
+        let second = system_cpu_and_mem();
+        assert!(second.cpu_percent >= 0.0 && second.cpu_percent <= 100.0);
+    }
+
+    #[test]
+    fn ssid_probe_shape() {
+        // Runtime-dependent — a laptop on Wi-Fi returns `Some("…")`,
+        // a wired desktop returns `None`, macOS always returns
+        // `None`. Just confirm the probe doesn't panic and the
+        // Option is well-formed.
+        let s = system_ssid();
+        if let Some(name) = s {
+            assert!(
+                !name.is_empty(),
+                "SSID returned an empty string; probe should collapse to None instead",
+            );
+            // No leading/trailing whitespace — the probe trims.
+            assert_eq!(name.trim(), name);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ssid_is_none_on_macos() {
+        // Locked by design (see doc on `system_ssid`).
+        assert_eq!(system_ssid(), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_netsh_ssid_picks_the_ssid_line() {
+        let sample = "\r\n\
+            There is 1 interface on the system:\r\n\
+            \r\n\
+                Name                   : Wi-Fi\r\n\
+                Description            : Intel(R) Wi-Fi 6 AX201 160MHz\r\n\
+                GUID                   : abc-123\r\n\
+                State                  : connected\r\n\
+                SSID                   : MyHomeNetwork\r\n\
+                BSSID                  : 00:11:22:33:44:55\r\n\
+                Network type           : Infrastructure\r\n";
+        assert_eq!(
+            parse_netsh_ssid(sample),
+            Some("MyHomeNetwork".to_string()),
+            "should pick the SSID line, not the BSSID (MAC)",
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_netsh_ssid_returns_none_when_disconnected() {
+        let sample = "There is 1 interface on the system:\r\n\
+                Name                   : Wi-Fi\r\n\
+                State                  : disconnected\r\n";
+        assert_eq!(parse_netsh_ssid(sample), None);
     }
 }

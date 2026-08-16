@@ -904,3 +904,40 @@ export async function systemLocalIp(): Promise<string | null> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string | null>("system_local_ip");
 }
+
+/** CPU + memory snapshot for the sidebar's CpuMem widget (M13.3).
+ *
+ *  Percentages are 0..=100 floats (fractional). Memory is in bytes
+ *  on both axes so the frontend can format ("3.4 GB / 16.0 GB") or
+ *  derive its own percentage. The first call after startup returns
+ *  cpu_percent = 0 (sysinfo needs a delta between two refreshes to
+ *  compute usage); the second poll has real data. */
+export interface SystemLoad {
+  cpu_percent: number;
+  mem_used_bytes: number;
+  mem_total_bytes: number;
+}
+
+const SYSTEM_LOAD_ZERO: SystemLoad = {
+  cpu_percent: 0,
+  mem_used_bytes: 0,
+  mem_total_bytes: 0,
+};
+
+export async function systemCpuAndMem(): Promise<SystemLoad> {
+  if (!isTauriContext()) return SYSTEM_LOAD_ZERO;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SystemLoad>("system_cpu_and_mem");
+}
+
+/** Poll the connected Wi-Fi SSID (M13.3). Returns null when
+ *  disconnected, when the probe fails, or unconditionally on macOS
+ *  (see the Rust-side doc on `system_ssid` for why — Apple masks
+ *  the SSID without a CoreLocation entitlement we deliberately
+ *  don't request). The Network widget hides the SSID line when
+ *  this is null and still renders the IP + up/down dot. */
+export async function systemSsid(): Promise<string | null> {
+  if (!isTauriContext()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("system_ssid");
+}

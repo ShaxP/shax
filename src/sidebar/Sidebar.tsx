@@ -34,7 +34,9 @@
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { ClockWidget } from "./widgets/ClockWidget";
+import { CpuMemWidget } from "./widgets/CpuMemWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
+import { NetworkWidget } from "./widgets/NetworkWidget";
 
 const RAIL_WIDTH = 44;
 const EXPANDED_WIDTH = 280;
@@ -124,6 +126,8 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
     >
       <div data-testid="sidebar-widgets" style={WIDGET_SLOT}>
         <ClockWidget visible={visible} />
+        <CpuMemWidget visible={visible} />
+        <NetworkWidget visible={visible} />
         <GitBranchWidget visible={visible} />
       </div>
       <button
