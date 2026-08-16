@@ -42,11 +42,13 @@ import "./palette/builtins/cd";
 import "./palette/builtins/git";
 import "./palette/builtins/newWindow";
 import "./palette/builtins/reload";
+import "./palette/builtins/sidebar";
 import { registerPaneCommand as _registerPaneCommand } from "./palette/registry";
 import { mkdirSandboxCommand } from "./palette/sandbox/samples/mkdir";
 import { loadCommunityCommands } from "./palette/sandbox/loader";
 _registerPaneCommand(mkdirSandboxCommand);
 import { SafetyGate } from "./safetyGate/SafetyGate";
+import { Sidebar } from "./sidebar/Sidebar";
 import { AssistantDockDivider } from "./assistant/AssistantDockDivider";
 import { AssistantOverlay } from "./assistant/AssistantOverlay";
 import { SettingsModal } from "./settings/SettingsModal";
@@ -382,12 +384,26 @@ interface PersistedTab {
   panes: Record<PaneId, PersistedPane>;
 }
 
+/** Per-window sidebar preferences (M13.1, spec §19 D3). Persisted
+ *  inside the per-window `tabs_json` blob so each window carries
+ *  its own state. Both fields optional in the on-disk shape so
+ *  older serialised state (pre-M13) deserialises cleanly with the
+ *  first-run defaults. */
+interface SidebarPreferences {
+  visible: boolean;
+}
+
+const DEFAULT_SIDEBAR: SidebarPreferences = {
+  visible: false, // First-run default: icon rail (spec §19 D2).
+};
+
 interface PersistedAppState {
   tabs: PersistedTab[];
   activeId: string;
+  sidebar?: Partial<SidebarPreferences>;
 }
 
-function serialiseState(state: TabsState): string {
+function serialiseState(state: TabsState, sidebar: SidebarPreferences): string {
   const persistable: PersistedAppState = {
     tabs: state.tabs.map((t) => ({
       id: t.id,
@@ -399,6 +415,7 @@ function serialiseState(state: TabsState): string {
       ),
     })),
     activeId: state.activeId,
+    sidebar,
   };
   return JSON.stringify(persistable);
 }
@@ -422,7 +439,12 @@ function panePaneMeta(
   );
 }
 
-function hydrateFromJson(json: string): TabsState | null {
+interface HydratedState {
+  state: TabsState;
+  sidebar: SidebarPreferences;
+}
+
+function hydrateFromJson(json: string): HydratedState | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -470,7 +492,12 @@ function hydrateFromJson(json: string): TabsState | null {
     typeof candidate.activeId === "string" && tabs.some((t) => t.id === candidate.activeId)
       ? candidate.activeId
       : (tabs[0]?.id ?? "");
-  return { tabs, activeId };
+  // Sidebar prefs are optional on the wire; missing fields fall back
+  // to DEFAULT_SIDEBAR so pre-M13 blobs deserialise cleanly.
+  const sidebar: SidebarPreferences = {
+    visible: candidate.sidebar?.visible ?? DEFAULT_SIDEBAR.visible,
+  };
+  return { state: { tabs, activeId }, sidebar };
 }
 
 export default function App(): React.ReactElement {
@@ -511,6 +538,12 @@ export default function App(): React.ReactElement {
   // instance mounted at the App root when open; closes via
   // Escape, backdrop click, or the close button.
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Sidebar visibility (M13.1, spec §19). `false` renders the 44px
+  // icon rail (first-run default per spec §D2); `true` renders the
+  // 280px expanded state. Per-window — each window carries its own
+  // value inside the `tabs_json` blob (see PersistedAppState.sidebar).
+  const [sidebarVisible, setSidebarVisible] = useState(DEFAULT_SIDEBAR.visible);
 
   // Assistant chat overlay (M6 slice 4). Cmd/Ctrl + K toggles;
   // Escape or the close button dismisses. A seeded prompt
@@ -853,15 +886,23 @@ export default function App(): React.ReactElement {
     const onOpenSettings = (): void => {
       setSettingsOpen(true);
     };
+    // M13.1: `shax:toggle-sidebar` — dispatched by the palette
+    // command "Sidebar: expand / collapse". Same effect as ⌘B and
+    // the sidebar's chevron button.
+    const onToggleSidebar = (): void => {
+      setSidebarVisible((prev) => !prev);
+    };
     window.addEventListener("shax:assistant-ask", onAsk);
     window.addEventListener("shax:assistant-open", onOpen);
     window.addEventListener("shax:search-open", onOpenSearch);
     window.addEventListener("shax:settings-open", onOpenSettings);
+    window.addEventListener("shax:toggle-sidebar", onToggleSidebar);
     return () => {
       window.removeEventListener("shax:assistant-ask", onAsk);
       window.removeEventListener("shax:assistant-open", onOpen);
       window.removeEventListener("shax:search-open", onOpenSearch);
       window.removeEventListener("shax:settings-open", onOpenSettings);
+      window.removeEventListener("shax:toggle-sidebar", onToggleSidebar);
     };
   }, []);
 
@@ -1037,7 +1078,8 @@ export default function App(): React.ReactElement {
       if (json === null) return;
       const restored = hydrateFromJson(json);
       if (restored === null) return;
-      dispatch({ type: "hydrate", state: restored });
+      dispatch({ type: "hydrate", state: restored.state });
+      setSidebarVisible(restored.sidebar.visible);
     });
   }, []);
 
@@ -1059,10 +1101,10 @@ export default function App(): React.ReactElement {
     if (!hydratedRef.current) return;
     if (state.tabs.length === 0) return;
     const handle = setTimeout(() => {
-      void appStateSave(serialiseState(state));
+      void appStateSave(serialiseState(state, { visible: sidebarVisible }));
     }, 300);
     return () => clearTimeout(handle);
-  }, [state]);
+  }, [state, sidebarVisible]);
 
   // Keyboard shortcuts. Listening on the window so the bindings work
   // regardless of which surface currently owns focus.
@@ -1089,6 +1131,17 @@ export default function App(): React.ReactElement {
         // if already open.
         e.preventDefault();
         setSettingsOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "b" || e.key === "B") {
+        // M13.1 (spec §19 D2): ⌘B toggles the sidebar between
+        // the icon rail and the expanded view. The VS Code /
+        // Xcode / Finder default for a sidebar toggle. The
+        // palette command "Sidebar: expand / collapse" and the
+        // on-screen chevron button dispatch through the same
+        // setter.
+        e.preventDefault();
+        setSidebarVisible((prev) => !prev);
         return;
       }
       if (e.key === "k" || e.key === "K") {
@@ -1256,7 +1309,11 @@ export default function App(): React.ReactElement {
               background: "var(--bg)",
             }}
           >
-            {/* Left column: the tab area. Was the whole of `<main>` before
+            {/* Left column: the sidebar (M13.1, spec §19). Fixed-width
+              first sibling of the tab area — 44px icon rail or 280px
+              expanded — with its own persistence and ⌘B toggle. */}
+            <Sidebar visible={sidebarVisible} onToggle={() => setSidebarVisible((prev) => !prev)} />
+            {/* Middle column: the tab area. Was the whole of `<main>` before
               M7.7a; the assistant now sits to its right in the same row
               when docked. `position: relative` here so the absolutely-
               positioned per-tab wrappers layout against this column
