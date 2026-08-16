@@ -6,10 +6,12 @@
  *   - the toggle button fires onToggle
  *   - expanded state carries the "no widgets yet" placeholder
  *   - rail state does not carry the placeholder
- *   - mousedown on non-focusable sidebar chrome preventDefault's,
- *     matching the BlockList / TitleBar focus-preservation pattern
- *   - mousedown on the toggle button does NOT preventDefault (so
- *     the browser still fires the click event on mouseup)
+ *   - mousedown on ANY sidebar target preventDefault's — including
+ *     the toggle button — so clicks never blur whatever owns focus
+ *     (spec §D4). preventDefault on mousedown does not cancel the
+ *     click event, so the chevron still fires normally on mouseup.
+ *   - right-click / middle-click mousedown is left to the browser
+ *     default (only the primary button engages focus preservation).
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -73,17 +75,21 @@ describe("Sidebar / focus preservation (spec §D4)", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it("mousedown on the toggle BUTTON does NOT preventDefault (click still fires)", () => {
+  it("mousedown on the toggle BUTTON also preventDefault's; click still fires", () => {
     const onToggle = vi.fn();
     render(<Sidebar visible={true} onToggle={onToggle} />);
     const toggle = screen.getByTestId("sidebar-toggle");
     const ev = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 });
     toggle.dispatchEvent(ev);
-    // Buttons opt out of the focus-preservation preventDefault — the
-    // BlockList pattern excludes `button, a[href], input, textarea, select`
-    // so their clicks still complete. Sidebar reuses the same rule.
-    expect(ev.defaultPrevented).toBe(false);
-    // And the click still resolves normally.
+    // Sidebar diverges from BlockList's pattern here: buttons DO get
+    // preventDefault so the click doesn't move focus to the button.
+    // Native <button> steals focus on click by default — without this,
+    // clicking the chevron would blur the prompt strip / assistant
+    // textarea. Spec §D4 requires sidebar clicks to preserve focus,
+    // and that includes clicks on sidebar buttons.
+    expect(ev.defaultPrevented).toBe(true);
+    // preventDefault on mousedown does NOT cancel the click event —
+    // fireEvent.click still triggers onClick normally.
     fireEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledTimes(1);
   });

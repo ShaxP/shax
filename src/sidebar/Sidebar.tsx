@@ -81,19 +81,29 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement {
-  // preventDefault on mousedown for non-focusable targets so clicking
-  // sidebar chrome doesn't blur whatever owns focus. Buttons inside
-  // (the toggle) still receive their click via mouseup — preventDefault
-  // on mousedown only stops the default focus change, not the click
-  // event itself. Same shape as BlockList's background handler.
+  // preventDefault on mousedown so clicking sidebar chrome doesn't
+  // blur whatever owns focus (prompt strip, assistant textarea).
+  // Sidebar clicks — including button clicks — never steal focus per
+  // spec §D4. preventDefault on mousedown stops the default focus
+  // change but does NOT cancel the click event that fires on
+  // mouseup, so the chevron toggle still fires normally.
+  //
+  // Text inputs are the one opt-out: a user clicking into a text
+  // input (e.g. a Phase-2 widget with a label field) genuinely wants
+  // to focus it. No text inputs exist in Phase 1, but the rule is
+  // future-proof.
+  //
+  // Divergence from the BlockList pattern (which excludes button /
+  // a[href] as well) is deliberate — BlockList's chrome buttons
+  // (copy, view) sit inside the pane's focus scope and want focus;
+  // sidebar buttons are top-level actions that never do.
   const onRootMouseDown = (e: ReactMouseEvent<HTMLElement>): void => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target === null) return;
     if (
-      target.closest(
-        "button, a[href], input, textarea, select, [contenteditable=''], [contenteditable='true']",
-      ) !== null
+      target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']") !==
+      null
     ) {
       return;
     }
