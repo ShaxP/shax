@@ -34,8 +34,9 @@
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { ClockWidget } from "./widgets/ClockWidget";
-import { CpuMemWidget } from "./widgets/CpuMemWidget";
+import { CpuWidget } from "./widgets/CpuWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
+import { MemoryWidget } from "./widgets/MemoryWidget";
 import { NetworkWidget } from "./widgets/NetworkWidget";
 
 const RAIL_WIDTH = 44;
@@ -52,22 +53,31 @@ const ROOT_BASE: CSSProperties = {
   overflow: "hidden",
 };
 
-const WIDGET_SLOT: CSSProperties = {
+// Gutter and inter-card gap are measured off design/
+// widget-sidebar.png (13px gutter, 11px gap at the mockup's 248px
+// render width), scaled to the 280px expanded sidebar. Now that the
+// cards are outlined rather than filled, the gutter is what separates
+// the column from the pane edge — too tight and the borders read as a
+// table.
+//
+// The rail keeps the original 8px: at 44px wide, a 14px gutter would
+// leave 16px of content and clip the two-digit glyphs.
+const EXPANDED_GUTTER = 14;
+const RAIL_GUTTER = 8;
+
+const WIDGET_SLOT_BASE: CSSProperties = {
   flex: 1,
   minHeight: 0,
   display: "flex",
   flexDirection: "column",
-  gap: 2,
-  padding: 8,
   overflowY: "auto",
 };
 
-const TOGGLE_BUTTON: CSSProperties = {
+const TOGGLE_BUTTON_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   height: 28,
-  margin: 8,
   border: "1px solid var(--border)",
   borderRadius: 6,
   background: "transparent",
@@ -111,9 +121,24 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
     e.preventDefault();
   };
 
+  const gutter = visible ? EXPANDED_GUTTER : RAIL_GUTTER;
+
   const root: CSSProperties = {
     ...ROOT_BASE,
     width: visible ? EXPANDED_WIDTH : RAIL_WIDTH,
+  };
+
+  const widgetSlot: CSSProperties = {
+    ...WIDGET_SLOT_BASE,
+    padding: gutter,
+    gap: visible ? 12 : 8,
+  };
+
+  // Horizontal margin tracks the gutter so the chevron's edges line
+  // up with the card column above it.
+  const toggleButton: CSSProperties = {
+    ...TOGGLE_BUTTON_BASE,
+    margin: `8px ${gutter}px ${gutter}px`,
   };
 
   return (
@@ -124,9 +149,10 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
       style={root}
       onMouseDown={onRootMouseDown}
     >
-      <div data-testid="sidebar-widgets" style={WIDGET_SLOT}>
+      <div data-testid="sidebar-widgets" style={widgetSlot}>
         <ClockWidget visible={visible} />
-        <CpuMemWidget visible={visible} />
+        <CpuWidget visible={visible} />
+        <MemoryWidget visible={visible} />
         <NetworkWidget visible={visible} />
         <GitBranchWidget visible={visible} />
       </div>
@@ -136,7 +162,7 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
         aria-label={visible ? "Collapse sidebar" : "Expand sidebar"}
         aria-expanded={visible}
         title={visible ? "Collapse sidebar (⌘B)" : "Expand sidebar (⌘B)"}
-        style={TOGGLE_BUTTON}
+        style={toggleButton}
         onClick={onToggle}
       >
         <ChevronIcon direction={visible ? "left" : "right"} />

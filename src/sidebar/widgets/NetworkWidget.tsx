@@ -1,71 +1,43 @@
 /**
- * NetworkWidget (M13.3, spec §19 D5).
+ * NetworkWidget (M13.3, restyled per design/widget-sidebar.png).
  *
- * SSID (when known) + default-route IPv4 + a small colored dot for
- * up/down. Reads from `useNetwork()`; App polls the two underlying
- * probes at 30s.
+ * Card layout:
+ *   - Header row: "NETWORK" label + status dot.
+ *   - Below: SSID / "Wired" / "Offline" prominently, then IP in a
+ *     smaller mono line beneath.
  *
- * Renders:
- *   - Expanded: `📡  MyHomeWiFi` (or IP-only) and `192.168.1.42` on
- *     a second line; green dot when reachable, red when offline.
- *   - Rail: 📡 glyph with a colored dot overlay; tooltip carries
- *     SSID + IP + status.
- *
- * Degradation rules (spec §D5, restated for clarity):
- *   - `ssid` null → the SSID line disappears (widget still renders
- *     with just the IP). Happens on macOS unconditionally, on wired
- *     desktops, and on any probe failure.
- *   - `localIp` null → the whole widget renders in an "offline"
- *     state (red dot, no IP text). The `local-ip-address` crate
- *     returning None is the closest signal we have to "no network"
- *     without a per-poll reachability check — Shax intentionally
- *     doesn't ping (local-first, no telemetry).
+ * Degradation rules (unchanged from M13.3):
+ *   - `ssid` null → label reads "Wired" (or "Offline" when the
+ *     local-IP probe also failed). Happens on macOS unconditionally,
+ *     on wired desktops, and on any probe failure.
+ *   - `localIp` null → the whole card renders in an "offline"
+ *     state (red dot, no IP line).
  */
 
 import type { CSSProperties } from "react";
 import { useNetwork } from "../../lib/NetworkContext";
+import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
-const EXPANDED_ROOT: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: "6px 10px",
-  fontSize: 11,
-  color: "var(--fg)",
-};
-
-const HEADER_ROW: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-};
-
-const NET_GLYPH: CSSProperties = {
-  fontSize: 12,
+const STATUS_DOT_BASE: CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
   flexShrink: 0,
 };
 
-const SSID_LABEL: CSSProperties = {
-  fontSize: 12,
+const NET_LABEL: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: "var(--fg)",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  flex: 1,
-  minWidth: 0,
 };
 
 const IP_LABEL: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
   color: "var(--fg-dim)",
-  paddingLeft: 18, // align under the SSID row, after the glyph
-};
-
-const STATUS_DOT_BASE: CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-  flexShrink: 0,
 };
 
 const RAIL_ROOT: CSSProperties = {
@@ -90,7 +62,7 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
     ...STATUS_DOT_BASE,
     background: online ? "var(--green)" : "var(--red)",
   };
-
+  const label = ssid ?? (online ? "Wired" : "Offline");
   const tooltip = buildTooltip(ssid, localIp, online);
 
   if (!visible) {
@@ -103,13 +75,13 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   }
 
   return (
-    <div data-testid="sidebar-network" style={EXPANDED_ROOT} title={tooltip}>
-      <div style={HEADER_ROW}>
-        <span style={NET_GLYPH}>📡</span>
-        <span style={SSID_LABEL} data-testid="sidebar-network-label">
-          {ssid ?? (online ? "Wired" : "Offline")}
-        </span>
+    <div data-testid="sidebar-network" style={CARD} title={tooltip}>
+      <div style={CARD_HEADER}>
+        <span style={CARD_LABEL}>Network</span>
         <span style={dotStyle} aria-hidden="true" data-testid="sidebar-network-dot" />
+      </div>
+      <div style={NET_LABEL} data-testid="sidebar-network-label">
+        {label}
       </div>
       {online && (
         <div style={IP_LABEL} data-testid="sidebar-network-ip">
