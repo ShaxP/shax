@@ -17,15 +17,31 @@ import type { CSSProperties } from "react";
 
 /** The card container that wraps each expanded widget. Rail-state
  *  widgets do NOT use this — they render directly into the vertical
- *  glyph stack. */
+ *  glyph stack.
+ *
+ *  Outlined, not filled: in design/widget-sidebar.png every card
+ *  except the clock sits at the sidebar's own `--pane` background
+ *  and is separated from it only by the 1px border. Filling them
+ *  turns the sidebar into a wall of stacked slabs; the outline keeps
+ *  the surface calm and lets the clock read as the one raised
+ *  element. */
 export const CARD: CSSProperties = {
-  background: "var(--surface)",
+  background: "transparent",
   border: "1px solid var(--border)",
   borderRadius: 10,
   padding: "10px 12px",
   display: "flex",
   flexDirection: "column",
   gap: 6,
+};
+
+/** The one filled card variant, reserved for the clock at the top of
+ *  the sidebar. The fill is what makes it the anchor of the column —
+ *  see the mockup, where it is the only widget raised off the pane
+ *  background. */
+export const CARD_RAISED: CSSProperties = {
+  ...CARD,
+  background: "var(--surface)",
 };
 
 /** Small ALL-CAPS label sitting at the top of every card. Matches

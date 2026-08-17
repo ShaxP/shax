@@ -20,7 +20,7 @@
 
 import { useMemo, type CSSProperties } from "react";
 import { useClock } from "../../lib/ClockContext";
-import { CARD } from "./styles";
+import { CARD_RAISED } from "./styles";
 
 const TIME_ROW: CSSProperties = {
   display: "flex",
@@ -130,7 +130,7 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
   }
 
   return (
-    <div data-testid="sidebar-clock" style={CARD} title={fullTooltip}>
+    <div data-testid="sidebar-clock" style={CARD_RAISED} title={fullTooltip}>
       <div style={TIME_ROW}>
         <span style={HH_MM} data-testid="sidebar-clock-time">
           {hourMinute}
