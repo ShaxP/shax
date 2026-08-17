@@ -10,6 +10,8 @@ Concrete choices. Pin versions in the lockfiles; the names below are the intende
   - a VT parser (`vte`) for the escape and OSC 133 handling; consider `alacritty_terminal` only if a single-renderer model is needed later.
   - `rusqlite` with bundled SQLite (FTS5 enabled) plus `sqlite-vec` for embeddings.
   - `tokio` for async, `serde` for IPC payloads, `thiserror` for library errors, `anyhow` at app edges, `uuid`, `time` or `chrono`.
+  - native probes for the statusbar and sidebar: `starship-battery`, `local-ip-address`, `sysinfo` (feature-gated to `system`).
+  - `windows-sys` (Windows only, `Win32_System_Power`) for the M13.4 keep-awake assertion. macOS and Linux need no crate for this — they spawn the OS's own `caffeinate` / `systemd-inhibit` helper. Already in the tree via Tauri.
 - **Frontend (TypeScript, React):**
   - React 18+ with strict TypeScript, built with Vite.
   - `xterm.js` plus the fit addon for terminal rendering.

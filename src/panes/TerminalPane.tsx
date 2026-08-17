@@ -1441,6 +1441,22 @@ function TerminalPaneInner({
       if (detail?.paneId !== ptyIdRef.current) return;
       const id = ptyIdRef.current;
       if (id === null) return;
+      // CLAUDE.md non-negotiable #4 — never hijack a program that
+      // owns its own input loop or the alternate screen (vim, less,
+      // top, ssh, REPLs). This chokepoint is shared by every widget,
+      // the assistant, and the palette, so guarding it here closes
+      // the gap for all of them at once rather than trusting each
+      // caller to check first (M13.4 found this gap while wiring the
+      // caffeinate widget — the gate classified commands but never
+      // asked "does this pane's foreground program own the screen?").
+      // Silent drop, same as the OSC-1049 block-chunk skip above:
+      // the alt-screen program never sees bytes it didn't ask for.
+      if (altScreenRef.current) {
+        console.warn(
+          `shax:emit-command-approved dropped — pane ${id} is showing an alt-screen program`,
+        );
+        return;
+      }
       // Track the source in a FIFO queue so `block_completed`
       // can tag the resulting event with the *actual* source
       // (widget silent-refresh vs assistant tool-result vs

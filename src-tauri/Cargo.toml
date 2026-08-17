@@ -73,3 +73,11 @@ local-ip-address = "0.6"
 # sensors need OS-specific quirks we're not exercising).
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
+# M13.4 — the sidebar's keep-awake assertion (spec §19 D6). macOS and
+# Linux shell out to `caffeinate` / `systemd-inhibit`, which needs no
+# crate; Windows has no equivalent command and uses
+# `SetThreadExecutionState` directly. Already in the dependency tree
+# via Tauri, so this pulls nothing new down.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
+
