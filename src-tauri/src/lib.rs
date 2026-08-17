@@ -359,6 +359,8 @@ pub fn run() {
             list_themes,
             status::system_battery,
             status::system_local_ip,
+            status::system_cpu_and_mem,
+            status::system_ssid,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

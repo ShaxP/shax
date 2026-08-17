@@ -65,4 +65,11 @@ tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-
 # interface's IP via each OS's native syscall.
 starship-battery = "0.11"
 local-ip-address = "0.6"
+# M13.3 — sidebar CPU / memory probe (spec §19). Feature-gated
+# so we only compile the two backends we actually use — the
+# default feature set pulls in disk / network stats we don't
+# need and can't sample at the sidebar's 2s cadence without
+# adding noise. `component` is intentionally off (thermal
+# sensors need OS-specific quirks we're not exercising).
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
