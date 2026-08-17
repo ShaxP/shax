@@ -1,42 +1,52 @@
 /**
- * ClockWidget (M13.2, spec §19 D5).
+ * ClockWidget (M13.2, restyled per design/widget-sidebar.png).
  *
  * Subscribes to the App-level 1s tick via `useClock()` — no new
  * setInterval. Same signal the statusbar clock has consumed since
  * M12.4b, exposed as a Context for cross-surface reuse.
  *
- * Two renders:
- *   - Expanded (280px sidebar): HH:MM (large) + weekday, month day.
- *   - Rail (44px sidebar): compact "HH" digits with a full-time tooltip.
+ * Expanded card:
+ *   - Big monospace `HH:MM` (28px) with a small accent-colored
+ *     `SS` glued to its baseline. Seconds are ambient information
+ *     — glanceable when the eye lingers, invisible-cost when it
+ *     doesn't.
+ *   - Weekday + full month + day in dimmed text below.
+ * Rail:
+ *   - Two-digit HH glyph with the same tooltip as expanded.
  *
- * Deliberately no seconds — a live seconds display on the sidebar
- * would be visual noise for a widget the eye passes over rather than
- * fixates on. The statusbar keeps its HH:MM:SS for the "precise
- * live time" use case; the sidebar answers "what hour is it" at a
- * glance.
+ * 24-hour format matches the statusbar clock (M12.4b) and the
+ * mockup.
  */
 
 import { useMemo, type CSSProperties } from "react";
 import { useClock } from "../../lib/ClockContext";
+import { CARD } from "./styles";
 
-const EXPANDED_ROOT: CSSProperties = {
+const TIME_ROW: CSSProperties = {
   display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: "8px 10px",
+  alignItems: "baseline",
+  gap: 6,
+};
+
+const HH_MM: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 28,
+  fontWeight: 600,
+  lineHeight: 1,
+  letterSpacing: -0.5,
   color: "var(--fg)",
 };
 
-const EXPANDED_TIME: CSSProperties = {
+const SECONDS: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 20,
-  fontWeight: 600,
-  lineHeight: 1.1,
-  letterSpacing: 0.5,
+  fontSize: 13,
+  fontWeight: 500,
+  color: "var(--accent)",
+  lineHeight: 1,
 };
 
-const EXPANDED_DATE: CSSProperties = {
-  fontSize: 11,
+const DATE_LINE: CSSProperties = {
+  fontSize: 12,
   color: "var(--fg-dim)",
 };
 
@@ -61,10 +71,7 @@ export interface ClockWidgetProps {
 export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
   const now = useClock();
 
-  // Two derived strings recompute every tick — cheap and no
-  // dependency on external formatters. `hour12: false` matches the
-  // statusbar clock's format (M12.4b).
-  const time = useMemo(
+  const hourMinute = useMemo(
     () =>
       now.toLocaleTimeString([], {
         hour: "2-digit",
@@ -73,12 +80,24 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
       }),
     [now],
   );
-  const date = useMemo(
+  const seconds = useMemo(
+    () =>
+      now
+        .toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+        .slice(-2),
+    [now],
+  );
+  const dateLine = useMemo(
     () =>
       now.toLocaleDateString([], {
-        weekday: "short",
-        month: "short",
+        weekday: "long",
         day: "numeric",
+        month: "long",
       }),
     [now],
   );
@@ -95,10 +114,9 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
       }),
     [now],
   );
-  // Rail-state label — hoisted above the conditional return so hook
-  // order stays stable regardless of which branch renders. Two
-  // digits, no colon, no minutes.
-  const hour = useMemo(
+  // Rail-state label hoisted above the conditional return so hook
+  // order stays stable regardless of which branch renders.
+  const hourOnly = useMemo(
     () => now.toLocaleTimeString([], { hour: "2-digit", hour12: false }).replace(/[^\d]/g, ""),
     [now],
   );
@@ -106,15 +124,24 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
   if (!visible) {
     return (
       <div data-testid="sidebar-clock-rail" style={RAIL_ROOT} title={fullTooltip}>
-        {hour}
+        {hourOnly}
       </div>
     );
   }
 
   return (
-    <div data-testid="sidebar-clock" style={EXPANDED_ROOT} title={fullTooltip}>
-      <div style={EXPANDED_TIME}>{time}</div>
-      <div style={EXPANDED_DATE}>{date}</div>
+    <div data-testid="sidebar-clock" style={CARD} title={fullTooltip}>
+      <div style={TIME_ROW}>
+        <span style={HH_MM} data-testid="sidebar-clock-time">
+          {hourMinute}
+        </span>
+        <span style={SECONDS} data-testid="sidebar-clock-seconds">
+          {seconds}
+        </span>
+      </div>
+      <div style={DATE_LINE} data-testid="sidebar-clock-date">
+        {dateLine}
+      </div>
     </div>
   );
 }

@@ -34,8 +34,9 @@
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { ClockWidget } from "./widgets/ClockWidget";
-import { CpuMemWidget } from "./widgets/CpuMemWidget";
+import { CpuWidget } from "./widgets/CpuWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
+import { MemoryWidget } from "./widgets/MemoryWidget";
 import { NetworkWidget } from "./widgets/NetworkWidget";
 
 const RAIL_WIDTH = 44;
@@ -57,7 +58,10 @@ const WIDGET_SLOT: CSSProperties = {
   minHeight: 0,
   display: "flex",
   flexDirection: "column",
-  gap: 2,
+  // Larger gap between cards so each widget reads as a distinct
+  // module — matches the card-per-widget language in design/
+  // widget-sidebar.png.
+  gap: 8,
   padding: 8,
   overflowY: "auto",
 };
@@ -126,7 +130,8 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
     >
       <div data-testid="sidebar-widgets" style={WIDGET_SLOT}>
         <ClockWidget visible={visible} />
-        <CpuMemWidget visible={visible} />
+        <CpuWidget visible={visible} />
+        <MemoryWidget visible={visible} />
         <NetworkWidget visible={visible} />
         <GitBranchWidget visible={visible} />
       </div>
