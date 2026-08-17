@@ -1,57 +1,53 @@
 /**
- * GitBranchWidget (M13.2, spec §19 D5).
+ * GitBranchWidget (M13.2, restyled per design/widget-sidebar.png).
+ *
+ * Card layout:
+ *   - Header row: "REPO" label + branch name (with ⎇ glyph) on the right.
+ *   - Below (optional): ahead/behind row with ↑n ↓n counts. Hidden
+ *     when both counts are 0 or null.
  *
  * Reads the focused pane's cwd + branch + ahead/behind via
  * `useFocusedPane()`. Updates on pane focus change and on the
- * pane's next OSC 133 A (which is what refreshes cwd/branch/ahead/
- * behind up in App state). No polling, no git-command shell-out.
+ * pane's next OSC 133 A. No polling, no git-command shell-out.
  *
- * Two renders:
- *   - Expanded: ⎇ branch  ↑n ↓n (both ahead/behind hidden when 0 or null)
- *   - Rail:    ⎇ glyph, hover tooltip shows branch + counts
- *
- * Hidden when no pane is focused OR the focused pane's cwd isn't a
- * git repo (branch === null). "Hidden" here means the widget
- * renders `null` — nothing appears in the sidebar. Spec §D5 pins
- * this behaviour ("Hidden when no pane focus / non-repo cwd").
+ * Hidden entirely when no pane is focused OR the focused pane's
+ * cwd isn't a git repo (branch === null). Widget returns null —
+ * no empty card renders in that state.
  */
 
 import type { CSSProperties } from "react";
 import { useFocusedPane } from "../../lib/FocusedPaneContext";
+import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
-const EXPANDED_ROOT: CSSProperties = {
+const BRANCH_RIGHT: CSSProperties = {
   display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "6px 10px",
-  fontSize: 12,
-  color: "var(--fg)",
-};
-
-const BRANCH_GLYPH: CSSProperties = {
-  fontSize: 12,
-  color: "var(--fg-dim)",
-  flexShrink: 0,
-};
-
-const BRANCH_NAME: CSSProperties = {
+  alignItems: "baseline",
+  gap: 4,
+  color: "var(--accent)",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: 13,
+  fontWeight: 600,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  flex: 1,
   minWidth: 0,
+};
+
+const BRANCH_GLYPH: CSSProperties = {
+  flexShrink: 0,
 };
 
 const AHEAD_BEHIND: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: 6,
   fontSize: 11,
   color: "var(--fg-dim)",
-  flexShrink: 0,
+  fontFamily: "var(--font-mono)",
 };
+
+const AHEAD: CSSProperties = { color: "var(--green)" };
+const BEHIND: CSSProperties = { color: "var(--amber)" };
 
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
@@ -70,10 +66,6 @@ export interface GitBranchWidgetProps {
 export function GitBranchWidget({ visible }: GitBranchWidgetProps): React.ReactElement | null {
   const focused = useFocusedPane();
 
-  // Hidden when no pane / non-repo pane. This is not a fallback
-  // string ("no branch") because a chip that reads "no branch" on
-  // every non-repo pane would be noise — the absence conveys the
-  // same information more calmly.
   if (focused === null || focused.branch === null) return null;
 
   const { branch, ahead, behind } = focused;
@@ -91,14 +83,19 @@ export function GitBranchWidget({ visible }: GitBranchWidgetProps): React.ReactE
   }
 
   return (
-    <div data-testid="sidebar-git-branch" style={EXPANDED_ROOT} title={tooltip}>
-      <span style={BRANCH_GLYPH}>⎇</span>
-      <span style={BRANCH_NAME}>{branch}</span>
-      {(showAhead || showBehind) && (
-        <span style={AHEAD_BEHIND} data-testid="sidebar-git-branch-counts">
-          {showAhead && <span>↑{ahead}</span>}
-          {showBehind && <span>↓{behind}</span>}
+    <div data-testid="sidebar-git-branch" style={CARD} title={tooltip}>
+      <div style={CARD_HEADER}>
+        <span style={CARD_LABEL}>Repo</span>
+        <span style={BRANCH_RIGHT} data-testid="sidebar-git-branch-name">
+          <span style={BRANCH_GLYPH}>⎇</span>
+          {branch}
         </span>
+      </div>
+      {(showAhead || showBehind) && (
+        <div style={AHEAD_BEHIND} data-testid="sidebar-git-branch-counts">
+          {showAhead && <span style={AHEAD}>↑{ahead}</span>}
+          {showBehind && <span style={BEHIND}>↓{behind}</span>}
+        </div>
       )}
     </div>
   );

@@ -45,6 +45,30 @@ describe("Sidebar / render", () => {
     expect(screen.getByTestId("sidebar-clock")).toBeInTheDocument();
   });
 
+  it("uses the wide gutter when expanded and the narrow one on the rail", () => {
+    // Gutter is measured off design/widget-sidebar.png. The rail keeps
+    // 8px because 14px would leave 16px of content at 44px wide and
+    // clip the two-digit glyphs — regressing either direction is a
+    // visual bug the mockup comparison would otherwise catch late.
+    const { rerender } = render(<Sidebar visible={true} onToggle={vi.fn()} />);
+    let slot = screen.getByTestId("sidebar-widgets");
+    expect(slot.style.padding).toBe("14px");
+    expect(slot.style.gap).toBe("12px");
+
+    rerender(<Sidebar visible={false} onToggle={vi.fn()} />);
+    slot = screen.getByTestId("sidebar-widgets");
+    expect(slot.style.padding).toBe("8px");
+  });
+
+  it("fills only the clock card; every other card is outlined", () => {
+    render(<Sidebar visible={true} onToggle={vi.fn()} />);
+    // The mockup raises the clock off the pane background and leaves
+    // the rest border-only. NetworkWidget always renders (it has an
+    // offline state), so it is the reliable outlined sample here.
+    expect(screen.getByTestId("sidebar-clock").style.background).toBe("var(--surface)");
+    expect(screen.getByTestId("sidebar-network").style.background).toBe("transparent");
+  });
+
   it("labels the toggle button by current state (aria-label + title)", () => {
     const { rerender } = render(<Sidebar visible={false} onToggle={vi.fn()} />);
     let toggle = screen.getByTestId("sidebar-toggle");
