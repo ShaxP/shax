@@ -3,6 +3,7 @@ mod blocks;
 mod ipc;
 mod menu;
 mod mux;
+mod power;
 mod preferences;
 mod pty;
 mod safety;
@@ -361,6 +362,8 @@ pub fn run() {
             status::system_local_ip,
             status::system_cpu_and_mem,
             status::system_ssid,
+            power::power_keep_awake,
+            power::power_keep_awake_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -471,6 +474,11 @@ pub fn run() {
         }
         tauri::RunEvent::Exit => {
             menu::save_session_windows(handle);
+            // M13.4: drop the keep-awake assertion before the process
+            // goes. Leaving it held would outlive the app on Linux,
+            // where the inhibitor lock belongs to a child process that
+            // would otherwise be reparented and keep running.
+            power::release_on_exit();
             tauri::async_runtime::block_on(manager_for_exit.shutdown_all());
         }
         _ => {}

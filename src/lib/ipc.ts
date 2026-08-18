@@ -941,3 +941,65 @@ export async function systemSsid(): Promise<string | null> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string | null>("system_ssid");
 }
+
+/** The keep-awake assertion's state (M13.4, spec §19 D6). `sinceMs`
+ *  is a Unix-epoch millisecond stamp owned by the backend, present
+ *  only while held — so every window renders the same duration for
+ *  the same assertion, including one that opened long after it
+ *  started. */
+export interface KeepAwakeState {
+  held: boolean;
+  since_ms: number | null;
+}
+
+const KEEP_AWAKE_OFF: KeepAwakeState = { held: false, since_ms: null };
+
+/** Ask the OS to suppress idle sleep, or stop asking. Resolves to the
+ *  state that actually holds afterwards — the backend is the source of
+ *  truth, so a caller that optimistically rendered "on" must reconcile
+ *  against this rather than assume the request succeeded. Rejects when
+ *  the OS refuses; the assertion is guaranteed off in that case.
+ *
+ *  Also broadcasts `shax:keep-awake-changed` to every window — see
+ *  `onKeepAwakeChanged`.
+ *
+ *  Outside Tauri (Playwright against the bare dev server) there is no
+ *  OS to ask, so this resolves to "off" and the widget stays off. */
+export async function powerKeepAwake(enable: boolean): Promise<KeepAwakeState> {
+  if (!isTauriContext()) return KEEP_AWAKE_OFF;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<KeepAwakeState>("power_keep_awake", { enable });
+}
+
+/** Read the assertion back. The assertion is process-wide and outlives
+ *  any single window's React tree, so a reloaded or newly-opened window
+ *  adopts it rather than assuming off. */
+export async function powerKeepAwakeState(): Promise<KeepAwakeState> {
+  if (!isTauriContext()) return KEEP_AWAKE_OFF;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<KeepAwakeState>("power_keep_awake_state");
+}
+
+/** Subscribe to keep-awake changes made anywhere in the app. Returns
+ *  an unsubscribe function.
+ *
+ *  One assertion, many windows: without this, a window that didn't
+ *  issue the toggle would keep showing whatever it read at mount — an
+ *  "off" switch on a machine that is genuinely being kept awake. */
+export function onKeepAwakeChanged(handler: (state: KeepAwakeState) => void): () => void {
+  if (!isTauriContext()) return () => {};
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  void import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<KeepAwakeState>("shax:keep-awake-changed", (e) => handler(e.payload)).then((off) => {
+      // The caller may have unsubscribed while the dynamic import was
+      // still resolving; honour that rather than leaking the listener.
+      if (cancelled) off();
+      else unlisten = off;
+    }),
+  );
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
+}

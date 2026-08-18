@@ -33,6 +33,7 @@
  */
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { CaffeinateWidget } from "./widgets/CaffeinateWidget";
 import { ClockWidget } from "./widgets/ClockWidget";
 import { CpuWidget } from "./widgets/CpuWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
@@ -155,6 +156,7 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
         <MemoryWidget visible={visible} />
         <NetworkWidget visible={visible} />
         <GitBranchWidget visible={visible} />
+        <CaffeinateWidget visible={visible} />
       </div>
       <button
         type="button"

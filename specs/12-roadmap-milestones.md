@@ -327,11 +327,11 @@ Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.8 (focus + mode pill, sh
 - CPU/Memory widget: cross-platform via `sysinfo` v0.32, 2s refresh.
 - Network widget: SSID + default-route IP + up/down; SSID via a new per-OS probe (macOS `airport`, Linux `iwgetid`, Windows `netsh wlan`), IP reuses M12.4b `system_local_ip`, no ping (local-first, no telemetry).
 - Git-branch-of-active-pane widget: subscribes to the M12.4 prompt-header branch signal, updates on focus change + OSC 133 A, no additional polling.
-- Caffeinate widget: click emits the real OS command into the focused pane's scrollback per the honest-log non-negotiable (`caffeinate -di` / `systemd-inhibit`). Widget state derives from the emitted block's lifecycle. Windows caffeinate deferred (no clean honest-shell-command path).
+- Caffeinate widget: click holds an OS-level power assertion (child `caffeinate -di` / `systemd-inhibit` on macOS / Linux, `SetThreadExecutionState` on Windows). State reconciles against what the OS grants, and is released on app exit. All three platforms ship — see `19-sidebar.md` D6, which reversed the original emit-into-the-pane design after a foreground `caffeinate` proved to block the pane it landed in, and settled where the honest-log path begins and ends.
 
-**Exit:** every window has a sidebar with an icon rail visible by default; `⌘B` expands and collapses; the five widgets render live data on macOS and Linux; the caffeinate widget makes its command visible in scrollback and reflects Ctrl+C from either the widget or the pane; focus stays with the terminal at all times.
+**Exit:** every window has a sidebar with an icon rail visible by default; `⌘B` expands and collapses; the five widgets render live data on macOS and Linux; the caffeinate widget stops the machine idle-sleeping on all three platforms without blocking a pane, and shows off when the OS refuses; focus stays with the terminal at all times.
 
-**Explicitly out of scope:** community widget sandbox (Phase 2), drag-to-reorder widgets, per-widget preferences panel, Windows caffeinate, weather / kubectl widgets, sidebar-hosted panes / editors, a third "fully hidden" sidebar state.
+**Explicitly out of scope:** community widget sandbox (Phase 2), drag-to-reorder widgets, per-widget preferences panel, weather / kubectl widgets, sidebar-hosted panes / editors, a third "fully hidden" sidebar state. (Windows caffeinate *was* out of scope; the D6 reversal brought it in.)
 
 Detail in `19-sidebar.md`. Sliced M13.1 – M13.4 (sidebar chrome + toggle, clock + git-branch, CPU/memory + network, caffeinate).
 
@@ -349,7 +349,7 @@ Follows M10. Users drop a `~/.config/shax/themes/<id>/theme.json` for any theme 
 
 ### Sidebar Phase 2 — community widget sandbox
 
-Follows M13. The Web Worker + declarative schema pattern already used for formatters and commands, extended for widget-specific needs (persistent state, timer ticks, richer rendering). Capability gates: theme yes, keyboard yes, timer yes; network only via an explicit user-granted permission at install time (`wttr.in` for weather, etc.); shell only through the safety gate, same rule as community commands. A per-widget max tick rate and a total widget-budget cap so twelve pinned widgets can't turn the app into a heater. Also picks up the drag-to-reorder story that Phase 1 deferred, and the Windows caffeinate follow-up if the honest-shell-command path is figured out by then.
+Follows M13. The Web Worker + declarative schema pattern already used for formatters and commands, extended for widget-specific needs (persistent state, timer ticks, richer rendering). Capability gates: theme yes, keyboard yes, timer yes; network only via an explicit user-granted permission at install time (`wttr.in` for weather, etc.); shell only through the safety gate, same rule as community commands. A per-widget max tick rate and a total widget-budget cap so twelve pinned widgets can't turn the app into a heater. Also picks up the drag-to-reorder story that Phase 1 deferred. (The Windows caffeinate follow-up this used to carry is cancelled — M13.4 shipped it.)
 
 ### No in-Shax app runtime — a standing non-goal
 

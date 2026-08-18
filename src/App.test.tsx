@@ -140,6 +140,14 @@ vi.mock("./lib/ipc", () => ({
     mem_total_bytes: number;
   }> => Promise.resolve({ cpu_percent: 0, mem_used_bytes: 0, mem_total_bytes: 0 }),
   systemSsid: (): Promise<string | null> => Promise.resolve(null),
+  // M13.4 caffeinate. Both resolve "not held" so the widget renders
+  // its resting state and never asks the host OS for anything during
+  // a unit test run; the cross-window subscription is a no-op.
+  powerKeepAwake: (): Promise<{ held: boolean; since_ms: number | null }> =>
+    Promise.resolve({ held: false, since_ms: null }),
+  powerKeepAwakeState: (): Promise<{ held: boolean; since_ms: number | null }> =>
+    Promise.resolve({ held: false, since_ms: null }),
+  onKeepAwakeChanged: (): (() => void) => () => {},
 }));
 
 class StubResizeObserver {

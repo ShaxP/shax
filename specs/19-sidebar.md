@@ -11,7 +11,7 @@ Phase 1 deliberately ships no runtime, no schema, no sandbox. The widgets are Sh
 Five separate feedbacks converge on the same missing surface:
 
 1. **The statusbar is out of room.** M12.4b added battery and local-IP to the right cluster; the next glanceable signal (CPU% during a build, "did my caffeinate expire?") has nowhere to live without pushing something else out.
-2. **Users lose long-running things.** A `caffeinate -di` typed once is invisible after the block scrolls off; users forget it's running, or run a second one on top. A visible toggle turns a per-shell command into a per-window setting.
+2. **Users lose long-running things.** A `caffeinate -di` typed once is invisible after the block scrolls off; users forget it's running, or run a second one on top — and while it runs it holds the pane hostage. A pinned toggle turns a fire-and-forget command into visible, reversible state.
 3. **"Where am I?" belongs to the whole pane, not the header row.** The M12.4 prompt header shows cwd + branch, but only for the pane in view. On a multi-pane window the branch chip in a persistent surface reads as "state," not "prompt echo."
 4. **CPU/memory during a build is a real question.** Users switch to Activity Monitor / htop to check if a build is CPU-bound or waiting on IO. A widget in-terminal answers that without an alt-tab.
 5. **Discoverability of always-on features.** Weather, kubectl context, caffeinate — these are the kind of "little app in the corner" widgets that make a terminal feel like a workspace, not a shell. The sidebar is the surface that unlocks them; Phase 2 opens it up to the community.
@@ -43,18 +43,24 @@ Nothing hides the sidebar entirely. The rationale: a zero-cost 44px rail is wort
 
 ### D3 — Per-window scope; each window persists its own sidebar state
 
-Every Shax window has its own sidebar with its own expand/collapse state and its own caffeinate toggle state. Widget content that depends on window context (git branch of the active pane, focused pane's SSID) resolves within that window. Widgets that are host-global (clock, CPU/memory, network default-route IP, host SSID) show the same value across windows but each widget instance owns its own render.
+Every Shax window has its own sidebar with its own expand/collapse state. Widget content that depends on window context (git branch of the active pane, focused pane's SSID) resolves within that window. Widgets that are host-global (clock, CPU/memory, network default-route IP, host SSID) show the same value across windows but each widget instance owns its own render.
 
 Persistence goes through the existing per-window preferences slot added in M9.1. New shape:
 
 ```rust
 pub struct SidebarPreferences {
     pub visible: bool,          // false = icon rail, true = expanded
-    pub caffeinate_on: bool,    // survives window close, so a still-running caffeinate reflects state on reopen
 }
 ```
 
-**Rejected alternative:** a single global sidebar shared across all windows (only the focused window renders it). Sounds tidier for the "one true clock" fantasy but forces a special-case in a layout system that is otherwise strictly per-window, and misfires on the caffeinate use case (caffeinate is per-shell-process; showing "on" globally when only one window's caffeinate is actually running would lie).
+**Amended (M13.4).** This originally carried a second field, `caffeinate_on`, described as surviving window close "so a still-running caffeinate reflects state on reopen." Both halves fell away when D6 moved caffeinate to an app-level power assertion:
+
+- The assertion is **process-wide, not per-window**. Every window's caffeinate widget reads the same state, and reads it back from the backend on mount rather than from disk — which is what makes a second window show "on" for an assertion the first one started.
+- Nothing survives process exit by design. The assertion is released in the `RunEvent::Exit` handler, so persisting "on" across a restart would restore a claim the OS is no longer honouring.
+
+Caffeinate is the one Phase 1 widget whose state is host-global rather than per-window. The sidebar's *chrome* stays strictly per-window, which is what this decision is actually about.
+
+**Rejected alternative:** a single global sidebar shared across all windows (only the focused window renders it). Sounds tidier for the "one true clock" fantasy but forces a special-case in a layout system that is otherwise strictly per-window. (This alternative was originally also rejected on the grounds that caffeinate is per-shell-process — that argument no longer applies after D6, but the layout argument alone still carries the decision.)
 
 ### D4 — Focus stays with the pane; sidebar clicks are click-to-interact only
 
@@ -74,34 +80,69 @@ Top-to-bottom, both states:
 
    **macOS SSID unavailable — deliberate.** The earlier draft of this spec assumed `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport -I` would still exist. Apple removed the `airport` binary in macOS 14, and every remaining API path (CoreWLAN, `system_profiler SPAirPortDataType`, `networksetup -getairportnetwork`) returns `<redacted>` unless the app holds the CoreLocation entitlement — which triggers an alarming "Shax wants your location" runtime prompt on first launch. Apple's stance is that SSID is location-adjacent data; Shax respects it rather than asking users to opt in to a location prompt for a chip label. The Network widget hides the SSID line on macOS and renders `📡 Wired · 192.168.1.42` with the up/down dot instead. Linux/Windows still show SSID normally.
 4. **Git branch (active pane)** — branch + ahead/behind of the focused pane's cwd. **No new native probe:** the M12.4 prompt-header machinery already knows the focused pane's branch. This widget subscribes to the same signal via a new context slot; it updates on pane focus change and on the pane's next OSC 133 A, never polls. Falls back to hidden when no pane is focused or the focused pane's cwd isn't a git repo.
-5. **Caffeinate** — a toggle button. Off state: outline chip with a coffee-cup glyph. On state: filled chip + relative timer ("2m 14s"). Click emits the real command into the focused pane's scrollback per the honest-log non-negotiable — see D6.
+5. **Caffeinate** — a card with a coffee-cup glyph, a title, and a pill switch. Off state: dim subtitle explaining what it does. On state: green switch + relative timer ("2m 14s") in place of the subtitle. Clicking it holds an OS-level power assertion — see D6. Live on all three platforms.
 
 Widget order is fixed for Phase 1. Drag-to-reorder is Phase 2 territory (the community-widget schema needs it more than the built-in set does — five widgets rearrange in five seconds via a preferences file if a user really cares).
 
-### D6 — Caffeinate emits a real command into the focused pane, per the honest-log non-negotiable
+### D6 — Caffeinate holds an OS power assertion; the honest-log path is for shell state, not app state
 
-Clicking the caffeinate widget "on" runs the real OS command in the focused pane's shell, exactly as the user typed it:
+**This decision was reversed during M13.4. The original is preserved at the end of this section, because the reasoning that overturned it applies to every widget Phase 2 will let the community write.**
 
-- **macOS** — `caffeinate -di`
-- **Linux** — `systemd-inhibit --what=idle sleep infinity`
-- **Windows** — the widget shows a compact "not available on this platform" state in Phase 1 and the click target does nothing. See "deferred" below.
+Clicking the caffeinate widget "on" asks the operating system to suppress idle sleep, through a Tauri command backed by `src-tauri/src/power.rs`. No pane is involved:
 
-The command is routed via `shax:emit-command` → the safety gate → `shax:emit-command-approved` → the PTY, identical to how the palette emits commands. That means:
+- **macOS** — a child `/usr/bin/caffeinate -di -w <shax pid>`, parented to Shax rather than to any pane's shell. `-w` makes the OS reap it if Shax dies without releasing cleanly.
+- **Linux** — a child `systemd-inhibit --what=idle --who=Shax --why=… sleep infinity`, launched with `PR_SET_PDEATHSIG` so it dies with Shax (Linux has no `-w` equivalent, and without this a `SIGKILL`ed Shax leaves the lock held until logout). `--who` / `--why` make the assertion attributable in `systemd-inhibit --list`. **`idle` only, not `idle:sleep`**: vetoing an explicit user-initiated suspend is the wrong behaviour, and block-mode sleep inhibitors are polkit-gated, so asking for one fails on machines where plain idle inhibition would have worked.
+- Both use absolute paths where the location is stable, rather than a bare `PATH` lookup — the app's inherited `PATH` is not ours to trust, and a lookup runs whatever resolves first under that name. Linux falls back to a `PATH` lookup because install locations vary more there.
+- **Windows** — `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)`, held on a dedicated thread because the flags are per-thread and die with the thread that set them.
 
-- The command shows up in scrollback as a real block with a real PID.
-- The user can `Ctrl+C` it from the pane the same way they'd stop a manual `caffeinate`.
-- The widget's "on" state is derived by watching the block's completion signal — when the caffeinate block completes (user Ctrl+C'd it, or shell exited), the widget flips back to "off." No hidden lifecycle.
-- If no pane is focused when the widget is clicked, the widget refuses (subtle shake) and prompts to focus a pane — because "which shell owns this caffeinate?" has no other honest answer.
+Properties this design commits to:
 
-**Deferred: Windows caffeinate.** No first-class shell command exists on Windows. Options are all bad in Phase 1:
+- **The OS is the source of truth.** `power::set` returns the state that actually holds, and a failed acquire leaves the assertion *off* — "errored but holding" is unrepresentable, not merely avoided. The widget adopts what it is told, so a refused assertion shows as off rather than as a toggle that lies.
+- **State is verified on every read, not assumed.** `power::state` asks whether the helper is still alive and clears the record if it is not. This is load-bearing on Linux: `systemd-inhibit` exists on any systemd distro but fails when there is no logind session (headless, plain SSH, containers, WSL without systemd), and it fails by *exiting* rather than by refusing to spawn. That is invisible at spawn time — the child has not been scheduled yet — so a spawn-time check cannot catch it and an earlier draft of this slice reported a cheerfully ticking toggle on a machine that then slept. Verifying on read also covers every later death: a killed helper, a revoked lock.
+- **Failures name the thing that failed.** A missing helper reports which binary and what it means, not a bare `errno`. The card shows a short label with the full message in its tooltip, because a 280px nowrap line truncates anything useful.
+- **The assertion is process-wide, and every window follows it live.** Setting it broadcasts `shax:keep-awake-changed` app-globally, and each widget also reads the state back on mount. Mount-read alone is not enough: a window that didn't issue the toggle would otherwise sit showing the state it read when it opened — an "off" switch on a machine that is genuinely being kept awake.
+- **The backend owns the start time**, stamped at acquire and returned with the state, so every window renders the *same* duration — including one opened long after the assertion began, which has no other way of knowing when that was. A redundant acquire keeps the original stamp rather than restamping, which would silently reset every window's duration to zero.
+- **It is released on exit** (`RunEvent::Exit`), and never persisted. A restart starts off.
+- **The promise is platform-honest.** macOS `-di` prevents display sleep *and* idle system sleep. Linux `--what=idle` prevents idle system sleep only — screen blanking belongs to the screensaver (`org.freedesktop.ScreenSaver`), which Phase 1 deliberately does not touch. The Linux tooltip says so rather than promising more than it delivers.
+- **Duration is never invented.** It is computed from the backend's stamp against the shared clock tick, never from the widget's own first sight of the assertion — the fidelity contract applied to a reading rather than to output.
+
+#### Why the original decision was reversed
+
+The original design emitted `caffeinate -di` into the focused pane's scrollback. It shipped as far as review before the flaw surfaced: **a foreground `caffeinate` blocks the pane it lands in.** The pane accepts no further commands until the user Ctrl+Cs it, so a convenience toggle costs them a shell and a new tab. No amount of polish fixes that; it is inherent in running a never-exiting foreground process in a pane the user is working in.
+
+Two alternatives were weighed and rejected:
+
+- **Background it (`caffeinate -di &`).** Frees the pane and stays inside the honest-log path. Rejected because the elegant "the block IS the widget state" derivation dies with it — the block completes instantly — leaving PID tracking by parsing the shell's job-control output, which is fragile and shell-specific. It also leaves Windows permanently unsupported.
+- **Give it a dedicated pane.** Keeps every mechanism intact but spends a permanently visible pane on a background utility.
+
+#### The line this draws, and why it is not a weakening of non-negotiable #3
+
+Non-negotiable #3 exists so the scrollback is a truthful, reproducible history of **what happened to the user's shell, filesystem, and repository**. Its target is the widget that quietly runs `git reset` and leaves no trace. An OS power assertion held by the Shax process touches none of those: it is app state, in the same family as sidebar visibility, font size, and theme — none of which emit commands, and none of which anyone expects to.
+
+**The rule, stated for Phase 2 to inherit:** an action that changes the user's shell, filesystem, or repository goes through `shax:emit-command` and the safety gate, always. An action that changes only Shax's own state, or asks the OS for something on Shax's behalf, does not. When a widget author cannot tell which side an action falls on, it goes through the emit path — the default is disclosure.
+
+The "hidden state" objection is answered by the widget itself: it is pinned in the sidebar and legible whenever it is on. That is a permanent readout, not a side effect that leaves no trace. A power assertion with no visible indicator anywhere in the UI *would* violate the principle.
+
+#### Windows is no longer deferred
+
+The original deferral was not really about Windows. It was about Windows having no shell command that could satisfy a *requirement to be a shell command*:
+
 - `powercfg /requests` is read-only.
 - Third-party `caffeine.exe` is neither bundled nor guaranteed installed.
-- A PowerShell one-liner calling Win32 `SetThreadExecutionState` runs in a shell but the block "completes" the moment the script exits, breaking the on/off derivation from block state.
-- A Rust-side FFI call to `SetThreadExecutionState` works but violates the honest-log non-negotiable (invisible side effect).
+- A PowerShell one-liner calling `SetThreadExecutionState` returns immediately, so the block completes at once and the on/off derivation breaks.
 
-Windows caffeinate lands in a follow-up once the honest-shell-command story is figured out. Options tracked in a Phase 1.5 spec note; not part of this milestone.
+Drop the requirement and the platform answers cleanly: `SetThreadExecutionState` is the documented Win32 mechanism. Windows ships in M13.4 with macOS and Linux, and the Phase 1.5 follow-up is cancelled.
 
-**Rejected alternative:** click the widget → the app runs the command "internally" via a Tauri command, no scrollback echo. Rejected because it violates the honest-log principle (#3). Users find their long-running commands by scrolling; a caffeinate that runs invisibly is exactly the class of hidden state the non-negotiable exists to prevent.
+<details>
+<summary><strong>Superseded:</strong> the original D6 (caffeinate emits a real command into the focused pane)</summary>
+
+> Clicking the caffeinate widget "on" runs the real OS command in the focused pane's shell, exactly as the user typed it: `caffeinate -di` on macOS, `systemd-inhibit --what=idle sleep infinity` on Linux, "not available on this platform" on Windows.
+>
+> The command is routed via `shax:emit-command` → the safety gate → `shax:emit-command-approved` → the PTY, identical to how the palette emits commands. The command shows up in scrollback as a real block with a real PID; the user can `Ctrl+C` it from the pane; the widget's "on" state is derived by watching the block's completion signal; and if no pane is focused when the widget is clicked, the widget refuses (subtle shake).
+>
+> **Rejected alternative:** click the widget → the app runs the command "internally" via a Tauri command, no scrollback echo. Rejected because it violates the honest-log principle (#3). Users find their long-running commands by scrolling; a caffeinate that runs invisibly is exactly the class of hidden state the non-negotiable exists to prevent.
+
+</details>
 
 ## Slices
 
@@ -114,7 +155,7 @@ Scope: everything except the widgets. Establishes the visual axis, the state mac
 - New component `src/sidebar/Sidebar.tsx`. Two-state layout (280px / 44px), collapse animation (150ms width transition, no fade — snappy), placeholder widget slot area that just renders "no widgets yet."
 - New keybinding `⌘B` in the App-level keydown handler. Toggles the current window's `sidebar_visible` preference; the change flows back through the standard preferences roundtrip so both windows and future palette entry see the same source of truth.
 - New palette command **"Sidebar: expand / collapse"** (per M8 palette conventions).
-- New Rust `SidebarPreferences { visible, caffeinate_on }` on the per-window preferences slot from M9.1. `#[serde(default)]` gates every field for backward compatibility with pre-M13 window state on disk.
+- New `SidebarPreferences { visible }` on the per-window preferences slot from M9.1. Every field optional in the on-disk shape for backward compatibility with pre-M13 window state. (M13.4 amendment: this originally also carried `caffeinate_on`; see D3 for why the reversal in D6 removed it.)
 - Focus contract: sidebar clicks call `preventDefault()` on `mousedown` (same pattern M12.8b landed for the block list) so DOM focus doesn't leave the prompt strip.
 
 **Exit:** open a fresh window — sidebar shows a 44px icon rail (empty of icons for now). `⌘B` expands it to 280px, `⌘B` again collapses. Focus never leaves the prompt strip when clicking in the sidebar area. Close and reopen the window — sidebar state persists.
@@ -141,25 +182,25 @@ Scope: the two widgets that need cross-platform native code. Adds one crate (`sy
 
 **Exit:** CPU and memory percentages tick every 2s and correlate with `top` / `htop`. Network chip shows the current SSID (Linux/Windows on WiFi) or `Wired` (macOS + wired), the default-route IP, and a green dot (or red when the local-IP probe returns `None`). SSID probe failure hides the SSID line silently, per the M12.4b graceful-degradation pattern.
 
-### M13.4 — Caffeinate widget + honest-log routing
+### M13.4 — Caffeinate widget + OS power assertion
 
-Scope: the one widget that touches the pane's command surface. Isolated in its own slice because the honest-log routing crosses three seams (widget UI, `shax:emit-command` bus, block-state subscription).
+Scope: the one widget that changes machine state rather than reporting it. Isolated in its own slice because it crosses the frontend/backend boundary and is the milestone's test of where the honest-log path begins and ends (D6).
 
-- New `src/sidebar/widgets/CaffeinateWidget.tsx`. Expanded: outlined chip labelled "Keep awake" (off) or filled chip with running duration "Keep awake · 2m 14s" (on). Rail: ☕ glyph, outlined or filled by state.
-- Click-on: emits `shax:emit-command` with the platform-appropriate command (`caffeinate -di` / `systemd-inhibit --what=idle sleep infinity`), routes through the safety gate + focused-pane resolver, gets a block-id back. Widget stores that block-id in the per-window preferences (so a reload picks up state) and subscribes to that block's lifecycle.
-- Click-off (while on): sends `Ctrl+C` to the block via the existing pane input path. Widget flips off when the block reports completion.
-- Block completes for any other reason (shell exited, user Ctrl+C from the pane, network hiccup): widget flips off, block-id cleared.
-- Windows platform: widget renders a disabled state with a compact "Not available on Windows" tooltip. Click does nothing.
-- Refuse-if-no-focused-pane: subtle horizontal shake animation + status-bar note, no state change.
+- New `src-tauri/src/power.rs` — one process-wide assertion behind `power_keep_awake(enable) -> bool` and `power_keep_awake_state() -> bool`. Per-OS mechanism per D6. Released in the `RunEvent::Exit` arm. The invariant the module guarantees, and tests: a failed acquire leaves the assertion off, never "errored but holding."
+- `windows-sys` under `[target.'cfg(windows)'.dependencies]` for `SetThreadExecutionState`. Already in the tree via Tauri, so nothing new is downloaded. macOS and Linux need no crate — they spawn the OS's own helper.
+- New `src/sidebar/widgets/CaffeinateWidget.tsx` + `.css`. Expanded: `CARD` with a ☕ glyph, a bold "Caffeinate" title, and a pill switch. The line under the title carries whichever state is live — a failure, the running duration, or the resting explanation. Rail: ☕ glyph, greyscaled when off, display-only per D1.
+- Every transition reconciles against the backend's answer rather than the request. On mount the widget reads `power_keep_awake_state()`, and it stays subscribed to `shax:keep-awake-changed` for the lifetime of the widget so a toggle in any window moves the switch in all of them.
+- `power_keep_awake_state()` returns `{ held, since_ms }`. The backend stamps `since_ms` at acquire, so every window computes the same duration off the shared clock tick.
+- No pane involvement anywhere: no `shax:emit-command`, no focused-pane resolver, no block subscription.
 
-**Exit:** on macOS or Linux, clicking the caffeinate widget On emits the real command into the focused pane's scrollback and the widget shows a live duration. Clicking Off Ctrl+Cs the block; widget flips to off. Ctrl+C-ing the block directly from the pane also flips the widget off. Reopening the window with a still-running caffeinate reflects the on state and continues to count.
+**Exit:** on macOS, Linux, **and Windows**, clicking the caffeinate widget On stops the machine idle-sleeping and the widget shows a live duration; clicking Off releases it. A refused assertion leaves the widget off and says why. Toggling it in one window moves the switch in every other open window, and all of them show the same duration. Opening a new window shows the assertion as on. Quitting Shax releases it. No pane is blocked, and no pane's scrollback changes.
 
 ## Non-goals (explicit, not deferred)
 
 - **Community widget sandbox.** Phase 2. Everything Phase 1 ships is React-authored in-repo. No Web Worker, no schema, no capability gates. Building the sandbox before we've lived with the built-in set is speculative generality.
 - **Drag-to-reorder widgets.** Fixed order for Phase 1. If a user asks in the first month of daily-driving, it lands in a follow-up; the community-widget story in Phase 2 needs it more than the built-in set does.
 - **Per-widget preferences panel.** The two widgets that could have preferences (network refresh cadence, CPU alert threshold) don't in v1. Add a preferences pane only when a real ask exists.
-- **Windows caffeinate.** See D6. Phase 1.5 follow-up.
+- ~~**Windows caffeinate.** See D6. Phase 1.5 follow-up.~~ **Shipped in M13.4** — the D6 reversal removed the shell-command requirement that was blocking it. No Phase 1.5 follow-up needed.
 - **Weather widget.** Punt to Phase 2 — needs an explicit network capability, which needs the sandbox that Phase 1 doesn't build.
 - **kubectl context widget.** Same — needs a `kubectl config current-context` shell-out, which is easy, but this is meaningful only to a subset of users, and Phase 2's community widget path is the right home for niche tooling.
 - **Sidebar-hosted terminal / editor / block viewer / anything that hosts a pane.** The sidebar is for widgets, not for panes. If a user wants a persistent htop, that's a pinned tab or a pane in the layout, not a sidebar widget. Same rule the parent design note in `12-roadmap-milestones.md` § "Sidebar with pinnable widgets" already established: no in-Shax app runtime.
@@ -172,16 +213,16 @@ Every slice writes tests alongside per CLAUDE.md § "Testing policy".
 - **M13.1** — `Sidebar.test.tsx` covers both states rendering, `⌘B` toggle via `fireEvent.keyDown`, palette command dispatch, focus-never-leaves-pane on mousedown, per-window preferences round-trip. Rust: `preferences.rs` gains a round-trip test for `SidebarPreferences` and a missing-field-defaults-to-false test.
 - **M13.2** — `ClockWidget.test.tsx` with a fake `Date.now()`-injecting harness (there's already one in the M12.4 clock tests). `GitBranchWidget.test.tsx` mocks the focused-pane context to cover: repo pane (shows branch), non-repo pane (hidden), no pane focused (hidden), pane focus swap (branch updates).
 - **M13.3** — Rust: `sysinfo.rs` and `ssid.rs` each get a smoke test that the probe returns a non-panicking value on the CI's host OS (probing is inherently host-dependent; assert the shape, not a specific value). Frontend: `CpuMemWidget.test.tsx` renders both bars from a mocked probe value; `NetworkWidget.test.tsx` covers online (green dot), offline (red dot), SSID-missing (chip renders IP only).
-- **M13.4** — `CaffeinateWidget.test.tsx` mocks `shax:emit-command` and the block-lifecycle bus, covers: off→on emits the correct per-platform command, on→off sends Ctrl+C, block-completed-externally flips widget off, Windows shows disabled state, no-focused-pane triggers the refuse animation.
+- **M13.4** — Rust: `power.rs` tests the state machine rather than the host's willingness to grant an assertion (CI runners are headless and a Linux container may have no logind session, so asserting a successful acquire would test the runner image, not this module). Covers: release is always safe and idempotent, a failed acquire never leaves the assertion held, acquiring twice holds exactly one and keeps the original start stamp, a start time is reported exactly when held, and — the regression that motivated verify-on-read — **a helper that dies under us reads back as off and clears its slot**, driven with a helper that exits on its own because `set(true)` cannot reproduce a death that is invisible at spawn time. Frontend: `CaffeinateWidget.test.tsx` mocks the IPC surface and covers off→on adopts the granted state, a backend granting nothing leaves the widget off, a rejected request reports why and stays off, a new window adopts an already-held assertion and dates it from the backend's stamp, a change made in another window reaches this one in both directions, the duration matches across windows, the subscription is released on unmount, the duration reads from the shared clock tick, a failure keeps its full text in the tooltip behind a short card label, the Linux tooltip carries the screen-blanking caveat and macOS does not, and the rail is display-only.
 
-Playwright end-to-end: one new file `tests/e2e/sidebar.spec.ts`, one flow — open a window, `⌘B` to expand, run a caffeinate from the widget, verify the block appears in the focused pane's scrollback, click off, verify the block completes. Adds no other e2e paths (the widget-level behaviour is covered by component tests).
+Playwright end-to-end: one new file `e2e/sidebar.spec.ts` — rail-by-default, chevron expand/collapse, the caffeinate card rendering, and the widget staying off when the backend grants nothing. Note the harness runs against the bare Vite dev server with **no Tauri host**, so whether the OS actually grants an assertion is not observable at this layer; that belongs to `power.rs`'s tests. What the backendless harness proves well is the reconciliation contract: nothing granted, nothing claimed.
 
 ## Cross-cutting concerns
 
-- **Honest log (`CLAUDE.md` non-negotiable #3).** D6 is the load-bearing test of this principle for M13. Caffeinate emits a real, visible command; every future widget that "does something" follows the same route through `shax:emit-command`. Any widget PR that introduces a hidden side effect is a defect.
+- **Honest log (`CLAUDE.md` non-negotiable #3).** D6 is the load-bearing test of this principle for M13, and its reversal is where the principle's *scope* got settled. The rule Phase 2 inherits: an action that changes the user's shell, filesystem, or repository goes through `shax:emit-command` and the safety gate, always; an action that changes only Shax's own state, or asks the OS for something on Shax's behalf, does not. Where an author cannot tell which side an action falls on, it goes through the emit path — the default is disclosure. App state still needs a visible readout: the caffeinate widget is pinned and legible whenever it is on, and a power assertion with no indicator anywhere would violate the principle.
 - **Daily-driver first (non-negotiable #1).** The default state is icon rail, not expanded — the sidebar earns its width, doesn't take it by default. Widgets never steal focus. `⌘B` is a single-chord toggle. All of this preserves the "as fast and calm as a great native terminal" feel.
-- **Never hijack input-owning programs (non-negotiable #4).** Nothing here touches the alt-screen path. Sidebar is chrome; alt-screen apps still render into the xterm grid untouched. `⌘B` still works during vim / htop / ssh — hitting it just toggles a column of chrome, doesn't send keys anywhere.
-- **Safety gate (non-negotiable #5).** Caffeinate's emit path routes through `shax:emit-command-approved` — the same gate palette-emitted and assistant-suggested commands pass through. A widget that emits a destructive command (Phase 2 territory) is subject to the same approval flow.
+- **Never hijack input-owning programs (non-negotiable #4).** Sidebar is chrome; alt-screen apps still render into the xterm grid untouched, and `⌘B` during vim / htop / ssh just toggles a column of chrome. M13.4 additionally found and closed a **pre-existing hole**: `shax:emit-command-approved` wrote to the PTY regardless of whether an alt-screen program owned it, so a widget, the assistant, or the palette could type a command line into a running vim. The guard now sits at that shared chokepoint in `TerminalPane`, covering every caller at once. It outlived the D6 reversal — caffeinate no longer emits anything, but git-status, ls, the assistant, and the palette all still do.
+- **Safety gate (non-negotiable #5).** Caffeinate no longer emits a command, so it no longer passes the gate — its assertion is neither destructive nor state-changing for the user's shell, and it is reversible by the same click that set it. Every widget that *does* emit still routes through `shax:emit-command-approved`, the same gate palette-emitted and assistant-suggested commands pass through, and a Phase 2 widget emitting a destructive command is subject to the same approval flow.
 - **Local-first (non-negotiable #6).** Zero network. `sysinfo` reads `/proc` and equivalent, `airport` / `iwgetid` / `netsh` are local, no ping-based reachability check.
 - **Fidelity contract (non-negotiable #2).** Widgets are lenses over real state (OS probes, focused-pane branch, block lifecycle). If a probe fails, the widget hides its affected line — never fabricates. Every widget's failure mode is `None → hidden`, not `None → "N/A"`.
 

@@ -1,0 +1,41 @@
+/**
+ * CaffeinateWidget animations (M13.4, spec §19 D6).
+ *
+ * Colocated stylesheet rather than inline styles because keyframes
+ * have no inline-style equivalent — same reason `BlockRow.css` exists
+ * alongside its component.
+ *
+ * `shax-caffeinate-refuse`: the "I can't do that here" shake fired
+ * when the widget is clicked with no focused pane, or with an
+ * alt-screen program owning the focused pane. Deliberately small
+ * (3px) and short — a nudge, not a buzzer.
+ */
+
+@keyframes shax-caffeinate-refuse {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-3px);
+  }
+  40%,
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.shax-caffeinate-refusing {
+  animation: shax-caffeinate-refuse 320ms ease-in-out;
+}
+
+/* Respect the OS reduced-motion setting: the refusal still needs to
+   read as a refusal, so the shake degrades to a brief border flash
+   rather than disappearing entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .shax-caffeinate-refusing {
+    animation: none;
+    border-color: var(--amber);
+  }
+}

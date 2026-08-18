@@ -4144,6 +4144,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "keyring",
+ "libc",
  "local-ip-address",
  "ort",
  "portable-pty",
@@ -4165,6 +4166,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vte",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

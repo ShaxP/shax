@@ -374,3 +374,60 @@ describe("TerminalPane / dead-shell handling (M2 slice 2.3b)", () => {
     expect(screen.getByTestId("shell-exited-banner")).toHaveTextContent("Shell exited.");
   });
 });
+
+describe("TerminalPane / emit-command alt-screen guard (M13.4, CLAUDE.md #4)", () => {
+  /** Drive the pane to the point where it owns a live PTY id. */
+  async function mountWithPty(): Promise<void> {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  function emitApproved(command: string): void {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:emit-command-approved", {
+          detail: { paneId: "non-tauri", command, source: "widget" },
+        }),
+      );
+    });
+  }
+
+  it("writes an approved command to the PTY when no alt-screen program is running", async () => {
+    await mountWithPty();
+    emitApproved("git status");
+    expect(mockWritePty).toHaveBeenCalledWith(
+      "non-tauri",
+      new TextEncoder().encode("git status\n"),
+    );
+  });
+
+  it("drops an approved command while an alt-screen program owns the pane", async () => {
+    await mountWithPty();
+    act(() => {
+      lastOnEvent?.({ kind: "alt_screen_changed", active: true });
+    });
+    emitApproved("git status");
+    // Non-negotiable #4: vim / less / top own their own input loop.
+    // Typing a command line into one is hijacking, so the shared emit
+    // chokepoint refuses on behalf of EVERY caller — widgets, the
+    // assistant, and the palette alike.
+    expect(mockWritePty).not.toHaveBeenCalled();
+  });
+
+  it("resumes writing once the alt-screen program exits", async () => {
+    await mountWithPty();
+    act(() => {
+      lastOnEvent?.({ kind: "alt_screen_changed", active: true });
+    });
+    emitApproved("git status");
+    expect(mockWritePty).not.toHaveBeenCalled();
+
+    act(() => {
+      lastOnEvent?.({ kind: "alt_screen_changed", active: false });
+    });
+    emitApproved("git status");
+    expect(mockWritePty).toHaveBeenCalledTimes(1);
+  });
+});
