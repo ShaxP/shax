@@ -196,7 +196,7 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
   }, [adopt, busy, on]);
 
   const elapsed = on && startedAtMs !== null ? now.getTime() - startedAtMs : null;
-  const tooltip = buildTooltip(on, error);
+  const tooltip = buildTooltip(on, error, platform);
 
   if (!visible) {
     return (
@@ -252,9 +252,12 @@ function renderSecondLine(
   platform: Platform,
 ): React.ReactElement {
   if (error !== null) {
+    // The card is 280px wide with a nowrap line, so a backend message
+    // long enough to be useful is a message long enough to be clipped
+    // to uselessness. Short label here, whole thing in the tooltip.
     return (
-      <span style={ERROR_LINE} data-testid="sidebar-caffeinate-error">
-        {error}
+      <span style={ERROR_LINE} data-testid="sidebar-caffeinate-error" title={error}>
+        {shortenError(error)}
       </span>
     );
   }
@@ -278,8 +281,24 @@ function subtitleFor(platform: Platform): string {
   return platform === "macos" ? "keep this Mac awake" : "keep this computer awake";
 }
 
-function buildTooltip(on: boolean, error: string | null): string {
+/** A few words that fit the card. The full message is always one
+ *  hover away, and is what a bug report should quote. */
+function shortenError(error: string): string {
+  if (/not found|is missing/i.test(error)) return "not available on this system";
+  return "couldn't keep awake";
+}
+
+function buildTooltip(on: boolean, error: string | null, platform: Platform): string {
   if (error !== null) return `Keep-awake failed: ${error}`;
+  // Linux inhibits idle *system* sleep only. Screen blanking belongs
+  // to the screensaver, which we deliberately don't touch — saying
+  // "will not sleep" there would promise more than we deliver
+  // (fidelity contract).
+  if (platform === "linux") {
+    return on
+      ? "This computer will not go to sleep while this is on. The screen can still blank."
+      : "Stop this computer sleeping while you're away (does not stop the screen blanking)";
+  }
   return on
     ? "This computer will not sleep while this is on"
     : "Stop this computer sleeping while you're away";

@@ -116,13 +116,25 @@ describe("CaffeinateWidget / the OS is the source of truth", () => {
   });
 
   it("reports a rejected request and stays off", async () => {
-    keepAwakeMock.mockRejectedValue(new Error("no logind session"));
+    keepAwakeMock.mockRejectedValue(new Error("could not start /usr/bin/caffeinate: EPERM"));
     renderWidget();
     fireEvent.click(toggle());
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-caffeinate-error")).toHaveTextContent("no logind session"),
-    );
+    await waitFor(() => expect(screen.getByTestId("sidebar-caffeinate-error")).toBeInTheDocument());
     expect(toggle()).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("keeps the full failure in the tooltip and a readable label on the card", async () => {
+    // The card is 280px with a nowrap line, so the backend's message
+    // is truncated to uselessness if shown raw. The label has to stay
+    // short; the detail has to stay reachable.
+    const detail = "systemd-inhibit not found; keep-awake needs systemd on this machine";
+    keepAwakeMock.mockRejectedValue(new Error(detail));
+    renderWidget();
+    fireEvent.click(toggle());
+    await waitFor(() => expect(screen.getByTestId("sidebar-caffeinate-error")).toBeInTheDocument());
+    const line = screen.getByTestId("sidebar-caffeinate-error");
+    expect(line.textContent).toBe("not available on this system");
+    expect(line.getAttribute("title")).toBe(detail);
   });
 
   it("adopts an assertion another window already holds", async () => {
@@ -239,6 +251,25 @@ describe("CaffeinateWidget / platform wording", () => {
       "keep this computer awake",
     );
     expect(toggle()).not.toBeDisabled();
+  });
+});
+
+describe("CaffeinateWidget / platform-honest wording", () => {
+  it("does not promise Linux users their screen stays on", () => {
+    // `--what=idle` inhibits idle system sleep; screen blanking is the
+    // screensaver's business and we don't touch it. Claiming otherwise
+    // would promise more than we deliver.
+    platformMock.mockReturnValue("linux");
+    renderWidget();
+    const tooltip = screen.getByTestId("sidebar-caffeinate").getAttribute("title") ?? "";
+    expect(tooltip).toMatch(/screen/i);
+  });
+
+  it("makes no such caveat on macOS, where -d covers the display", () => {
+    platformMock.mockReturnValue("macos");
+    renderWidget();
+    const tooltip = screen.getByTestId("sidebar-caffeinate").getAttribute("title") ?? "";
+    expect(tooltip).not.toMatch(/screen/i);
   });
 });
 

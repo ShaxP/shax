@@ -83,6 +83,15 @@ const OFF: KeepAwakeState = KeepAwakeState {
 pub fn set(enable: bool) -> Result<KeepAwakeState, PowerError> {
     let mut slot = lock();
     if enable {
+        // Same verification as `state`: a helper that died under us
+        // must not make this look like a no-op, or toggling off and on
+        // again would never recover.
+        if slot
+            .as_mut()
+            .is_some_and(|held| !imp::is_alive(&mut held.assertion))
+        {
+            slot.take();
+        }
         if let Some(held) = slot.as_ref() {
             // Idempotent: a second acquire keeps the ORIGINAL start
             // time. Restamping would silently reset every window's
@@ -115,15 +124,36 @@ pub fn set(enable: bool) -> Result<KeepAwakeState, PowerError> {
     }
 }
 
-/// The current state, for a window resynchronising on mount.
+/// The current state, verified against the underlying mechanism
+/// rather than read from our own bookkeeping.
+///
+/// The verification is load-bearing on Linux. `systemd-inhibit`
+/// exists on any systemd distro but still fails when there is no
+/// logind session to talk to — headless boxes, plain SSH, containers,
+/// WSL without systemd — and it fails by *exiting*, not by refusing to
+/// spawn. Checking for that at spawn time cannot work: the child has
+/// not been scheduled yet, so it always still looks alive. Verifying
+/// on read catches it, and catches every later death too — someone
+/// killing the helper, logind revoking the lock — instead of only the
+/// first instant.
 pub fn state() -> KeepAwakeState {
-    match lock().as_ref() {
-        None => OFF,
-        Some(held) => KeepAwakeState {
-            held: true,
-            since_ms: Some(held.since_ms),
-        },
+    let mut slot = lock();
+    let dead = match slot.as_mut() {
+        None => return OFF,
+        Some(held) => !imp::is_alive(&mut held.assertion),
+    };
+    if dead {
+        // Drop our record of it: whatever we were holding is gone, and
+        // reporting "on" for it would be exactly the lie this widget
+        // exists to prevent.
+        slot.take();
+        tracing::warn!("keep-awake: helper died; assertion no longer held");
+        return OFF;
     }
+    slot.as_ref().map_or(OFF, |held| KeepAwakeState {
+        held: true,
+        since_ms: Some(held.since_ms),
+    })
 }
 
 /// Wall-clock milliseconds since the Unix epoch. A clock before 1970
@@ -185,6 +215,7 @@ pub fn power_keep_awake_state() -> KeepAwakeState {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod imp {
     use super::PowerError;
+    use std::io::ErrorKind;
     use std::process::{Child, Command, Stdio};
 
     /// A live helper process. Dropping it does NOT release the
@@ -193,25 +224,27 @@ mod imp {
     pub struct Assertion(Child);
 
     pub fn acquire() -> Result<Assertion, PowerError> {
-        let mut command = helper();
+        let (program, mut command) = helper();
         // No stdio: the helper is silent, and leaving it attached
         // would let it write into whatever launched Shax.
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let mut child = command
-            .spawn()
-            .map_err(|e| PowerError::Acquire(e.to_string()))?;
-        // A helper that has already exited never held anything —
-        // `systemd-inhibit` does this when there's no logind session.
-        // Report it as a failure instead of reporting "on" for a
-        // process that is already gone.
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(PowerError::Acquire(format!(
-                "helper exited immediately with {status}"
-            )));
-        }
+        pdeathsig(&mut command);
+        // Rust reports exec failure back through a pipe, so a missing
+        // binary surfaces here rather than as a child that dies. The
+        // *other* Linux failure — present but no logind session — is
+        // not visible at spawn time and cannot be: the child has not
+        // been scheduled yet. `super::state` catches that by verifying
+        // on every read.
+        let child = command.spawn().map_err(|e| {
+            PowerError::Acquire(if e.kind() == ErrorKind::NotFound {
+                missing_message(program)
+            } else {
+                format!("could not start {program}: {e}")
+            })
+        })?;
         Ok(Assertion(child))
     }
 
@@ -227,9 +260,71 @@ mod imp {
         Ok(())
     }
 
+    impl Assertion {
+        /// Wrap an arbitrary child so tests can drive the
+        /// died-under-us path with a helper that exits on its own.
+        #[cfg(test)]
+        pub fn from_child_for_test(child: Child) -> Self {
+            Self(child)
+        }
+    }
+
+    /// Whether the helper is still running. Reaps it when it isn't, so
+    /// a dead helper doesn't linger as a zombie.
+    ///
+    /// A `try_wait` error means we can no longer reason about the
+    /// child at all, which we treat as "not held" — claiming an
+    /// assertion we cannot verify is the failure mode that matters.
+    pub fn is_alive(assertion: &mut Assertion) -> bool {
+        matches!(assertion.0.try_wait(), Ok(None))
+    }
+
+    /// Kill the helper if Shax dies without releasing it.
+    ///
+    /// macOS gets this from `caffeinate -w <pid>`. Linux has no such
+    /// flag, so without `PR_SET_PDEATHSIG` a `SIGKILL`ed Shax leaves
+    /// `systemd-inhibit` reparented to init, holding the lock until
+    /// the user logs out.
+    #[cfg(target_os = "linux")]
+    fn pdeathsig(command: &mut Command) {
+        use std::os::unix::process::CommandExt as _;
+        // SAFETY: `pre_exec` runs between fork and exec, where only
+        // async-signal-safe calls are permitted. `prctl` is one, and
+        // this closure allocates nothing, takes no locks, and touches
+        // no shared state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    /// macOS reaps via `caffeinate -w <pid>` instead — see `helper`.
     #[cfg(target_os = "macos")]
-    fn helper() -> Command {
-        let mut command = Command::new("caffeinate");
+    fn pdeathsig(_command: &mut Command) {}
+
+    #[cfg(target_os = "macos")]
+    fn missing_message(program: &str) -> String {
+        format!("{program} is missing; keep-awake needs it to hold the assertion")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn missing_message(_program: &str) -> String {
+        "systemd-inhibit not found; keep-awake needs systemd on this machine".to_string()
+    }
+
+    /// The helper to run, and its name for error messages.
+    ///
+    /// Absolute paths rather than a bare `PATH` lookup: the app's
+    /// inherited `PATH` is not something we control, and a lookup
+    /// would run whatever resolves first under that name.
+    #[cfg(target_os = "macos")]
+    fn helper() -> (&'static str, Command) {
+        const CAFFEINATE: &str = "/usr/bin/caffeinate";
+        let mut command = Command::new(CAFFEINATE);
         // -d: no display sleep. -i: no idle system sleep.
         // -w <pid>: exit when Shax exits, so a crash can't strand a
         // machine that will not sleep.
@@ -237,23 +332,40 @@ mod imp {
             .arg("-di")
             .arg("-w")
             .arg(std::process::id().to_string());
-        command
+        (CAFFEINATE, command)
     }
 
     #[cfg(target_os = "linux")]
-    fn helper() -> Command {
-        let mut command = Command::new("systemd-inhibit");
-        // `--who` / `--why` are what `systemd-inhibit --list` shows
-        // the user, so an assertion they forgot about is traceable
-        // back to this app rather than appearing anonymous.
+    fn helper() -> (&'static str, Command) {
+        // Absolute where systemd normally installs it, falling back to
+        // a PATH lookup — the location varies more across distros than
+        // it does on macOS, so a hard absolute path would fail on
+        // layouts that are otherwise perfectly capable.
+        const ABSOLUTE: &str = "/usr/bin/systemd-inhibit";
+        let program = if std::path::Path::new(ABSOLUTE).exists() {
+            ABSOLUTE
+        } else {
+            "systemd-inhibit"
+        };
+        let mut command = Command::new(program);
+        // `--what=idle` only. Adding `sleep` asks logind to veto
+        // explicit suspend requests too, which is both wrong (if the
+        // user deliberately suspends, Shax should not override them)
+        // and fragile: block-mode sleep inhibitors are polkit-gated,
+        // so unprivileged users get denied on machines where plain
+        // idle inhibition would have worked.
+        //
+        // `--who` / `--why` are what `systemd-inhibit --list` shows,
+        // so an assertion the user forgot about is traceable back to
+        // this app rather than appearing anonymous.
         command
-            .arg("--what=idle:sleep")
+            .arg("--what=idle")
             .arg("--who=Shax")
             .arg("--why=Keep awake requested from the Shax sidebar")
             .arg("--mode=block")
             .arg("sleep")
             .arg("infinity");
-        command
+        (program, command)
     }
 }
 
@@ -321,6 +433,14 @@ mod imp {
             .map_err(|_| PowerError::Release("holder thread panicked".to_string()))?;
         Ok(())
     }
+
+    /// Whether the assertion is still held. The flags live on the
+    /// holder thread and are cleared by Windows when it exits, so a
+    /// finished thread means a released assertion — the same
+    /// "verify, don't assume" contract the Unix backend provides.
+    pub fn is_alive(assertion: &mut Assertion) -> bool {
+        !assertion.thread.is_finished()
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -337,6 +457,11 @@ mod imp {
 
     pub fn release(_assertion: Assertion) -> Result<(), PowerError> {
         Ok(())
+    }
+
+    /// Unreachable — `acquire` never hands one out on this platform.
+    pub fn is_alive(_assertion: &mut Assertion) -> bool {
+        false
     }
 }
 
@@ -403,6 +528,44 @@ mod tests {
         // behind and `state()` would still report held.
         assert!(!set(false).expect("release must not fail").held);
         assert!(!state().held);
+    }
+
+    /// The regression this whole review turned on. A helper that dies
+    /// under us — `systemd-inhibit` with no logind session is the real
+    /// case — must show as OFF, not as a happily ticking toggle on a
+    /// machine that is about to sleep.
+    ///
+    /// Driven directly against the Unix backend with a helper that
+    /// exits immediately, because `set(true)` cannot reproduce it:
+    /// the whole point is that the death is invisible at spawn time.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_helper_that_dies_reads_back_as_off() {
+        let _guard = serialised();
+        set(false).expect("start from a known-off state");
+
+        let child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawning /bin/sh must work");
+        *lock() = Some(Held {
+            assertion: imp::Assertion::from_child_for_test(child),
+            since_ms: now_ms(),
+        });
+
+        // Give the helper a moment to actually die. The bug was
+        // checking for this at spawn time, when it necessarily still
+        // looks alive.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        assert_eq!(state(), OFF, "a dead helper must not read as held");
+        // ...and the slot is cleared, not merely reported as off, so
+        // toggling on again re-acquires rather than short-circuiting.
+        assert!(lock().is_none());
     }
 
     #[test]

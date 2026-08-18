@@ -4144,6 +4144,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "keyring",
+ "libc",
  "local-ip-address",
  "ort",
  "portable-pty",

@@ -81,3 +81,9 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
 
+# `prctl(PR_SET_PDEATHSIG)` so the keep-awake helper dies with Shax.
+# macOS gets the same guarantee from `caffeinate -w <pid>`; Linux has
+# no equivalent flag. Already in the tree transitively.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
