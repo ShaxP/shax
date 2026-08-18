@@ -28,6 +28,8 @@ function load(overrides: Partial<SystemLoad> = {}): SystemLoad {
     cpu_percent: 42.7,
     mem_used_bytes: 8 * GB,
     mem_total_bytes: 16 * GB,
+    load_average_one: 1.84,
+    core_count: 4,
     ...overrides,
   };
 }

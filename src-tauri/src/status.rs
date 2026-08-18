@@ -219,6 +219,15 @@ pub struct SystemLoad {
     pub cpu_percent: f32,
     pub mem_used_bytes: u64,
     pub mem_total_bytes: u64,
+    /// One-minute load average. `None` on Windows, which has no
+    /// equivalent metric — `sysinfo` documents `load_average` as not
+    /// working there and returns zeros, and rendering "load 0.00"
+    /// would be a fabricated reading rather than a missing one.
+    pub load_average_one: Option<f64>,
+    /// Physical core count, or `None` when the platform won't say.
+    /// Physical rather than logical: "4 cores" on an 8-thread machine
+    /// is what the user recognises as their hardware.
+    pub core_count: Option<usize>,
 }
 
 /// Shared `System` instance so CPU deltas are meaningful. `sysinfo`
@@ -262,7 +271,24 @@ pub fn system_cpu_and_mem() -> SystemLoad {
         cpu_percent: sys.global_cpu_usage(),
         mem_used_bytes: sys.used_memory(),
         mem_total_bytes: sys.total_memory(),
+        load_average_one: load_average_one(),
+        core_count: sys.physical_core_count(),
     }
+}
+
+/// One-minute load average, or `None` where the platform has no such
+/// number to give.
+#[cfg(not(target_os = "windows"))]
+fn load_average_one() -> Option<f64> {
+    Some(System::load_average().one)
+}
+
+/// Windows has no load average. `sysinfo` returns zeros rather than
+/// failing, so the `cfg` — not a runtime check — is what keeps a
+/// meaningless 0.00 off the card.
+#[cfg(target_os = "windows")]
+fn load_average_one() -> Option<f64> {
+    None
 }
 
 // ── M13.3: Wi-Fi SSID ──────────────────────────────────────────────
@@ -524,6 +550,37 @@ mod tests {
             load.mem_used_bytes,
             load.mem_total_bytes,
         );
+    }
+
+    #[test]
+    fn load_average_is_present_off_windows_and_absent_on_it() {
+        // The whole point of the Option: `sysinfo` returns zeros on
+        // Windows rather than failing, so a naive f64 would render a
+        // confident, meaningless "load 0.00" there.
+        let load = system_cpu_and_mem();
+        #[cfg(target_os = "windows")]
+        assert!(
+            load.load_average_one.is_none(),
+            "Windows has no load average to report",
+        );
+        #[cfg(not(target_os = "windows"))]
+        match load.load_average_one {
+            Some(one) => assert!(
+                one >= 0.0 && one.is_finite(),
+                "load average should be a finite non-negative number, got {one}",
+            ),
+            None => panic!("unix platforms should report a load average"),
+        }
+    }
+
+    #[test]
+    fn core_count_is_absent_or_positive() {
+        // `physical_core_count` is best-effort; the contract the
+        // widget relies on is that a reported count is never zero,
+        // since "0 cores" would be a visibly wrong reading.
+        if let Some(cores) = system_cpu_and_mem().core_count {
+            assert!(cores > 0, "a reported core count must be positive");
+        }
     }
 
     #[test]
