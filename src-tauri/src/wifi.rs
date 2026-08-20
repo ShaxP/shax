@@ -74,7 +74,10 @@ pub struct WifiInfo {
 /// standing answer.
 #[tauri::command]
 pub fn wifi_request_ssid_access() -> WifiInfo {
-    #[cfg(target_os = "macos")]
+    // Called unconditionally: every platform provides this, and on
+    // the ones that need no permission it is an explicit no-op.
+    // Gating the *call site* instead left the function dead on
+    // Linux and Windows, which `-D warnings` rightly rejected.
     imp::request_location_authorization();
     probe()
 }
