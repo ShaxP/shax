@@ -39,6 +39,8 @@ function load(overrides: Partial<SystemLoad> = {}, history: number[] = []): Syst
       mem_total_bytes: 16 * GB,
       load_average_one: 1.84,
       core_count: 4,
+      net_up_bps: null,
+      net_down_bps: null,
       ...overrides,
     },
   };

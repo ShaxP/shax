@@ -146,6 +146,8 @@ vi.mock("./lib/ipc", () => ({
         mem_total_bytes: 0,
         load_average_one: null,
         core_count: null,
+        net_up_bps: null,
+        net_down_bps: null,
       },
       history: [],
     }),

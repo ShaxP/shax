@@ -922,6 +922,12 @@ export interface SystemLoad {
   load_average_one: number | null;
   /** Physical core count, or null when the platform won't say. */
   core_count: number | null;
+  /** Bytes per second out / in over the primary interface. Null
+   *  before the second sample — throughput is a delta, so the first
+   *  refresh has no interval to divide by — or when no interface
+   *  could be resolved. */
+  net_up_bps: number | null;
+  net_down_bps: number | null;
 }
 
 const SYSTEM_LOAD_ZERO: SystemLoad = {
@@ -930,6 +936,8 @@ const SYSTEM_LOAD_ZERO: SystemLoad = {
   mem_total_bytes: 0,
   load_average_one: null,
   core_count: null,
+  net_up_bps: null,
+  net_down_bps: null,
 };
 
 /** The latest CPU/memory snapshot plus the recent CPU history behind
