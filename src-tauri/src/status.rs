@@ -235,12 +235,6 @@ pub struct SystemLoad {
     /// Physical rather than logical: "4 cores" on an 8-thread machine
     /// is what the user recognises as their hardware.
     pub core_count: Option<usize>,
-    /// Bytes per second out / in over the primary interface, or
-    /// `None` before the second sample (throughput is a delta, so the
-    /// first refresh has nothing to compare against) or when no
-    /// interface could be resolved.
-    pub net_up_bps: Option<u64>,
-    pub net_down_bps: Option<u64>,
 }
 
 /// Bars in the sparkline the CPU card renders. The backend owns the
@@ -264,9 +258,23 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 /// `System`, resetting the delta baseline for the others. A window's
 /// "2-second" reading was really the interval since some *other*
 /// window last refreshed.
+/// Bytes/sec out and in for one interface, keyed by its name so the
+/// frontend can join it to the descriptive data from `netif`, which
+/// refreshes on a slower tier (spec §19 D5 item 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceRate {
+    pub name: String,
+    pub up_bps: u64,
+    pub down_bps: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemLoadSeries {
     pub current: SystemLoad,
+    /// Per-interface throughput, every non-loopback interface the OS
+    /// reports. Empty on the first sample: throughput is a delta, and
+    /// with no previous sample there is no interval to divide by.
+    pub net_rates: Vec<InterfaceRate>,
     /// Oldest first, newest last. At most [`HISTORY_LEN`] entries,
     /// and shorter than that until the sampler has run long enough —
     /// the card draws empty slots rather than inventing readings.
@@ -284,9 +292,8 @@ impl SystemLoadSeries {
                 mem_total_bytes: 0,
                 load_average_one: None,
                 core_count: None,
-                net_up_bps: None,
-                net_down_bps: None,
             },
+            net_rates: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -298,64 +305,37 @@ impl SystemLoadSeries {
 /// on who refreshed last — one owner, one cadence.
 static NETS: Mutex<Option<Networks>> = Mutex::new(None);
 
-/// Bytes/sec out and in over the primary interface.
+/// Bytes/sec out and in for every non-loopback interface.
 ///
-/// Scoped to one interface rather than summed across all of them:
-/// summing counts VPN, Docker and other virtual adapters, so a
-/// `docker pull` would report roughly double what actually crossed
-/// the wire. The primary interface is the one holding the machine's
-/// default-route IP, which is the same address the card already
-/// shows — so the number and the IP describe the same link.
-///
-/// Falls back to summing non-loopback interfaces when the address
-/// can't be matched to a name, which is a worse reading but better
-/// than none.
-fn sample_network(elapsed: Duration) -> (Option<u64>, Option<u64>) {
+/// Per-interface rather than summed: the card now pages through
+/// interfaces, and each must report its own traffic. Summing was
+/// always the wrong reading anyway — it counts VPN and Docker
+/// adapters, so a `docker pull` reported roughly double what crossed
+/// the wire.
+fn sample_network(elapsed: Duration) -> Vec<InterfaceRate> {
     let mut guard = NETS.lock().unwrap_or_else(|e| e.into_inner());
     let nets = guard.get_or_insert_with(Networks::new_with_refreshed_list);
     nets.refresh();
-
-    let primary = primary_interface_name();
-    let mut up = 0u64;
-    let mut down = 0u64;
-    let mut matched = false;
-    for (name, data) in nets.list() {
-        let wanted = match primary.as_deref() {
-            Some(want) => name == want,
-            None => !is_loopback_name(name),
-        };
-        if !wanted {
-            continue;
-        }
-        matched = true;
-        up = up.saturating_add(data.transmitted());
-        down = down.saturating_add(data.received());
-    }
-    if !matched {
-        return (None, None);
-    }
+    // Guard against a zero or absurdly small interval turning a
+    // handful of bytes into a fictional gigabit.
     let seconds = elapsed.as_secs_f64().max(0.001);
-    let per_sec = |bytes: u64| -> Option<u64> {
+    let per_sec = |bytes: u64| -> u64 {
         let rate = (bytes as f64 / seconds).round();
         if rate.is_finite() && rate >= 0.0 {
-            Some(rate as u64)
+            rate as u64
         } else {
-            None
+            0
         }
     };
-    (per_sec(up), per_sec(down))
-}
-
-/// Name of the interface holding the default-route IP, or `None` when
-/// it can't be resolved (offline, or an address the enumeration
-/// doesn't report).
-fn primary_interface_name() -> Option<String> {
-    let ip = local_ip_address::local_ip().ok()?;
-    local_ip_address::list_afinet_netifas()
-        .ok()?
-        .into_iter()
-        .find(|(_, addr)| *addr == ip)
-        .map(|(name, _)| name)
+    nets.list()
+        .iter()
+        .filter(|(name, _)| !is_loopback_name(name))
+        .map(|(name, data)| InterfaceRate {
+            name: name.clone(),
+            up_bps: per_sec(data.transmitted()),
+            down_bps: per_sec(data.received()),
+        })
+        .collect()
 }
 
 fn is_loopback_name(name: &str) -> bool {
@@ -397,7 +377,7 @@ fn sample_once() -> SystemLoadSeries {
     // No previous sample means no interval, so no rate. The first
     // reading reports `None` rather than dividing by an assumed
     // cadence.
-    let (net_up_bps, net_down_bps) = match elapsed {
+    let net_rates = match elapsed {
         Some(elapsed) => sample_network(elapsed),
         None => {
             // Still refresh so the *next* sample has a baseline.
@@ -405,7 +385,7 @@ fn sample_once() -> SystemLoadSeries {
             guard
                 .get_or_insert_with(Networks::new_with_refreshed_list)
                 .refresh();
-            (None, None)
+            Vec::new()
         }
     };
     let current = {
@@ -430,14 +410,13 @@ fn sample_once() -> SystemLoadSeries {
             mem_total_bytes: sys.total_memory(),
             load_average_one: load_average_one(),
             core_count: sys.physical_core_count(),
-            net_up_bps,
-            net_down_bps,
         }
     };
 
     let mut guard = series_lock();
     let series = guard.get_or_insert_with(SystemLoadSeries::empty);
     series.current = current;
+    series.net_rates = net_rates;
     series.history.push(current.cpu_percent);
     if series.history.len() > HISTORY_LEN {
         // `drain` rather than rebuilding: the buffer is 24 floats, but
@@ -864,9 +843,11 @@ mod tests {
             let mut guard = LAST_SAMPLE_AT.lock().unwrap_or_else(|e| e.into_inner());
             *guard = None;
         }
-        let first = sample_once().current;
-        assert_eq!(first.net_up_bps, None);
-        assert_eq!(first.net_down_bps, None);
+        let first = sample_once();
+        assert!(
+            first.net_rates.is_empty(),
+            "with no previous sample there is no interval, so no rate",
+        );
     }
 
     #[test]
@@ -876,12 +857,16 @@ mod tests {
         // number, or we honestly have none. Never a garbage one.
         let _guard = serialised();
         sample_once();
-        let second = sample_once().current;
-        for bps in [second.net_up_bps, second.net_down_bps]
-            .into_iter()
-            .flatten()
-        {
-            assert!(bps < u64::MAX, "rate should be a real number, got {bps}");
+        let second = sample_once();
+        for rate in &second.net_rates {
+            assert!(
+                rate.up_bps < u64::MAX && rate.down_bps < u64::MAX,
+                "rates should be real numbers, got {rate:?}",
+            );
+            assert!(
+                !rate.name.is_empty(),
+                "every rate must name the interface it describes, or it cannot be joined",
+            );
         }
     }
 

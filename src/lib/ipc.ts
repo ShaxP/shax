@@ -922,12 +922,6 @@ export interface SystemLoad {
   load_average_one: number | null;
   /** Physical core count, or null when the platform won't say. */
   core_count: number | null;
-  /** Bytes per second out / in over the primary interface. Null
-   *  before the second sample — throughput is a delta, so the first
-   *  refresh has no interval to divide by — or when no interface
-   *  could be resolved. */
-  net_up_bps: number | null;
-  net_down_bps: number | null;
 }
 
 const SYSTEM_LOAD_ZERO: SystemLoad = {
@@ -936,8 +930,6 @@ const SYSTEM_LOAD_ZERO: SystemLoad = {
   mem_total_bytes: 0,
   load_average_one: null,
   core_count: null,
-  net_up_bps: null,
-  net_down_bps: null,
 };
 
 /** The latest CPU/memory snapshot plus the recent CPU history behind
@@ -945,8 +937,20 @@ const SYSTEM_LOAD_ZERO: SystemLoad = {
  *  are host-global facts and every window must agree on them — see
  *  `SystemLoadSeries` in `status.rs` for why per-window polling was
  *  not merely inconsistent but actively corrupted the readings. */
+/** Bytes/sec for one interface, keyed by name so it can be joined to
+ *  the descriptive data from `netInterfaces()`, which refreshes on a
+ *  slower tier (spec §19 D5 item 3). */
+export interface InterfaceRate {
+  name: string;
+  up_bps: number;
+  down_bps: number;
+}
+
 export interface SystemLoadSeries {
   current: SystemLoad;
+  /** Empty on the first sample: throughput is a delta, and with no
+   *  previous sample there is no interval to divide by. */
+  net_rates: InterfaceRate[];
   /** Oldest first, newest last. Shorter than the full window until
    *  the sampler has run long enough; the card draws empty slots
    *  rather than inventing readings. */
@@ -955,6 +959,7 @@ export interface SystemLoadSeries {
 
 const SYSTEM_LOAD_SERIES_EMPTY: SystemLoadSeries = {
   current: SYSTEM_LOAD_ZERO,
+  net_rates: [],
   history: [],
 };
 
@@ -1017,6 +1022,51 @@ const WIFI_UNKNOWN: WifiInfo = {
   ssid: null,
   ssid_access: "not_required",
 };
+
+export type InterfaceKind = "wi_fi" | "ethernet" | "vpn" | "other";
+
+/** Wi-Fi specifics. Everything except `ssid` is readable with no
+ *  permission, so declining the macOS location prompt costs the name
+ *  and nothing else. */
+export interface WifiDetail {
+  ssid: string | null;
+  ssid_access: SsidAccess;
+  /** Raw dBm, for the tooltip. */
+  rssi: number | null;
+  /** 0-4, for the bar glyph. */
+  bars: number | null;
+  channel: number | null;
+  security: string | null;
+  /** True only when the OS itself detected a portal — we make no
+   *  request of our own to find out. */
+  captive: boolean;
+}
+
+export interface LinkDetail {
+  speed_mbps: number | null;
+  media: string | null;
+  full_duplex: boolean | null;
+}
+
+export interface NetInterface {
+  name: string;
+  ip: string;
+  kind: InterfaceKind;
+  /** The interface holding the default route; the card opens here. */
+  is_primary: boolean;
+  wifi: WifiDetail | null;
+  link: LinkDetail | null;
+}
+
+/** Every interface that is up and holds an address, primary first.
+ *  The slow tier — 30s — because obtaining it means forking
+ *  `networksetup` / `scutil` / `ifconfig` for values that essentially
+ *  never change. */
+export async function netInterfaces(): Promise<NetInterface[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<NetInterface[]>("net_interfaces");
+}
 
 /** Medium + SSID + access state for the primary interface. */
 export async function wifiInfo(): Promise<WifiInfo> {

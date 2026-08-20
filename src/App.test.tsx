@@ -146,16 +146,14 @@ vi.mock("./lib/ipc", () => ({
         mem_total_bytes: 0,
         load_average_one: null,
         core_count: null,
-        net_up_bps: null,
-        net_down_bps: null,
       },
+      net_rates: [],
       history: [],
     }),
   onSystemLoad: (): (() => void) => () => {},
   // M13 refinement: one probe for name + medium + access. The
   // unknown/no-permission shape keeps the widget in a benign state.
-  wifiInfo: (): Promise<unknown> =>
-    Promise.resolve({ medium: "unknown", ssid: null, ssid_access: "not_required" }),
+  netInterfaces: (): Promise<unknown[]> => Promise.resolve([]),
   wifiRequestSsidAccess: (): Promise<unknown> =>
     Promise.resolve({ medium: "unknown", ssid: null, ssid_access: "not_required" }),
   // M13.4 caffeinate. Both resolve "not held" so the widget renders

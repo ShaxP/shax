@@ -3,6 +3,7 @@ mod blocks;
 mod ipc;
 mod menu;
 mod mux;
+mod netif;
 mod power;
 mod preferences;
 mod pty;
@@ -374,6 +375,7 @@ pub fn run() {
             power::power_keep_awake_state,
             wifi::wifi_info,
             wifi::wifi_request_ssid_access,
+            netif::net_interfaces,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
