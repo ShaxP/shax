@@ -134,20 +134,22 @@ vi.mock("./lib/ipc", () => ({
   // benign fallback so the poll effects don't destabilise other
   // tests (a real value would trigger the CpuMemWidget to render
   // and could shift screen queries).
-  systemCpuAndMem: (): Promise<{
-    cpu_percent: number;
-    mem_used_bytes: number;
-    mem_total_bytes: number;
-    load_average_one: number | null;
-    core_count: number | null;
-  }> =>
+  // The CPU series is pushed by the backend sampler, not polled.
+  // Returning the empty series keeps the widget in its "not ready"
+  // state so it renders nothing and can't shift screen queries; the
+  // subscription is a no-op.
+  systemLoadSeries: (): Promise<unknown> =>
     Promise.resolve({
-      cpu_percent: 0,
-      mem_used_bytes: 0,
-      mem_total_bytes: 0,
-      load_average_one: null,
-      core_count: null,
+      current: {
+        cpu_percent: 0,
+        mem_used_bytes: 0,
+        mem_total_bytes: 0,
+        load_average_one: null,
+        core_count: null,
+      },
+      history: [],
     }),
+  onSystemLoad: (): (() => void) => () => {},
   systemSsid: (): Promise<string | null> => Promise.resolve(null),
   // M13.4 caffeinate. Both resolve "not held" so the widget renders
   // its resting state and never asks the host OS for anything during

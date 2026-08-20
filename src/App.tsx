@@ -86,11 +86,12 @@ import {
   ptyRunningCommands,
   quitConfirmed,
   systemBattery,
-  systemCpuAndMem,
+  systemLoadSeries,
   systemLocalIp,
   systemSsid,
+  onSystemLoad,
   type BatteryStatus,
-  type SystemLoad,
+  type SystemLoadSeries,
 } from "./lib/ipc";
 import { useWindowId } from "./lib/useWindowId";
 import { compactCwd } from "./panes/blockFormat";
@@ -886,28 +887,31 @@ export default function App(): React.ReactElement {
       window.clearInterval(handle);
     };
   }, []);
-  // M13.3: CPU + memory probe. Faster cadence than the network group
-  // (spec §D5 pins 2s) — separated so the CpuMem widget re-renders
-  // every 2s while the Network widget stays quiet between 30s ticks.
-  const [systemLoad, setSystemLoad] = useState<SystemLoad>({
-    cpu_percent: 0,
-    mem_used_bytes: 0,
-    mem_total_bytes: 0,
-    load_average_one: null,
-    core_count: null,
+  // M13.3 CPU + memory, reworked in the M13 refinement pass. There is
+  // deliberately no interval here: the backend samples on one fixed
+  // cadence and broadcasts, because CPU usage is a delta between
+  // refreshes and per-window polling made each window's reading
+  // depend on when the *others* last refreshed. Read once on mount
+  // for a window joining mid-stream, then follow the broadcast.
+  const [systemLoad, setSystemLoad] = useState<SystemLoadSeries>({
+    current: {
+      cpu_percent: 0,
+      mem_used_bytes: 0,
+      mem_total_bytes: 0,
+      load_average_one: null,
+      core_count: null,
+    },
+    history: [],
   });
   useEffect(() => {
     let cancelled = false;
-    const poll = (): void => {
-      void systemCpuAndMem().then((load) => {
-        if (!cancelled) setSystemLoad(load);
-      });
-    };
-    poll();
-    const handle = window.setInterval(poll, 2_000);
+    void systemLoadSeries().then((series) => {
+      if (!cancelled) setSystemLoad(series);
+    });
+    const unsubscribe = onSystemLoad(setSystemLoad);
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
+      unsubscribe();
     };
   }, []);
   // Guard so the persistence effect doesn't overwrite stored prefs with

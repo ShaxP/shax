@@ -16,21 +16,24 @@ import { render, screen, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
-import type { SystemLoad } from "../../lib/ipc";
+import type { SystemLoad, SystemLoadSeries } from "../../lib/ipc";
 import { MemoryWidget } from "./MemoryWidget";
 
 afterEach(cleanup);
 
 const GB = 1024 ** 3;
 
-function load(overrides: Partial<SystemLoad> = {}): SystemLoad {
+function load(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
   return {
-    cpu_percent: 42.7,
-    mem_used_bytes: 8 * GB,
-    mem_total_bytes: 16 * GB,
-    load_average_one: 1.84,
-    core_count: 4,
-    ...overrides,
+    history: [],
+    current: {
+      cpu_percent: 42.7,
+      mem_used_bytes: 8 * GB,
+      mem_total_bytes: 16 * GB,
+      load_average_one: 1.84,
+      core_count: 4,
+      ...overrides,
+    },
   };
 }
 
