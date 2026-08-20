@@ -932,10 +932,53 @@ const SYSTEM_LOAD_ZERO: SystemLoad = {
   core_count: null,
 };
 
-export async function systemCpuAndMem(): Promise<SystemLoad> {
-  if (!isTauriContext()) return SYSTEM_LOAD_ZERO;
+/** The latest CPU/memory snapshot plus the recent CPU history behind
+ *  it (M13 refinement). Both are owned by the backend because they
+ *  are host-global facts and every window must agree on them — see
+ *  `SystemLoadSeries` in `status.rs` for why per-window polling was
+ *  not merely inconsistent but actively corrupted the readings. */
+export interface SystemLoadSeries {
+  current: SystemLoad;
+  /** Oldest first, newest last. Shorter than the full window until
+   *  the sampler has run long enough; the card draws empty slots
+   *  rather than inventing readings. */
+  history: number[];
+}
+
+const SYSTEM_LOAD_SERIES_EMPTY: SystemLoadSeries = {
+  current: SYSTEM_LOAD_ZERO,
+  history: [],
+};
+
+/** Read the series once, for a window mounting mid-stream. Without
+ *  this a window opened an hour in would start with an empty
+ *  sparkline while its sibling showed a full one. */
+export async function systemLoadSeries(): Promise<SystemLoadSeries> {
+  if (!isTauriContext()) return SYSTEM_LOAD_SERIES_EMPTY;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<SystemLoad>("system_cpu_and_mem");
+  return invoke<SystemLoadSeries>("system_load_series");
+}
+
+/** Subscribe to the backend sampler. Returns an unsubscribe function.
+ *
+ *  There is no polling here on purpose. CPU usage is a delta between
+ *  refreshes, so if each window drove its own refresh the cadence —
+ *  and therefore the meaning of the number — would depend on how many
+ *  windows were open. */
+export function onSystemLoad(handler: (series: SystemLoadSeries) => void): () => void {
+  if (!isTauriContext()) return () => {};
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  void import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<SystemLoadSeries>("shax:system-load", (e) => handler(e.payload)).then((off) => {
+      if (cancelled) off();
+      else unlisten = off;
+    }),
+  );
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }
 
 /** Poll the connected Wi-Fi SSID (M13.3). Returns null when

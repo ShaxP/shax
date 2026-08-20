@@ -8,8 +8,12 @@
 //! - [`system_battery`] — machine power state (M12.4b, statusbar).
 //! - [`system_local_ip`] — default-route IPv4 (M12.4b, statusbar +
 //!   M13.3 sidebar Network widget).
-//! - [`system_cpu_and_mem`] — CPU % + memory in use (M13.3, sidebar
-//!   CpuMem widget).
+//! - [`system_load_series`] — CPU % + memory in use, plus the recent
+//!   CPU history (M13.3 / M13 refinement, sidebar CPU + Memory
+//!   widgets). Unlike the other entries this is not a probe the
+//!   frontend polls: [`spawn_sampler`] drives it on a fixed cadence
+//!   and broadcasts, because the reading is a delta and its meaning
+//!   depends on who refreshed last.
 //! - [`system_ssid`] — Wi-Fi SSID name (M13.3, sidebar Network
 //!   widget). macOS returns `None` unconditionally — see the note
 //!   on [`system_ssid`] for why.
@@ -36,6 +40,9 @@
 //! cover the real values.
 
 use std::sync::Mutex;
+use std::time::Duration;
+
+use tauri::Emitter as _;
 
 use serde::{Deserialize, Serialize};
 use starship_battery::State;
@@ -230,50 +237,151 @@ pub struct SystemLoad {
     pub core_count: Option<usize>,
 }
 
+/// Bars in the sparkline the CPU card renders. The backend owns the
+/// window so every OS window shows the *same* history — see
+/// [`SystemLoadSeries`].
+pub const HISTORY_LEN: usize = 24;
+
+/// How often the sampler refreshes. Fixed here rather than driven by
+/// the frontend: `sysinfo` derives CPU usage from the delta between
+/// successive refreshes, so the cadence is part of what the number
+/// *means*, not a display preference.
+pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The latest snapshot plus the recent history behind it.
+///
+/// Both live in the backend because they are host-global facts (spec
+/// §19 D3) and every window must agree on them. The previous design
+/// let each window poll on its own timer and keep its own ring
+/// buffer, which broke in two ways at once: the windows sampled at
+/// different instants, and — worse — each poll refreshed the shared
+/// `System`, resetting the delta baseline for the others. A window's
+/// "2-second" reading was really the interval since some *other*
+/// window last refreshed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemLoadSeries {
+    pub current: SystemLoad,
+    /// Oldest first, newest last. At most [`HISTORY_LEN`] entries,
+    /// and shorter than that until the sampler has run long enough —
+    /// the card draws empty slots rather than inventing readings.
+    pub history: Vec<f32>,
+}
+
+impl SystemLoadSeries {
+    /// The pre-probe state: no reading, no history. `mem_total_bytes`
+    /// of zero is the frontend's "not ready" sentinel.
+    fn empty() -> Self {
+        Self {
+            current: SystemLoad {
+                cpu_percent: 0.0,
+                mem_used_bytes: 0,
+                mem_total_bytes: 0,
+                load_average_one: None,
+                core_count: None,
+            },
+            history: Vec::new(),
+        }
+    }
+}
+
 /// Shared `System` instance so CPU deltas are meaningful. `sysinfo`
 /// computes CPU usage from the delta between two calls to
 /// `refresh_cpu_usage()`; a fresh `System::new()` per probe would
-/// always return 0. The mutex is held only for the duration of the
-/// refresh — microseconds — so a 2s poll cadence never contends.
+/// always return 0.
+///
+/// Only [`sample_once`] touches it, and only from the single sampler
+/// task, which is what keeps the delta interval honest.
 static SYS: Mutex<Option<System>> = Mutex::new(None);
 
-/// CPU + memory snapshot. Returns [`SystemLoad::zero`] when the
-/// probe can't run (e.g. the OS permission denies `/proc` access
-/// inside a sandbox) — same graceful-degradation shape as the other
-/// probes in this module.
-///
-/// Note the first call after startup returns `cpu_percent: 0.0`
-/// unconditionally — `sysinfo` needs at least
-/// [`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL`] between refreshes to
-/// compute a meaningful delta. The second poll (2s later) has the
-/// first real number.
-#[tauri::command]
-pub fn system_cpu_and_mem() -> SystemLoad {
-    let mut guard = match SYS.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
+/// The series every window reads.
+static SERIES: Mutex<Option<SystemLoadSeries>> = Mutex::new(None);
+
+fn series_lock() -> std::sync::MutexGuard<'static, Option<SystemLoadSeries>> {
+    SERIES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Refresh once and fold the result into the shared series. Returns
+/// the new series so the caller can broadcast it.
+fn sample_once() -> SystemLoadSeries {
+    let current = {
+        let mut guard = SYS.lock().unwrap_or_else(|e| e.into_inner());
+        let sys = guard.get_or_insert_with(|| {
+            // `RefreshKind::new()` builds an empty spec; we opt in
+            // only to CPU + memory so `sysinfo` doesn't scan disks,
+            // processes, or the network on every refresh (all
+            // defaulted off in our Cargo feature set anyway, but
+            // explicit here as belt + braces).
+            System::new_with_specifics(
+                RefreshKind::new()
+                    .with_cpu(sysinfo::CpuRefreshKind::everything())
+                    .with_memory(MemoryRefreshKind::everything()),
+            )
+        });
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        SystemLoad {
+            cpu_percent: sys.global_cpu_usage(),
+            mem_used_bytes: sys.used_memory(),
+            mem_total_bytes: sys.total_memory(),
+            load_average_one: load_average_one(),
+            core_count: sys.physical_core_count(),
+        }
     };
-    let sys = guard.get_or_insert_with(|| {
-        // `RefreshKind::new()` builds an empty spec; we opt in only
-        // to CPU + memory so `sysinfo` doesn't scan disks, processes,
-        // or the network on every refresh (all defaulted off in our
-        // Cargo feature set anyway, but explicit here as belt +
-        // braces).
-        System::new_with_specifics(
-            RefreshKind::new()
-                .with_cpu(sysinfo::CpuRefreshKind::everything())
-                .with_memory(MemoryRefreshKind::everything()),
-        )
-    });
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
-    SystemLoad {
-        cpu_percent: sys.global_cpu_usage(),
-        mem_used_bytes: sys.used_memory(),
-        mem_total_bytes: sys.total_memory(),
-        load_average_one: load_average_one(),
-        core_count: sys.physical_core_count(),
+
+    let mut guard = series_lock();
+    let series = guard.get_or_insert_with(SystemLoadSeries::empty);
+    series.current = current;
+    series.history.push(current.cpu_percent);
+    if series.history.len() > HISTORY_LEN {
+        // `drain` rather than rebuilding: the buffer is 24 floats, but
+        // this runs every 2s for the life of the process.
+        let excess = series.history.len() - HISTORY_LEN;
+        series.history.drain(..excess);
     }
+    series.clone()
+}
+
+/// Drive the sampler for the life of the app, broadcasting each
+/// sample to every window.
+///
+/// One task, one cadence, one delta baseline — regardless of how many
+/// windows are open. Spawned from `lib.rs`'s setup hook.
+pub fn spawn_sampler(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // `sysinfo` needs two refreshes to compute a delta, so the
+        // very first sample is always 0%. Take it immediately and
+        // discard it rather than publishing a reading we know is
+        // meaningless.
+        let _priming = sample_once();
+        {
+            let mut guard = series_lock();
+            if let Some(series) = guard.as_mut() {
+                series.history.clear();
+            }
+        }
+        let mut ticker = tokio::time::interval(SAMPLE_INTERVAL);
+        // The first tick completes immediately; skip it so the
+        // priming sample above isn't immediately followed by a second
+        // one a few microseconds later.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let series = sample_once();
+            if let Err(e) = app.emit("shax:system-load", &series) {
+                tracing::debug!("system-load broadcast failed: {e}");
+            }
+        }
+    });
+}
+
+/// The current series, for a window mounting mid-stream. Without
+/// this, a window opened an hour in would start with an empty
+/// sparkline while its sibling showed a full one.
+#[tauri::command]
+pub fn system_load_series() -> SystemLoadSeries {
+    series_lock()
+        .clone()
+        .unwrap_or_else(SystemLoadSeries::empty)
 }
 
 /// One-minute load average, or `None` where the platform has no such
@@ -526,12 +634,23 @@ mod tests {
 
     // ── M13.3 ──────────────────────────────────────────────────
 
+    /// `SYS` and `SERIES` are process-global and `cargo test` runs on
+    /// parallel threads, so a sampling test would otherwise race
+    /// every other one — the history it measures could advance under
+    /// it. Every test that samples or reads the series takes this.
+    static SERIES_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serialised() -> std::sync::MutexGuard<'static, ()> {
+        SERIES_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn cpu_and_mem_shape_is_sane() {
+        let _guard = serialised();
         // Smoke test only — probe values are runtime-dependent
         // (a beefy dev box vs a CI runner). Assert the shape, not
         // the numbers.
-        let load = system_cpu_and_mem();
+        let load = sample_once().current;
         assert!(
             (0.0..=100.0).contains(&load.cpu_percent) || load.cpu_percent.is_nan(),
             "cpu_percent should be a %, got {}",
@@ -554,10 +673,11 @@ mod tests {
 
     #[test]
     fn load_average_is_present_off_windows_and_absent_on_it() {
+        let _guard = serialised();
         // The whole point of the Option: `sysinfo` returns zeros on
         // Windows rather than failing, so a naive f64 would render a
         // confident, meaningless "load 0.00" there.
-        let load = system_cpu_and_mem();
+        let load = sample_once().current;
         #[cfg(target_os = "windows")]
         assert!(
             load.load_average_one.is_none(),
@@ -575,21 +695,66 @@ mod tests {
 
     #[test]
     fn core_count_is_absent_or_positive() {
+        let _guard = serialised();
         // `physical_core_count` is best-effort; the contract the
         // widget relies on is that a reported count is never zero,
         // since "0 cores" would be a visibly wrong reading.
-        if let Some(cores) = system_cpu_and_mem().core_count {
+        if let Some(cores) = sample_once().current.core_count {
             assert!(cores > 0, "a reported core count must be positive");
         }
     }
 
     #[test]
+    fn the_history_window_never_exceeds_its_bound() {
+        let _guard = serialised();
+        // The sampler runs for the life of the process, so an
+        // unbounded buffer would be a slow leak rather than a visible
+        // bug.
+        for _ in 0..(HISTORY_LEN + 5) {
+            sample_once();
+        }
+        let series = system_load_series();
+        assert!(
+            series.history.len() <= HISTORY_LEN,
+            "history grew to {} entries, bound is {HISTORY_LEN}",
+            series.history.len(),
+        );
+    }
+
+    #[test]
+    fn every_reader_sees_the_same_series() {
+        let _guard = serialised();
+        // The bug this design exists to prevent: two windows showing
+        // different numbers for one machine. Reading twice without an
+        // intervening sample must give identical answers, and neither
+        // read may perturb the sampler's delta baseline.
+        sample_once();
+        let first = system_load_series();
+        let second = system_load_series();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn a_new_sample_appends_to_the_shared_history() {
+        let _guard = serialised();
+        let before = system_load_series().history.len();
+        sample_once();
+        let after = system_load_series().history.len();
+        // Either it grew, or it was already at the bound and slid.
+        assert!(
+            after == (before + 1).min(HISTORY_LEN),
+            "expected the window to advance: {before} -> {after}",
+        );
+    }
+
+    #[test]
     fn cpu_and_mem_second_call_stabilises_cpu() {
+        let _guard = serialised();
         // The first call primes the CPU stats; the second returns a
         // real percentage. Just confirm both calls return finite,
         // in-range values (some CIs stay at 0% between refreshes).
-        let _first = system_cpu_and_mem();
-        let second = system_cpu_and_mem();
+        let _first = sample_once();
+        let second = sample_once().current;
         assert!(second.cpu_percent >= 0.0 && second.cpu_percent <= 100.0);
     }
 

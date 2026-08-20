@@ -301,6 +301,13 @@ pub fn run() {
                 menu::register_close_teardown(&handle, &window);
             }
 
+            // M13 refinement: one sampler for the whole app. CPU
+            // usage is a delta between refreshes, so letting each
+            // window poll on its own timer made every window's
+            // reading depend on when the *others* last refreshed.
+            // See `status::SystemLoadSeries`.
+            status::spawn_sampler(app.handle().clone());
+
             // M9.5 session restore. Spawns any non-"main" windows
             // that were open at the previous quit. No-op on a
             // fresh install (empty session list). Runs AFTER the
@@ -360,7 +367,7 @@ pub fn run() {
             list_themes,
             status::system_battery,
             status::system_local_ip,
-            status::system_cpu_and_mem,
+            status::system_load_series,
             status::system_ssid,
             power::power_keep_awake,
             power::power_keep_awake_state,
