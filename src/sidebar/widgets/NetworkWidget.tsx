@@ -31,6 +31,7 @@ import {
   wifiRequestSsidAccess,
   type InterfaceKind,
   type NetInterface,
+  type WifiInfo,
 } from "../../lib/ipc";
 import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
@@ -147,6 +148,13 @@ const GRANT_BUTTON: CSSProperties = {
   textAlign: "left",
 };
 
+const DECLINED_NOTE: CSSProperties = {
+  marginTop: 2,
+  fontSize: 11,
+  color: "var(--fg-faint)",
+  fontFamily: "var(--font-ui)",
+};
+
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -178,7 +186,14 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   const [selected, setSelected] = useState<string | null>(null);
   // Applied from the grant request's own response so the name appears
   // on the click rather than up to 30s later.
-  const [grantedSsid, setGrantedSsid] = useState<string | null>(null);
+  // The answer the poll settled on, held locally because the 30s
+  // refresh is the only other source and waiting for it is what made
+  // this feel broken. Both the name AND the access state come from
+  // here: storing only the name left the button on screen for up to
+  // 30s after a decline, where clicking it did nothing — macOS never
+  // re-prompts — putting the user straight back into "did that
+  // work?".
+  const [settled, setSettled] = useState<WifiInfo | null>(null);
   const [awaitingGrant, setAwaitingGrant] = useState(false);
 
   // Fall back to the primary when the selected interface goes away —
@@ -205,7 +220,7 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
     void wifiRequestSsidAccess()
       .then(() => pollUntilAnswered())
       .then((info) => {
-        if (info !== null) setGrantedSsid(info.ssid);
+        if (info !== null) setSettled(info);
       })
       .finally(() => setAwaitingGrant(false));
   };
@@ -243,9 +258,12 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
     );
   }
 
-  const ssid = grantedSsid ?? active.wifi?.ssid ?? null;
-  const canAskForName =
-    active.kind === "wi_fi" && ssid === null && active.wifi?.ssid_access === "not_determined";
+  const ssid = settled?.ssid ?? active.wifi?.ssid ?? null;
+  const access = settled?.ssid_access ?? active.wifi?.ssid_access ?? "not_required";
+  const canAskForName = active.kind === "wi_fi" && ssid === null && access === "not_determined";
+  // Declining is a real outcome and deserves saying so. Silently
+  // removing the button reads the same as the button not working.
+  const nameDeclined = active.kind === "wi_fi" && ssid === null && access === "denied";
   const headline = headlineFor(active);
   const detail = detailFor(active);
 
@@ -317,6 +335,12 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
         </button>
       )}
 
+      {nameDeclined && (
+        <span style={DECLINED_NOTE} data-testid="sidebar-network-declined">
+          Name hidden — allow Location for Shax to show it
+        </span>
+      )}
+
       <div style={RULE} aria-hidden="true" />
 
       <div style={ADDRESS_ROW}>
@@ -352,10 +376,7 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
  *  and changes nothing on screen — the next 30s refresh will pick up
  *  the answer whenever it arrives.
  */
-async function pollUntilAnswered(
-  attempts = 60,
-  intervalMs = 500,
-): Promise<{ ssid: string | null } | null> {
+async function pollUntilAnswered(attempts = 60, intervalMs = 500): Promise<WifiInfo | null> {
   for (let i = 0; i < attempts; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
     const info = await wifiInfo();

@@ -376,6 +376,35 @@ describe("NetworkWidget / asking for the name (macOS)", () => {
     await waitFor(() => expect(requestAccessMock).toHaveBeenCalledTimes(1));
   });
 
+  it("removes the button the moment a decline is seen, not 30s later", async () => {
+    // The gap this closes: the button used to read its state from the
+    // 30s refresh, so after declining it stayed on screen — and macOS
+    // never re-prompts, so clicking it again did nothing. Straight
+    // back into "did that work?".
+    wifiInfoMock.mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "denied" });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("says the name was declined rather than silently dropping the offer", async () => {
+    // Removing the button without a word reads the same as the button
+    // not working — which is exactly the confusion being fixed.
+    wifiInfoMock.mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "denied" });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() => expect(screen.getByTestId("sidebar-network-declined")).toBeInTheDocument());
+    // And it stays honest about the medium.
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
+  });
+
+  it("shows no decline note once a name is known", () => {
+    renderWidget([wifi()]);
+    expect(screen.queryByTestId("sidebar-network-declined")).not.toBeInTheDocument();
+  });
+
   it("leaves the card unchanged when the user never answers", async () => {
     // A prompt the user walks away from must not leave the button
     // spinning forever, nor invent a name.
