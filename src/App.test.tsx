@@ -138,7 +138,16 @@ vi.mock("./lib/ipc", () => ({
     cpu_percent: number;
     mem_used_bytes: number;
     mem_total_bytes: number;
-  }> => Promise.resolve({ cpu_percent: 0, mem_used_bytes: 0, mem_total_bytes: 0 }),
+    load_average_one: number | null;
+    core_count: number | null;
+  }> =>
+    Promise.resolve({
+      cpu_percent: 0,
+      mem_used_bytes: 0,
+      mem_total_bytes: 0,
+      load_average_one: null,
+      core_count: null,
+    }),
   systemSsid: (): Promise<string | null> => Promise.resolve(null),
   // M13.4 caffeinate. Both resolve "not held" so the widget renders
   // its resting state and never asks the host OS for anything during

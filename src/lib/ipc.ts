@@ -916,12 +916,20 @@ export interface SystemLoad {
   cpu_percent: number;
   mem_used_bytes: number;
   mem_total_bytes: number;
+  /** One-minute load average, or null where the platform has none to
+   *  give (Windows). The CPU card omits the reading rather than
+   *  printing a confident, meaningless `load 0.00`. */
+  load_average_one: number | null;
+  /** Physical core count, or null when the platform won't say. */
+  core_count: number | null;
 }
 
 const SYSTEM_LOAD_ZERO: SystemLoad = {
   cpu_percent: 0,
   mem_used_bytes: 0,
   mem_total_bytes: 0,
+  load_average_one: null,
+  core_count: null,
 };
 
 export async function systemCpuAndMem(): Promise<SystemLoad> {
