@@ -26,7 +26,12 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNetwork } from "../../lib/NetworkContext";
 import { useSystemLoadSeries } from "../../lib/SystemLoadContext";
-import { wifiRequestSsidAccess, type InterfaceKind, type NetInterface } from "../../lib/ipc";
+import {
+  wifiInfo,
+  wifiRequestSsidAccess,
+  type InterfaceKind,
+  type NetInterface,
+} from "../../lib/ipc";
 import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
 const PILL_BASE: CSSProperties = {
@@ -174,6 +179,7 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   // Applied from the grant request's own response so the name appears
   // on the click rather than up to 30s later.
   const [grantedSsid, setGrantedSsid] = useState<string | null>(null);
+  const [awaitingGrant, setAwaitingGrant] = useState(false);
 
   // Fall back to the primary when the selected interface goes away —
   // a cable unplugged, a VPN dropped. Position 0 is the default route,
@@ -187,6 +193,22 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   useEffect(() => {
     if (active !== null && active.name !== selected) setSelected(active.name);
   }, [active, selected]);
+
+  // The OS dialog is asynchronous: `wifiRequestSsidAccess` returns
+  // before the user has answered, so the answer has to be waited
+  // for. Polling rather than an event because the settle is a
+  // one-shot within a few seconds of a click, and a backend event
+  // for it would be machinery for a single moment.
+  const askForName = (): void => {
+    if (awaitingGrant) return;
+    setAwaitingGrant(true);
+    void wifiRequestSsidAccess()
+      .then(() => pollUntilAnswered())
+      .then((info) => {
+        if (info !== null) setGrantedSsid(info.ssid);
+      })
+      .finally(() => setAwaitingGrant(false));
+  };
 
   const step = (delta: number): void => {
     if (interfaces.length === 0) return;
@@ -288,11 +310,10 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
           type="button"
           data-testid="sidebar-network-grant"
           style={GRANT_BUTTON}
-          onClick={() => {
-            void wifiRequestSsidAccess().then((info) => setGrantedSsid(info.ssid));
-          }}
+          onClick={askForName}
+          disabled={awaitingGrant}
         >
-          Show network name…
+          {awaitingGrant ? "Waiting for permission…" : "Show network name…"}
         </button>
       )}
 
@@ -322,6 +343,25 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
       )}
     </div>
   );
+}
+
+/** Wait for the location dialog to be answered.
+ *
+ *  Bounded: a user who walks away from the prompt must not leave a
+ *  poll running for the life of the process. Giving up returns null
+ *  and changes nothing on screen — the next 30s refresh will pick up
+ *  the answer whenever it arrives.
+ */
+async function pollUntilAnswered(
+  attempts = 60,
+  intervalMs = 500,
+): Promise<{ ssid: string | null } | null> {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    const info = await wifiInfo();
+    if (info.ssid_access !== "not_determined") return info;
+  }
+  return null;
 }
 
 /** Four bars, filled to `bars`. Inline SVG rather than a glyph font

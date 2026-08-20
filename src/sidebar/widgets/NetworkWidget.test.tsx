@@ -14,7 +14,11 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 import "@testing-library/jest-dom";
 
 const requestAccessMock = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/ipc", () => ({ wifiRequestSsidAccess: requestAccessMock }));
+const wifiInfoMock = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/ipc", () => ({
+  wifiRequestSsidAccess: requestAccessMock,
+  wifiInfo: wifiInfoMock,
+}));
 
 import { NetworkProvider } from "../../lib/NetworkContext";
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
@@ -24,7 +28,13 @@ import { detailFor, formatRate, headlineFor, identityFor, NetworkWidget } from "
 afterEach(cleanup);
 
 beforeEach(() => {
+  // The real command returns BEFORE the user answers the OS dialog,
+  // so it reports the state as it stands: still undetermined.
   requestAccessMock
+    .mockReset()
+    .mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "not_determined" });
+  // The answer arrives via the poll that follows.
+  wifiInfoMock
     .mockReset()
     .mockResolvedValue({ medium: "wi_fi", ssid: "GrantedNet", ssid_access: "granted" });
 });
@@ -335,12 +345,49 @@ describe("NetworkWidget / asking for the name (macOS)", () => {
     expect(requestAccessMock).not.toHaveBeenCalled();
   });
 
-  it("shows the name on grant without waiting for the next poll", async () => {
+  it("waits for the OS dialog to be answered, then shows the name", async () => {
+    // The regression this replaced: `wifiRequestSsidAccess` returns
+    // before the user has answered, so using its return value as the
+    // answer meant the click always resolved to "no name" and the
+    // button looked dead.
     renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
     fireEvent.click(screen.getByTestId("sidebar-network-grant"));
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
+    await waitFor(
+      () => expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
+      { timeout: 4000 },
     );
+    expect(wifiInfoMock).toHaveBeenCalled();
+  });
+
+  it("says it is waiting rather than looking inert", async () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    const button = screen.getByTestId("sidebar-network-grant");
+    fireEvent.click(button);
+    await waitFor(() => expect(button.textContent).toContain("Waiting"));
+    expect(button).toBeDisabled();
+  });
+
+  it("does not stack requests when clicked repeatedly", async () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    const button = screen.getByTestId("sidebar-network-grant");
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(requestAccessMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves the card unchanged when the user never answers", async () => {
+    // A prompt the user walks away from must not leave the button
+    // spinning forever, nor invent a name.
+    wifiInfoMock.mockResolvedValue({
+      medium: "wi_fi",
+      ssid: null,
+      ssid_access: "not_determined",
+    });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() => expect(wifiInfoMock).toHaveBeenCalled());
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
   });
 
   it("never offers it on a wired link", () => {

@@ -72,6 +72,13 @@ pub struct WifiInfo {
 /// A no-op off macOS. Safe to call repeatedly: once the user has
 /// answered, the OS never prompts again and this just returns the
 /// standing answer.
+/// Post the authorisation prompt and report the state *as it stands
+/// now*, which on macOS is still `NotDetermined` — the dialog is
+/// asynchronous and the user has not answered yet.
+///
+/// Callers must poll [`wifi_info`] until the access state settles.
+/// Returning `probe()` here and treating it as the answer is what
+/// made the "Show network name…" button appear to do nothing.
 #[tauri::command]
 pub fn wifi_request_ssid_access() -> WifiInfo {
     // Called unconditionally: every platform provides this, and on
@@ -164,10 +171,18 @@ mod imp {
         }
     }
 
+    /// Post the authorisation prompt.
+    ///
+    /// **This returns before the user has answered.** `CLLocationManager`
+    /// posts the dialog and reports the answer asynchronously, so any
+    /// state read immediately afterwards is still `NotDetermined` —
+    /// the caller must poll for the answer rather than expect one
+    /// here. An earlier version returned `probe()` directly and so
+    /// always reported "no name", which made the button look dead.
     pub fn request_location_authorization() {
         // Asking again after an answer is a no-op at the OS level,
-        // and skipping it here keeps a needless CLLocationManager
-        // from being constructed on every poll.
+        // and skipping it here avoids constructing a manager we would
+        // then have to keep alive for nothing.
         if ssid_access() != SsidAccess::NotDetermined {
             return;
         }
@@ -177,10 +192,14 @@ mod imp {
         unsafe {
             let manager = CLLocationManager::new();
             manager.requestWhenInUseAuthorization();
-            // The manager is dropped here. The prompt has already
-            // been posted to the system, and the *answer* is read
-            // back later from the class-level status, so nothing
-            // needs to outlive this call.
+            // Deliberately leaked. CoreLocation requires a *retained*
+            // manager for the duration of the request: dropping it
+            // here can cancel the pending prompt before the user
+            // answers. One object for the life of the process is the
+            // cost of a correct request, and there is nothing to
+            // release it to — the answer is read back later from the
+            // authorisation status, not from this instance.
+            std::mem::forget(manager);
         }
     }
 
