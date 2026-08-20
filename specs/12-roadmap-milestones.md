@@ -325,7 +325,7 @@ Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.8 (focus + mode pill, sh
 - Sidebar chrome: 280px expanded / 44px icon-rail collapsed, `⌘B` toggle, per-window scope, first-run default icon rail. Focus never leaves the active pane on sidebar interaction.
 - Clock widget: `HH:MM` + date, tick-shares with the M12.4 header clock.
 - CPU/Memory widget: cross-platform via `sysinfo` v0.32, 2s refresh.
-- Network widget: SSID + default-route IP + up/down; SSID via a new per-OS probe (macOS `airport`, Linux `iwgetid`, Windows `netsh wlan`), IP reuses M12.4b `system_local_ip`, no ping (local-first, no telemetry).
+- Network widget: a pager over every interface that is up and holds an address, showing type, identity, per-type detail, IP and throughput. Per-OS probes — macOS CoreWLAN + `networksetup` + `scutil`, Linux `iwgetid` + `/sys/class/net`, Windows `netsh wlan`. The macOS SSID needs location authorisation and is requested only when the user asks; declining costs the name, not the medium. No ping, no latency (local-first, no telemetry). Detail in `19-sidebar.md` D5 item 3.
 - Git-branch-of-active-pane widget: subscribes to the M12.4 prompt-header branch signal, updates on focus change + OSC 133 A, no additional polling.
 - Caffeinate widget: click holds an OS-level power assertion (child `caffeinate -di` / `systemd-inhibit` on macOS / Linux, `SetThreadExecutionState` on Windows). State reconciles against what the OS grants, and is released on app exit. All three platforms ship — see `19-sidebar.md` D6, which reversed the original emit-into-the-pane design after a foreground `caffeinate` proved to block the pane it landed in, and settled where the honest-log path begins and ends.
 
