@@ -40,13 +40,13 @@
 //! cover the real values.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::Emitter as _;
 
 use serde::{Deserialize, Serialize};
 use starship_battery::State;
-use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, Networks, RefreshKind, System};
 
 /// The machine's current power state, as reported by the OS.
 ///
@@ -235,6 +235,12 @@ pub struct SystemLoad {
     /// Physical rather than logical: "4 cores" on an 8-thread machine
     /// is what the user recognises as their hardware.
     pub core_count: Option<usize>,
+    /// Bytes per second out / in over the primary interface, or
+    /// `None` before the second sample (throughput is a delta, so the
+    /// first refresh has nothing to compare against) or when no
+    /// interface could be resolved.
+    pub net_up_bps: Option<u64>,
+    pub net_down_bps: Option<u64>,
 }
 
 /// Bars in the sparkline the CPU card renders. The backend owns the
@@ -278,10 +284,82 @@ impl SystemLoadSeries {
                 mem_total_bytes: 0,
                 load_average_one: None,
                 core_count: None,
+                net_up_bps: None,
+                net_down_bps: None,
             },
             history: Vec::new(),
         }
     }
+}
+
+/// Network counters, refreshed alongside `SYS` by the sampler.
+/// `NetworkData::received` / `transmitted` report bytes *since the
+/// last refresh*, so like CPU this is a delta whose meaning depends
+/// on who refreshed last — one owner, one cadence.
+static NETS: Mutex<Option<Networks>> = Mutex::new(None);
+
+/// Bytes/sec out and in over the primary interface.
+///
+/// Scoped to one interface rather than summed across all of them:
+/// summing counts VPN, Docker and other virtual adapters, so a
+/// `docker pull` would report roughly double what actually crossed
+/// the wire. The primary interface is the one holding the machine's
+/// default-route IP, which is the same address the card already
+/// shows — so the number and the IP describe the same link.
+///
+/// Falls back to summing non-loopback interfaces when the address
+/// can't be matched to a name, which is a worse reading but better
+/// than none.
+fn sample_network(elapsed: Duration) -> (Option<u64>, Option<u64>) {
+    let mut guard = NETS.lock().unwrap_or_else(|e| e.into_inner());
+    let nets = guard.get_or_insert_with(Networks::new_with_refreshed_list);
+    nets.refresh();
+
+    let primary = primary_interface_name();
+    let mut up = 0u64;
+    let mut down = 0u64;
+    let mut matched = false;
+    for (name, data) in nets.list() {
+        let wanted = match primary.as_deref() {
+            Some(want) => name == want,
+            None => !is_loopback_name(name),
+        };
+        if !wanted {
+            continue;
+        }
+        matched = true;
+        up = up.saturating_add(data.transmitted());
+        down = down.saturating_add(data.received());
+    }
+    if !matched {
+        return (None, None);
+    }
+    let seconds = elapsed.as_secs_f64().max(0.001);
+    let per_sec = |bytes: u64| -> Option<u64> {
+        let rate = (bytes as f64 / seconds).round();
+        if rate.is_finite() && rate >= 0.0 {
+            Some(rate as u64)
+        } else {
+            None
+        }
+    };
+    (per_sec(up), per_sec(down))
+}
+
+/// Name of the interface holding the default-route IP, or `None` when
+/// it can't be resolved (offline, or an address the enumeration
+/// doesn't report).
+fn primary_interface_name() -> Option<String> {
+    let ip = local_ip_address::local_ip().ok()?;
+    local_ip_address::list_afinet_netifas()
+        .ok()?
+        .into_iter()
+        .find(|(_, addr)| *addr == ip)
+        .map(|(name, _)| name)
+}
+
+fn is_loopback_name(name: &str) -> bool {
+    name == "lo" || name.starts_with("lo0")
 }
 
 /// Shared `System` instance so CPU deltas are meaningful. `sysinfo`
@@ -302,7 +380,34 @@ fn series_lock() -> std::sync::MutexGuard<'static, Option<SystemLoadSeries>> {
 
 /// Refresh once and fold the result into the shared series. Returns
 /// the new series so the caller can broadcast it.
+/// When the previous sample ran, so throughput can be a *rate*
+/// rather than "bytes since some unspecified moment". The sampler's
+/// cadence is fixed, but a stalled runtime or a debugger pause would
+/// otherwise silently inflate the number.
+static LAST_SAMPLE_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
 fn sample_once() -> SystemLoadSeries {
+    let elapsed = {
+        let mut guard = LAST_SAMPLE_AT.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let elapsed = guard.map(|previous| now.saturating_duration_since(previous));
+        *guard = Some(now);
+        elapsed
+    };
+    // No previous sample means no interval, so no rate. The first
+    // reading reports `None` rather than dividing by an assumed
+    // cadence.
+    let (net_up_bps, net_down_bps) = match elapsed {
+        Some(elapsed) => sample_network(elapsed),
+        None => {
+            // Still refresh so the *next* sample has a baseline.
+            let mut guard = NETS.lock().unwrap_or_else(|e| e.into_inner());
+            guard
+                .get_or_insert_with(Networks::new_with_refreshed_list)
+                .refresh();
+            (None, None)
+        }
+    };
     let current = {
         let mut guard = SYS.lock().unwrap_or_else(|e| e.into_inner());
         let sys = guard.get_or_insert_with(|| {
@@ -325,6 +430,8 @@ fn sample_once() -> SystemLoadSeries {
             mem_total_bytes: sys.total_memory(),
             load_average_one: load_average_one(),
             core_count: sys.physical_core_count(),
+            net_up_bps,
+            net_down_bps,
         }
     };
 
@@ -745,6 +852,48 @@ mod tests {
             after == (before + 1).min(HISTORY_LEN),
             "expected the window to advance: {before} -> {after}",
         );
+    }
+
+    #[test]
+    fn the_first_sample_reports_no_throughput_rate() {
+        // Throughput is a delta. With no previous sample there is no
+        // interval to divide by, and assuming the nominal cadence
+        // would invent a rate for bytes we never timed.
+        let _guard = serialised();
+        {
+            let mut guard = LAST_SAMPLE_AT.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+        }
+        let first = sample_once().current;
+        assert_eq!(first.net_up_bps, None);
+        assert_eq!(first.net_down_bps, None);
+    }
+
+    #[test]
+    fn later_samples_report_a_finite_rate_or_nothing() {
+        // Runtime-dependent (a CI runner may have no resolvable
+        // primary interface), so assert the shape: either we have a
+        // number, or we honestly have none. Never a garbage one.
+        let _guard = serialised();
+        sample_once();
+        let second = sample_once().current;
+        for bps in [second.net_up_bps, second.net_down_bps]
+            .into_iter()
+            .flatten()
+        {
+            assert!(bps < u64::MAX, "rate should be a real number, got {bps}");
+        }
+    }
+
+    #[test]
+    fn loopback_is_not_mistaken_for_a_real_interface() {
+        assert!(is_loopback_name("lo"));
+        assert!(is_loopback_name("lo0"));
+        assert!(!is_loopback_name("en0"));
+        assert!(!is_loopback_name("eth0"));
+        // Guard against a prefix match that would swallow real
+        // interfaces whose names merely start with "lo".
+        assert!(!is_loopback_name("long0"));
     }
 
     #[test]

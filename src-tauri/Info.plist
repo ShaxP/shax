@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Required for the sidebar's Network card to show the Wi-Fi
+	  network's name. Since macOS 14, CWInterface.ssid() returns nil
+	  unless the calling process holds location authorisation, and
+	  every shell-out (networksetup, system_profiler, ipconfig) is
+	  redacted — there is no path to the name that avoids this.
+
+	  Shax never reads, stores, or transmits a location. The
+	  authorisation exists solely so the OS will hand over the name of
+	  the network you are already connected to. Declining costs the
+	  name and nothing else: the card still reports that you are on
+	  Wi-Fi.
+	-->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Shax uses this only to read the name of the Wi-Fi network you are connected to, so the sidebar can show it. Your location is never read, stored, or sent anywhere.</string>
+</dict>
+</plist>

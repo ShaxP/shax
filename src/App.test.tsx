@@ -146,11 +146,18 @@ vi.mock("./lib/ipc", () => ({
         mem_total_bytes: 0,
         load_average_one: null,
         core_count: null,
+        net_up_bps: null,
+        net_down_bps: null,
       },
       history: [],
     }),
   onSystemLoad: (): (() => void) => () => {},
-  systemSsid: (): Promise<string | null> => Promise.resolve(null),
+  // M13 refinement: one probe for name + medium + access. The
+  // unknown/no-permission shape keeps the widget in a benign state.
+  wifiInfo: (): Promise<unknown> =>
+    Promise.resolve({ medium: "unknown", ssid: null, ssid_access: "not_required" }),
+  wifiRequestSsidAccess: (): Promise<unknown> =>
+    Promise.resolve({ medium: "unknown", ssid: null, ssid_access: "not_required" }),
   // M13.4 caffeinate. Both resolve "not held" so the widget renders
   // its resting state and never asks the host OS for anything during
   // a unit test run; the cross-window subscription is a no-op.

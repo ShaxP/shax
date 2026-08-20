@@ -71,7 +71,9 @@ local-ip-address = "0.6"
 # need and can't sample at the sidebar's 2s cadence without
 # adding noise. `component` is intentionally off (thermal
 # sensors need OS-specific quirks we're not exercising).
-sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# `network` joined `system` in the M13 refinement pass for the
+# Network card's throughput lines. Still no `disk` / `component`.
+sysinfo = { version = "0.32", default-features = false, features = ["system", "network"] }
 
 # M13.4 — the sidebar's keep-awake assertion (spec §19 D6). macOS and
 # Linux shell out to `caffeinate` / `systemd-inhibit`, which needs no
@@ -86,4 +88,10 @@ windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
 # no equivalent flag. Already in the tree transitively.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-core-location = "0.3.2"
+objc2-core-wlan = "0.3.2"
+objc2-foundation = "0.3.2"
 

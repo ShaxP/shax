@@ -88,10 +88,11 @@ import {
   systemBattery,
   systemLoadSeries,
   systemLocalIp,
-  systemSsid,
+  wifiInfo,
   onSystemLoad,
   type BatteryStatus,
   type SystemLoadSeries,
+  type WifiInfo,
 } from "./lib/ipc";
 import { useWindowId } from "./lib/useWindowId";
 import { compactCwd } from "./panes/blockFormat";
@@ -862,7 +863,14 @@ export default function App(): React.ReactElement {
     charging: false,
   });
   const [localIp, setLocalIp] = useState<string | null>(null);
-  const [ssid, setSsid] = useState<string | null>(null);
+  // M13 refinement: one probe for name + medium + access state.
+  // They have to move together — a name without a medium is what
+  // produced the "Wired" bug on every Wi-Fi Mac.
+  const [wifi, setWifi] = useState<WifiInfo>({
+    medium: "unknown",
+    ssid: null,
+    ssid_access: "not_required",
+  });
   useEffect(() => {
     let cancelled = false;
     // Fire an immediate probe on mount so the chips populate within
@@ -876,8 +884,8 @@ export default function App(): React.ReactElement {
       void systemLocalIp().then((ip) => {
         if (!cancelled) setLocalIp(ip);
       });
-      void systemSsid().then((s) => {
-        if (!cancelled) setSsid(s);
+      void wifiInfo().then((info) => {
+        if (!cancelled) setWifi(info);
       });
     };
     poll();
@@ -900,6 +908,8 @@ export default function App(): React.ReactElement {
       mem_total_bytes: 0,
       load_average_one: null,
       core_count: null,
+      net_up_bps: null,
+      net_down_bps: null,
     },
     history: [],
   });
@@ -1383,7 +1393,15 @@ export default function App(): React.ReactElement {
   // NetworkContext value (M13.3). Memoised so the network widget
   // doesn't re-render on the 1s clock tick / 2s CPU tick just because
   // App re-rendered — only when ssid or localIp actually change.
-  const networkInfo: NetworkInfo = useMemo(() => ({ ssid, localIp }), [ssid, localIp]);
+  const networkInfo: NetworkInfo = useMemo(
+    () => ({
+      ssid: wifi.ssid,
+      localIp,
+      medium: wifi.medium,
+      ssidAccess: wifi.ssid_access,
+    }),
+    [wifi.ssid, wifi.medium, wifi.ssid_access, localIp],
+  );
 
   return (
     <HomeDirProvider value={home}>
