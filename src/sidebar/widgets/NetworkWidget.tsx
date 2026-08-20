@@ -16,9 +16,11 @@
  * while the descriptive fields cost a `networksetup` / `scutil` /
  * `ifconfig` fork for values that essentially never change.
  *
- * Selection is ephemeral. Interface indices aren't stable across a
- * restart — an interface appears or vanishes with a cable or a VPN —
- * so restoring index 3 could silently land on a different link.
+ * Selection is held by interface name and is ephemeral — not
+ * persisted across a restart, where the set of interfaces can differ
+ * entirely. Within a session, a name either still resolves or is
+ * honestly gone; an index would quietly slide onto a neighbour when
+ * something earlier in the list disappeared.
  */
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
@@ -163,25 +165,40 @@ export interface NetworkWidgetProps {
 export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactElement {
   const { interfaces } = useNetwork();
   const { net_rates: rates } = useSystemLoadSeries();
-  const [index, setIndex] = useState(0);
+  // Selection is held by interface NAME, not by index — the same
+  // reason rates are joined by name. An interface *earlier* in the
+  // list disappearing would leave an index pointing at a different
+  // link, and the card would quietly describe the wrong one. A name
+  // either still resolves or is honestly gone.
+  const [selected, setSelected] = useState<string | null>(null);
   // Applied from the grant request's own response so the name appears
   // on the click rather than up to 30s later.
   const [grantedSsid, setGrantedSsid] = useState<string | null>(null);
 
-  // An interface vanishes with a cable or a VPN. Clamping rather than
-  // leaving a stale index avoids rendering nothing — or worse, showing
-  // a different link than the one the user paged to.
-  useEffect(() => {
-    setIndex((current) => (current >= interfaces.length ? 0 : current));
-  }, [interfaces.length]);
+  // Fall back to the primary when the selected interface goes away —
+  // a cable unplugged, a VPN dropped. Position 0 is the default route,
+  // which is the most useful thing to land on.
+  const found = interfaces.findIndex((i) => i.name === selected);
+  const position = found >= 0 ? found : 0;
+  const active: NetInterface | null = interfaces[position] ?? null;
 
-  const active: NetInterface | null = interfaces[Math.min(index, interfaces.length - 1)] ?? null;
+  // Keep the stored name in step once it has resolved, so paging from
+  // a fallback moves relative to what is actually on screen.
+  useEffect(() => {
+    if (active !== null && active.name !== selected) setSelected(active.name);
+  }, [active, selected]);
+
+  const step = (delta: number): void => {
+    if (interfaces.length === 0) return;
+    const next = (position + delta + interfaces.length) % interfaces.length;
+    setSelected(interfaces[next]?.name ?? null);
+  };
   const rate = useMemo(
     () => rates.find((r) => active !== null && r.name === active.name) ?? null,
     [rates, active],
   );
 
-  const tooltip = buildTooltip(active, rate);
+  const tooltip = buildTooltip(active, rate, position, interfaces.length);
 
   if (!visible) {
     return (
@@ -224,19 +241,23 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
               aria-label="Previous interface"
               data-testid="sidebar-network-prev"
               style={PAGER_BUTTON}
-              onClick={() => setIndex((i) => (i - 1 + interfaces.length) % interfaces.length)}
+              onClick={() => step(-1)}
             >
               ◀
             </button>
-            <span style={PAGER_COUNT} data-testid="sidebar-network-count">
-              {interfaces.length}
+            {/* The interface's position in the list, not how many
+                there are — the arrows already imply a sequence, and a
+                fixed total tells you nothing about where you are. The
+                total is in the tooltip. */}
+            <span style={PAGER_COUNT} data-testid="sidebar-network-position">
+              {position + 1}
             </span>
             <button
               type="button"
               aria-label="Next interface"
               data-testid="sidebar-network-next"
               style={PAGER_BUTTON}
-              onClick={() => setIndex((i) => (i + 1) % interfaces.length)}
+              onClick={() => step(1)}
             >
               ▶
             </button>
@@ -410,9 +431,12 @@ export function formatRate(bytesPerSecond: number): string {
 function buildTooltip(
   iface: NetInterface | null,
   rate: { up_bps: number; down_bps: number } | null,
+  position: number,
+  total: number,
 ): string {
   if (iface === null) return "Offline (no addressed interface)";
   const parts: string[] = [`${pillLabel(iface.kind)} · ${iface.name} · ${iface.ip}`];
+  if (total > 1) parts.push(`interface ${position + 1} of ${total}`);
   const detail = detailFor(iface);
   if (detail !== null) parts.push(detail);
   if (iface.wifi?.rssi != null) parts.push(`${iface.wifi.rssi} dBm`);

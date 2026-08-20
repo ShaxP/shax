@@ -149,16 +149,39 @@ describe("NetworkWidget / paging", () => {
     expect(screen.queryByTestId("sidebar-network-pager")).not.toBeInTheDocument();
   });
 
-  it("shows the interface count and moves between them", () => {
+  it("shows which interface you are on, not how many there are", () => {
+    // A fixed total between the arrows tells you nothing about where
+    // you are in the sequence; the position does. The total moves to
+    // the tooltip.
     renderWidget([wifi(), ethernet(), vpn()]);
-    expect(screen.getByTestId("sidebar-network-count").textContent).toBe("3");
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
     expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
 
     fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
     expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
 
     fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("3");
     expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+  });
+
+  it("counts from 1, not from 0", () => {
+    renderWidget([wifi(), ethernet()]);
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
+  });
+
+  it("keeps the total in the tooltip", () => {
+    renderWidget([wifi(), ethernet(), vpn()]);
+    expect(screen.getByTestId("sidebar-network").getAttribute("title") ?? "").toContain(
+      "interface 1 of 3",
+    );
+  });
+
+  it("wraps the position along with the card", () => {
+    renderWidget([wifi(), ethernet()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-prev"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
   });
 
   it("wraps in both directions rather than dead-ending", () => {
@@ -186,6 +209,48 @@ describe("NetworkWidget / paging", () => {
       </SystemLoadProvider>,
     );
     expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
+    // Down to one interface, so the pager goes too — there is nothing
+    // left to page between.
+    expect(screen.queryByTestId("sidebar-network-pager")).not.toBeInTheDocument();
+  });
+
+  it("stays on the same interface when one EARLIER in the list vanishes", () => {
+    // The reason selection is by name. With an index, removing the
+    // first interface would slide the card onto a neighbour while the
+    // user was looking at it — describing the wrong link with no
+    // visible cue.
+    const { rerender } = renderWidget([wifi(), ethernet(), vpn()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+
+    rerender(
+      <SystemLoadProvider value={series()}>
+        <NetworkProvider value={{ interfaces: [ethernet(), vpn()] }}>
+          <NetworkWidget visible={true} />
+        </NetworkProvider>
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
+  });
+
+  it("survives the list being reordered underneath it", () => {
+    // The 30s refresh can return a different order — a new primary,
+    // for instance. Selection must follow the interface, not the slot.
+    const { rerender } = renderWidget([wifi(), ethernet()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+
+    rerender(
+      <SystemLoadProvider value={series()}>
+        <NetworkProvider value={{ interfaces: [ethernet(), wifi()] }}>
+          <NetworkWidget visible={true} />
+        </NetworkProvider>
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
   });
 
   it("renders an offline card when nothing holds an address", () => {

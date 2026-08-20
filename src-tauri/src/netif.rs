@@ -14,6 +14,15 @@
 //! sound rule: point-to-point, holds an address, is not a hardware
 //! port.
 //!
+//! **Virtual bridges are excluded on top of that filter.** A machine
+//! running VMs carries host-side bridges (`bridge100-102` from
+//! Parallels/UTM, `docker0`, `virbr0`, `vEthernet (...)`) which are up
+//! and addressed and so pass the filter, but describe a link to a
+//! guest rather than a link to the network. The test is structural
+//! rather than a list of vendor names: an interface that is neither a
+//! hardware port nor a point-to-point tunnel has no physical device
+//! behind it, and on every platform that is what a virtual bridge is.
+//!
 //! This is the **slow tier**. Everything here means forking
 //! `networksetup` / `scutil` / `ifconfig`, for values that essentially
 //! never change, so it refreshes at 30s. Throughput is a delta and
@@ -87,6 +96,7 @@ pub fn net_interfaces() -> Vec<NetInterface> {
     let primary = wifi::primary_interface_name();
     let mut interfaces: Vec<NetInterface> = imp::addressed_interfaces()
         .into_iter()
+        .filter(|(name, _)| !imp::is_virtual_bridge(name))
         .map(|(name, ip)| {
             let kind = imp::classify(&name);
             let is_primary = primary.as_deref() == Some(name.as_str());
@@ -171,6 +181,15 @@ mod imp {
             None if is_point_to_point(interface) => InterfaceKind::Vpn,
             None => InterfaceKind::Other,
         }
+    }
+
+    /// A host-side bridge to a VM. macOS lists every real port in
+    /// `networksetup -listallhardwareports` — including the
+    /// Thunderbolt Bridge — so an interface it does *not* list, and
+    /// which isn't a tunnel, has no physical device behind it.
+    /// `bridge100`-`bridge102` and `vmenet*` land here.
+    pub fn is_virtual_bridge(interface: &str) -> bool {
+        wifi::hardware_port_kind(interface).is_none() && !is_point_to_point(interface)
     }
 
     fn is_point_to_point(interface: &str) -> bool {
@@ -274,6 +293,17 @@ mod imp {
         }
     }
 
+    /// `/sys/class/net/<if>/device` is a symlink to the backing
+    /// hardware. Bridges (`docker0`, `virbr0`, `br-*`) and veth pairs
+    /// have none. Tunnels have none either, so they are classified
+    /// first and excluded from this test.
+    pub fn is_virtual_bridge(interface: &str) -> bool {
+        if classify(interface) == InterfaceKind::Vpn {
+            return false;
+        }
+        !std::path::Path::new(&format!("/sys/class/net/{interface}/device")).exists()
+    }
+
     pub fn wifi_detail(interface: &str) -> WifiDetail {
         let raw = wifi::wifi_raw_detail(interface);
         WifiDetail {
@@ -342,6 +372,18 @@ mod imp {
         }
     }
 
+    /// Windows names host-side VM adapters after the hypervisor that
+    /// created them, so unlike the other platforms the name *is* the
+    /// structural signal — there is no `/sys` or hardware-port table
+    /// to consult.
+    pub fn is_virtual_bridge(interface: &str) -> bool {
+        let lower = interface.to_ascii_lowercase();
+        lower.contains("vethernet")
+            || lower.contains("vmware")
+            || lower.contains("virtualbox")
+            || lower.contains("hyper-v")
+    }
+
     pub fn wifi_detail(interface: &str) -> WifiDetail {
         let raw = wifi::wifi_raw_detail(interface);
         WifiDetail {
@@ -373,6 +415,9 @@ mod imp {
     }
     pub fn classify(_interface: &str) -> InterfaceKind {
         InterfaceKind::Other
+    }
+    pub fn is_virtual_bridge(_interface: &str) -> bool {
+        false
     }
     pub fn wifi_detail(_interface: &str) -> WifiDetail {
         WifiDetail {
@@ -447,6 +492,19 @@ mod tests {
                 interface.name,
             );
             assert!(!interface.name.is_empty());
+        }
+    }
+
+    #[test]
+    fn host_side_vm_bridges_are_excluded() {
+        // They are up and addressed, so the base filter admits them —
+        // but they describe a link to a guest, not to the network.
+        let names: Vec<String> = net_interfaces().into_iter().map(|i| i.name).collect();
+        for name in &names {
+            assert!(
+                !imp::is_virtual_bridge(name),
+                "{name} is a virtual bridge and should not be listed",
+            );
         }
     }
 
