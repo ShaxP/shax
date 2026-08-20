@@ -15,6 +15,7 @@ This tree is the **external** face of the codebase: how-to guides, quickstarts, 
 | [safety-gate.md](safety-gate.md) | Extension author | How the safety gate classifies commands your add-on emits — `routine`, `destructive`, or `ai`, and what the user sees for each. | `specs/10-safety-and-permissions.md` |
 | [contributor-quickstart.md](contributor-quickstart.md) | Contributor | Ten-minute path from `git clone` to a running `npm run tauri:dev`, plus the three tests you'll run most. | — |
 | [branching-and-workflow.md](branching-and-workflow.md) | Contributor | Trunk-based Git workflow: branch names, Conventional Commits, PR rules, release tagging. | — |
+| [verification-backlog.md](verification-backlog.md) | Contributor | Merged work that CI cannot prove — needs real hardware, a real OS prompt, or a platform we don't develop on. Delete entries as they're confirmed. | — |
 
 ## When to write a new doc
 
