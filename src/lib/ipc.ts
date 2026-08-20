@@ -995,6 +995,45 @@ export function onSystemLoad(handler: (series: SystemLoadSeries) => void): () =>
  *  the SSID without a CoreLocation entitlement we deliberately
  *  don't request). The Network widget hides the SSID line when
  *  this is null and still renders the IP + up/down dot. */
+/** How the primary interface connects. `unknown` is a real answer —
+ *  a tunnel, a bridge, a platform we couldn't ask — and is never
+ *  collapsed into `wired`, which was the original defect. */
+export type NetworkMedium = "wi_fi" | "wired" | "unknown";
+
+/** Whether the OS will hand over the network's name. Only macOS is
+ *  ever anything but `not_required`; the distinction lets the card
+ *  say "we can't name this" and "you haven't allowed it yet"
+ *  differently, because they call for different responses. */
+export type SsidAccess = "not_required" | "granted" | "not_determined" | "denied";
+
+export interface WifiInfo {
+  medium: NetworkMedium;
+  ssid: string | null;
+  ssid_access: SsidAccess;
+}
+
+const WIFI_UNKNOWN: WifiInfo = {
+  medium: "unknown",
+  ssid: null,
+  ssid_access: "not_required",
+};
+
+/** Medium + SSID + access state for the primary interface. */
+export async function wifiInfo(): Promise<WifiInfo> {
+  if (!isTauriContext()) return WIFI_UNKNOWN;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WifiInfo>("wifi_info");
+}
+
+/** Ask macOS for location access so the SSID becomes readable, and
+ *  return the state that holds afterwards. A no-op on every other
+ *  platform, and on macOS once the user has already answered. */
+export async function wifiRequestSsidAccess(): Promise<WifiInfo> {
+  if (!isTauriContext()) return WIFI_UNKNOWN;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WifiInfo>("wifi_request_ssid_access");
+}
+
 export async function systemSsid(): Promise<string | null> {
   if (!isTauriContext()) return null;
   const { invoke } = await import("@tauri-apps/api/core");

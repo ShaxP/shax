@@ -12,6 +12,7 @@ mod status;
 mod store;
 mod themes;
 mod vt;
+mod wifi;
 
 use std::sync::Arc;
 
@@ -371,6 +372,8 @@ pub fn run() {
             status::system_ssid,
             power::power_keep_awake,
             power::power_keep_awake_state,
+            wifi::wifi_info,
+            wifi::wifi_request_ssid_access,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

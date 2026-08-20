@@ -11,21 +11,32 @@
  *     system sampler rather than the 30s network poll
  */
 
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
+
+const requestAccessMock = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/ipc", () => ({ wifiRequestSsidAccess: requestAccessMock }));
 
 import { NetworkProvider, type NetworkInfo } from "../../lib/NetworkContext";
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
 import type { SystemLoad, SystemLoadSeries } from "../../lib/ipc";
-import { formatRate, NetworkWidget } from "./NetworkWidget";
+import { buildLabel, formatRate, NetworkWidget } from "./NetworkWidget";
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  requestAccessMock
+    .mockReset()
+    .mockResolvedValue({ medium: "wi_fi", ssid: "GrantedNet", ssid_access: "granted" });
+});
 
 function net(overrides: Partial<NetworkInfo> = {}): NetworkInfo {
   return {
     ssid: "MyHomeWiFi",
     localIp: "192.168.1.42",
+    medium: "wi_fi",
+    ssidAccess: "not_required",
     ...overrides,
   };
 }
@@ -84,17 +95,34 @@ describe("NetworkWidget / online with SSID (wifi)", () => {
   });
 });
 
-describe("NetworkWidget / online no SSID (wired or macOS)", () => {
-  it("renders 'Wired' label, IP, and a green dot", () => {
+describe("NetworkWidget / online, no SSID", () => {
+  // This block used to assert that a missing SSID renders as "Wired",
+  // which codified the defect rather than catching it: macOS never
+  // returns an SSID without location access, so the assertion passed
+  // while every Wi-Fi Mac was told it was on Ethernet. The label now
+  // follows the *medium*, which is probed separately.
+  it("renders 'Ethernet' on a genuinely wired link", () => {
     render(
-      <NetworkProvider value={net({ ssid: null, localIp: "10.0.0.100" })}>
+      <NetworkProvider value={net({ ssid: null, localIp: "10.0.0.100", medium: "wired" })}>
         <NetworkWidget visible={true} />
       </NetworkProvider>,
     );
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wired");
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Ethernet");
     expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.0.0.100");
     const dot = screen.getByTestId("sidebar-network-dot");
     expect(dot.getAttribute("style") ?? "").toContain("var(--green)");
+  });
+
+  it("renders 'Wi-Fi' on a wireless link whose name we can't read", () => {
+    render(
+      <NetworkProvider
+        value={net({ ssid: null, localIp: "10.0.0.100", medium: "wi_fi", ssidAccess: "denied" })}
+      >
+        <NetworkWidget visible={true} />
+      </NetworkProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
+    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.0.0.100");
   });
 });
 
@@ -217,5 +245,87 @@ describe("NetworkWidget / rate formatting", () => {
 
   it("never renders a negative rate", () => {
     expect(formatRate(-5)).toBe("0 B/s");
+  });
+});
+
+describe("NetworkWidget / medium vs name (the 'Wired' bug)", () => {
+  it.each([
+    ["a named network wins", "MyHomeWiFi", "wi_fi" as const, "MyHomeWiFi"],
+    ["nameless Wi-Fi reads as Wi-Fi, NOT Wired", null, "wi_fi" as const, "Wi-Fi"],
+    ["a wired link reads as Ethernet", null, "wired" as const, "Ethernet"],
+    ["an unknown medium claims nothing", null, "unknown" as const, "Online"],
+  ])("%s", (_name, ssid, medium, expected) => {
+    expect(buildLabel(ssid, medium, true)).toBe(expected);
+  });
+
+  it("never reports Wired merely because the name is missing", () => {
+    // The original defect, stated directly: macOS never returns an
+    // SSID without location access, so `ssid ?? "Wired"` told every
+    // Wi-Fi Mac it was on Ethernet.
+    expect(buildLabel(null, "wi_fi", true)).not.toBe("Ethernet");
+    expect(buildLabel(null, "unknown", true)).not.toBe("Ethernet");
+  });
+
+  it("renders the nameless-Wi-Fi case end to end", () => {
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "denied" }));
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
+  });
+
+  it("still reports Offline when there is no route at all", () => {
+    expect(buildLabel(null, "wi_fi", false)).toBe("Offline");
+  });
+});
+
+describe("NetworkWidget / asking for the name (macOS)", () => {
+  it("offers the prompt only when it would actually help", () => {
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
+    expect(screen.getByTestId("sidebar-network-grant")).toBeInTheDocument();
+  });
+
+  it("does not prompt unbidden — it takes a click", () => {
+    // A permission dialog before the user has asked for anything is
+    // the intrusion non-negotiable #1 rules out.
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
+    expect(requestAccessMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the name as soon as access is granted, without waiting for the poll", async () => {
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
+    );
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
+  });
+
+  it("keeps showing Wi-Fi if the user declines", async () => {
+    requestAccessMock.mockResolvedValue({
+      medium: "wi_fi",
+      ssid: null,
+      ssid_access: "denied",
+    });
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    // Declining costs the name and nothing else. It must not fall
+    // back to the wrong answer.
+    await waitFor(() =>
+      expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
+  });
+
+  it("never offers the prompt where the platform needs no permission", () => {
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_required" }));
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
+  });
+
+  it("never offers the prompt on a wired link", () => {
+    renderWidget(net({ ssid: null, medium: "wired", ssidAccess: "not_determined" }));
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
+  });
+
+  it("never offers the prompt when already declined", () => {
+    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "denied" }));
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
   });
 });

@@ -17,16 +17,33 @@
  * throughput is a delta, and like CPU its meaning depends on the
  * interval it was measured over.
  *
- * Degradation rules (unchanged from M13.3):
- *   - `ssid` null → label reads "Wired" (or "Offline" when the
- *     local-IP probe also failed). Happens on macOS unconditionally,
- *     on wired desktops, and on any probe failure.
- *   - `localIp` null → the whole card renders in an "offline"
- *     state (red dot, no IP line).
+ * Degradation rules, rewritten in the M13 refinement pass:
+ *   - `localIp` null → offline state (red dot, no IP line).
+ *   - A name we have → show it.
+ *   - No name but a known medium → "Wi-Fi" or "Ethernet".
+ *   - Nothing known → "Online".
+ *
+ * The old rule was `ssid ?? "Wired"`, which turned the *absence* of a
+ * name into a positive claim of Ethernet. Since macOS never returns
+ * an SSID without location access, every Wi-Fi Mac was told it was
+ * wired. Medium is now probed independently of the name, so the two
+ * failure modes stay separate: we can know you're wireless without
+ * knowing which network.
+ *
+ * On macOS the name needs location access. Rather than prompting
+ * unbidden at launch — a permission dialog before the user has asked
+ * for anything is exactly the intrusion non-negotiable #1 rules out —
+ * the card offers it, and only when it would actually help.
  */
 
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { useNetwork } from "../../lib/NetworkContext";
+import {
+  wifiRequestSsidAccess,
+  type NetworkMedium,
+  type SsidAccess,
+  type WifiInfo,
+} from "../../lib/ipc";
 import { useSystemLoad } from "../../lib/SystemLoadContext";
 import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
@@ -64,6 +81,19 @@ const THROUGHPUT: CSSProperties = {
 const UP: CSSProperties = { color: "var(--green)" };
 const DOWN: CSSProperties = { color: "var(--cyan)" };
 
+const GRANT_BUTTON: CSSProperties = {
+  alignSelf: "flex-start",
+  marginTop: 2,
+  padding: 0,
+  border: "none",
+  background: "none",
+  color: "var(--accent)",
+  fontSize: 11,
+  fontFamily: "var(--font-ui)",
+  cursor: "pointer",
+  textAlign: "left",
+};
+
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -82,13 +112,31 @@ export interface NetworkWidgetProps {
 export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactElement {
   const { ssid, localIp } = useNetwork();
   const { net_up_bps: upBps, net_down_bps: downBps } = useSystemLoad();
+  const { medium, ssidAccess } = useNetwork();
+  // Set from the request's own response so the card updates on the
+  // click rather than waiting up to 30s for the next poll.
+  const [justGranted, setJustGranted] = useState<WifiInfo | null>(null);
+  const effectiveSsid = justGranted?.ssid ?? ssid;
+  const effectiveAccess = justGranted?.ssid_access ?? ssidAccess;
   const online = localIp !== null;
   const dotStyle: CSSProperties = {
     ...STATUS_DOT_BASE,
     background: online ? "var(--green)" : "var(--red)",
   };
-  const label = ssid ?? (online ? "Wired" : "Offline");
-  const tooltip = buildTooltip(ssid, localIp, online, upBps, downBps);
+  const label = buildLabel(effectiveSsid, medium, online);
+  // Only worth offering where it would change something: a wireless
+  // link, online, and an unanswered prompt.
+  const canAskForName =
+    online && medium === "wi_fi" && effectiveAccess === "not_determined" && effectiveSsid === null;
+  const tooltip = buildTooltip(
+    effectiveSsid,
+    localIp,
+    online,
+    upBps,
+    downBps,
+    medium,
+    effectiveAccess,
+  );
   // Render the pair together or not at all: one arrow alone reads as
   // "the other direction is idle" rather than "unmeasured".
   const showRates = upBps !== null && downBps !== null;
@@ -115,6 +163,18 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
         <div style={IP_LABEL} data-testid="sidebar-network-ip">
           {localIp}
         </div>
+      )}
+      {canAskForName && (
+        <button
+          type="button"
+          data-testid="sidebar-network-grant"
+          style={GRANT_BUTTON}
+          onClick={() => {
+            void wifiRequestSsidAccess().then(setJustGranted);
+          }}
+        >
+          Show network name…
+        </button>
       )}
       {showRates && (
         <div style={THROUGHPUT} data-testid="sidebar-network-throughput">
@@ -143,16 +203,33 @@ export function formatRate(bytesPerSecond: number): string {
   return `${Math.round(value)} B/s`;
 }
 
+/** What to call this link. Never guesses: an unknown medium reads
+ *  "Online", which says only what we actually know. */
+export function buildLabel(ssid: string | null, medium: NetworkMedium, online: boolean): string {
+  if (!online) return "Offline";
+  if (ssid !== null) return ssid;
+  if (medium === "wi_fi") return "Wi-Fi";
+  if (medium === "wired") return "Ethernet";
+  return "Online";
+}
+
 function buildTooltip(
   ssid: string | null,
   localIp: string | null,
   online: boolean,
   upBps: number | null,
   downBps: number | null,
+  medium: NetworkMedium,
+  ssidAccess: SsidAccess,
 ): string {
   if (!online) return "Offline (no default route)";
   const parts: string[] = [];
   if (ssid !== null) parts.push(`SSID: ${ssid}`);
+  else if (medium === "wi_fi" && ssidAccess === "denied") {
+    parts.push("Wi-Fi (network name needs location access, which was declined)");
+  } else if (medium === "wi_fi" && ssidAccess === "not_determined") {
+    parts.push("Wi-Fi (allow location access to see the network name)");
+  }
   if (localIp !== null) parts.push(`IP: ${localIp}`);
   if (upBps !== null && downBps !== null) {
     // Name the interface scope: the rate describes the link this IP
