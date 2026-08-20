@@ -25,6 +25,7 @@ const GB = 1024 ** 3;
 
 function load(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
   return {
+    net_rates: [],
     history: [],
     current: {
       cpu_percent: 42.7,
@@ -32,8 +33,6 @@ function load(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
       mem_total_bytes: 16 * GB,
       load_average_one: 1.84,
       core_count: 4,
-      net_up_bps: null,
-      net_down_bps: null,
       ...overrides,
     },
   };

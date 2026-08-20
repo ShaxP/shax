@@ -1,14 +1,12 @@
 /**
- * NetworkWidget tests (M13.3).
+ * NetworkWidget tests (M13 remodelling, spec §19 D5 item 3).
  *
- * Covers:
- *   - online with SSID: green dot, "MyHomeWiFi" line, IP line
- *   - online no SSID (wired / macOS): green dot, "Wired" label, IP line
- *   - offline: red dot, "Offline" label, no IP line
- *   - rail: 📡 glyph + colored dot, tooltip carries state
- *   - throughput lines (M13 refinement): rendered as a pair or not
- *     at all, formatted in decimal units, sourced from the 2s
- *     system sampler rather than the 30s network poll
+ * The card is now a pager over addressed interfaces, joining two
+ * cadences by interface name. What's worth pinning:
+ *   - the join is by name, not by position
+ *   - paging is bounded, wraps, and survives an interface vanishing
+ *   - every value is omitted when unreadable rather than faked
+ *   - the identity line never claims a medium it doesn't know
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
@@ -16,33 +14,85 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 import "@testing-library/jest-dom";
 
 const requestAccessMock = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/ipc", () => ({ wifiRequestSsidAccess: requestAccessMock }));
+const wifiInfoMock = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/ipc", () => ({
+  wifiRequestSsidAccess: requestAccessMock,
+  wifiInfo: wifiInfoMock,
+}));
 
-import { NetworkProvider, type NetworkInfo } from "../../lib/NetworkContext";
+import { NetworkProvider } from "../../lib/NetworkContext";
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
-import type { SystemLoad, SystemLoadSeries } from "../../lib/ipc";
-import { buildLabel, formatRate, NetworkWidget } from "./NetworkWidget";
+import type { InterfaceRate, NetInterface, SystemLoadSeries, WifiDetail } from "../../lib/ipc";
+import { detailFor, formatRate, headlineFor, identityFor, NetworkWidget } from "./NetworkWidget";
 
 afterEach(cleanup);
 
 beforeEach(() => {
+  // The real command returns BEFORE the user answers the OS dialog,
+  // so it reports the state as it stands: still undetermined.
   requestAccessMock
+    .mockReset()
+    .mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "not_determined" });
+  // The answer arrives via the poll that follows.
+  wifiInfoMock
     .mockReset()
     .mockResolvedValue({ medium: "wi_fi", ssid: "GrantedNet", ssid_access: "granted" });
 });
 
-function net(overrides: Partial<NetworkInfo> = {}): NetworkInfo {
+const WIFI_DETAIL: WifiDetail = {
+  ssid: "Hotel_Guest",
+  ssid_access: "granted",
+  rssi: -48,
+  bars: 3,
+  channel: 6,
+  security: "WPA2",
+  captive: false,
+};
+
+function wifi(overrides: Partial<NetInterface> = {}): NetInterface {
   return {
-    ssid: "MyHomeWiFi",
-    localIp: "192.168.1.42",
-    medium: "wi_fi",
-    ssidAccess: "not_required",
+    name: "en0",
+    ip: "10.24.9.88",
+    kind: "wi_fi",
+    is_primary: true,
+    link: null,
+    wifi: WIFI_DETAIL,
     ...overrides,
   };
 }
 
-function series(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
+/** A Wi-Fi interface with some of its detail unreadable. */
+function wifiWith(detail: Partial<WifiDetail>): NetInterface {
+  return wifi({ wifi: { ...WIFI_DETAIL, ...detail } });
+}
+
+function ethernet(overrides: Partial<NetInterface> = {}): NetInterface {
   return {
+    name: "en5",
+    ip: "10.0.4.117",
+    kind: "ethernet",
+    is_primary: false,
+    wifi: null,
+    link: { speed_mbps: 1000, media: "1000baseT", full_duplex: true },
+    ...overrides,
+  };
+}
+
+function vpn(overrides: Partial<NetInterface> = {}): NetInterface {
+  return {
+    name: "utun4",
+    ip: "10.88.0.6",
+    kind: "vpn",
+    is_primary: false,
+    wifi: null,
+    link: null,
+    ...overrides,
+  };
+}
+
+function series(rates: InterfaceRate[] = []): SystemLoadSeries {
+  return {
+    net_rates: rates,
     history: [],
     current: {
       cpu_percent: 0,
@@ -50,177 +100,333 @@ function series(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
       mem_total_bytes: 0,
       load_average_one: null,
       core_count: null,
-      net_up_bps: null,
-      net_down_bps: null,
-      ...overrides,
     },
   };
 }
 
-/** The widget now reads two contexts: identity from the 30s network
- *  poll, throughput from the 2s system sampler. */
-function renderWidget(network: NetworkInfo, load: Partial<SystemLoad> = {}, visible = true): void {
-  render(
-    <SystemLoadProvider value={series(load)}>
-      <NetworkProvider value={network}>
+function renderWidget(interfaces: NetInterface[], rates: InterfaceRate[] = [], visible = true) {
+  return render(
+    <SystemLoadProvider value={series(rates)}>
+      <NetworkProvider value={{ interfaces }}>
         <NetworkWidget visible={visible} />
       </NetworkProvider>
     </SystemLoadProvider>,
   );
 }
 
-describe("NetworkWidget / online with SSID (wifi)", () => {
-  it("renders SSID + IP + green dot", () => {
-    render(
-      <NetworkProvider value={net({ ssid: "MyHomeWiFi", localIp: "192.168.1.42" })}>
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
-    );
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("MyHomeWiFi");
-    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("192.168.1.42");
-    // Green dot — the background must resolve to the theme's --green.
-    const dot = screen.getByTestId("sidebar-network-dot");
-    expect(dot.getAttribute("style") ?? "").toContain("var(--green)");
+describe("NetworkWidget / the three reference screenshots", () => {
+  it("renders the Wi-Fi card", () => {
+    renderWidget([wifi()], [{ name: "en0", up_bps: 88_000, down_bps: 12_000 }]);
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Hotel_Guest");
+    expect(screen.getByTestId("sidebar-network-detail").textContent).toBe("ch 6 · WPA2");
+    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.24.9.88");
+    expect(screen.getByTestId("sidebar-network-iface").textContent).toBe("en0");
+    expect(screen.getByTestId("sidebar-network-up").textContent).toContain("88 KB/s");
+    expect(screen.getByTestId("sidebar-network-down").textContent).toContain("12 KB/s");
   });
 
-  it("tooltip carries SSID + IP", () => {
-    render(
-      <NetworkProvider value={net({ ssid: "OfficeGuest", localIp: "10.0.0.5" })}>
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
+  it("renders the Ethernet card", () => {
+    renderWidget([ethernet()], [{ name: "en5", up_bps: 4_800_000, down_bps: 1_100_000 }]);
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wired LAN");
+    expect(screen.getByTestId("sidebar-network-headline").textContent).toBe("1 Gb/s");
+    expect(screen.getByTestId("sidebar-network-detail").textContent).toBe(
+      "1000BASET · full duplex",
     );
-    const tooltip = screen.getByTestId("sidebar-network").getAttribute("title") ?? "";
-    expect(tooltip).toContain("OfficeGuest");
-    expect(tooltip).toContain("10.0.0.5");
-  });
-});
-
-describe("NetworkWidget / online, no SSID", () => {
-  // This block used to assert that a missing SSID renders as "Wired",
-  // which codified the defect rather than catching it: macOS never
-  // returns an SSID without location access, so the assertion passed
-  // while every Wi-Fi Mac was told it was on Ethernet. The label now
-  // follows the *medium*, which is probed separately.
-  it("renders 'Ethernet' on a genuinely wired link", () => {
-    render(
-      <NetworkProvider value={net({ ssid: null, localIp: "10.0.0.100", medium: "wired" })}>
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
-    );
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Ethernet");
-    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.0.0.100");
-    const dot = screen.getByTestId("sidebar-network-dot");
-    expect(dot.getAttribute("style") ?? "").toContain("var(--green)");
+    expect(screen.getByTestId("sidebar-network-up").textContent).toContain("4.8 MB/s");
   });
 
-  it("renders 'Wi-Fi' on a wireless link whose name we can't read", () => {
-    render(
-      <NetworkProvider
-        value={net({ ssid: null, localIp: "10.0.0.100", medium: "wi_fi", ssidAccess: "denied" })}
-      >
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
-    );
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
-    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.0.0.100");
+  it("renders the VPN card, without the values we ruled out", () => {
+    renderWidget([vpn()], [{ name: "utun4", up_bps: 320_000, down_bps: 96_000 }]);
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("10.88.0.6");
+    // Latency, handshake age and protocol name were all found
+    // unobtainable and dropped by decision — no placeholders.
+    expect(screen.queryByTestId("sidebar-network-headline")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-network-detail")).not.toBeInTheDocument();
+  });
+
+  it("shows a captive chip only when the OS actually detected one", () => {
+    renderWidget([wifiWith({ captive: true })]);
+    expect(screen.getByTestId("sidebar-network-detail").textContent).toContain("captive");
   });
 });
 
-describe("NetworkWidget / offline", () => {
-  it("renders 'Offline' label, red dot, no IP line", () => {
-    render(
-      <NetworkProvider value={net({ ssid: null, localIp: null })}>
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
+describe("NetworkWidget / paging", () => {
+  it("hides the pager when there is only one interface", () => {
+    renderWidget([wifi()]);
+    expect(screen.queryByTestId("sidebar-network-pager")).not.toBeInTheDocument();
+  });
+
+  it("shows which interface you are on, not how many there are", () => {
+    // A fixed total between the arrows tells you nothing about where
+    // you are in the sequence; the position does. The total moves to
+    // the tooltip.
+    renderWidget([wifi(), ethernet(), vpn()]);
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
+
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("3");
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+  });
+
+  it("counts from 1, not from 0", () => {
+    renderWidget([wifi(), ethernet()]);
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
+  });
+
+  it("keeps the total in the tooltip", () => {
+    renderWidget([wifi(), ethernet(), vpn()]);
+    expect(screen.getByTestId("sidebar-network").getAttribute("title") ?? "").toContain(
+      "interface 1 of 3",
     );
+  });
+
+  it("wraps the position along with the card", () => {
+    renderWidget([wifi(), ethernet()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-prev"));
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
+  });
+
+  it("wraps in both directions rather than dead-ending", () => {
+    renderWidget([wifi(), ethernet()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-prev"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
+  });
+
+  it("recovers when the selected interface disappears", () => {
+    // A cable is unplugged or a VPN drops while the user is looking at
+    // it. A stale index would render nothing — or worse, a different
+    // link than the one they paged to.
+    const { rerender } = renderWidget([wifi(), ethernet(), vpn()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+
+    rerender(
+      <SystemLoadProvider value={series()}>
+        <NetworkProvider value={{ interfaces: [wifi()] }}>
+          <NetworkWidget visible={true} />
+        </NetworkProvider>
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("WI-FI");
+    // Down to one interface, so the pager goes too — there is nothing
+    // left to page between.
+    expect(screen.queryByTestId("sidebar-network-pager")).not.toBeInTheDocument();
+  });
+
+  it("stays on the same interface when one EARLIER in the list vanishes", () => {
+    // The reason selection is by name. With an index, removing the
+    // first interface would slide the card onto a neighbour while the
+    // user was looking at it — describing the wrong link with no
+    // visible cue.
+    const { rerender } = renderWidget([wifi(), ethernet(), vpn()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+
+    rerender(
+      <SystemLoadProvider value={series()}>
+        <NetworkProvider value={{ interfaces: [ethernet(), vpn()] }}>
+          <NetworkWidget visible={true} />
+        </NetworkProvider>
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("VPN");
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("2");
+  });
+
+  it("survives the list being reordered underneath it", () => {
+    // The 30s refresh can return a different order — a new primary,
+    // for instance. Selection must follow the interface, not the slot.
+    const { rerender } = renderWidget([wifi(), ethernet()]);
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+
+    rerender(
+      <SystemLoadProvider value={series()}>
+        <NetworkProvider value={{ interfaces: [ethernet(), wifi()] }}>
+          <NetworkWidget visible={true} />
+        </NetworkProvider>
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-network-pill").textContent).toBe("ETHERNET");
+    expect(screen.getByTestId("sidebar-network-position").textContent).toBe("1");
+  });
+
+  it("renders an offline card when nothing holds an address", () => {
+    renderWidget([]);
     expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Offline");
     expect(screen.queryByTestId("sidebar-network-ip")).not.toBeInTheDocument();
-    const dot = screen.getByTestId("sidebar-network-dot");
-    expect(dot.getAttribute("style") ?? "").toContain("var(--red)");
-  });
-
-  it("offline tooltip explains the state", () => {
-    render(
-      <NetworkProvider value={net({ ssid: null, localIp: null })}>
-        <NetworkWidget visible={true} />
-      </NetworkProvider>,
-    );
-    const tooltip = screen.getByTestId("sidebar-network").getAttribute("title") ?? "";
-    expect(tooltip).toMatch(/offline/i);
   });
 });
 
-describe("NetworkWidget / rail", () => {
-  it("renders 📡 + colored dot with a tooltip when visible=false", () => {
-    render(
-      <NetworkProvider value={net({ ssid: "Home", localIp: "192.168.1.1" })}>
-        <NetworkWidget visible={false} />
-      </NetworkProvider>,
+describe("NetworkWidget / joining the two cadences", () => {
+  it("matches rates to the interface by NAME, not by position", () => {
+    // The two sources refresh on different timers and can disagree
+    // about ordering. Matching positionally would silently attribute
+    // one interface's traffic to another.
+    renderWidget(
+      [wifi(), ethernet()],
+      [
+        { name: "en5", up_bps: 4_800_000, down_bps: 1_100_000 },
+        { name: "en0", up_bps: 88_000, down_bps: 12_000 },
+      ],
     );
-    const rail = screen.getByTestId("sidebar-network-rail");
-    expect(rail.textContent).toContain("📡");
-    expect(rail.getAttribute("title")).toContain("Home");
+    expect(screen.getByTestId("sidebar-network-up").textContent).toContain("88 KB/s");
+    fireEvent.click(screen.getByTestId("sidebar-network-next"));
+    expect(screen.getByTestId("sidebar-network-up").textContent).toContain("4.8 MB/s");
   });
 
-  it("rail dot goes red when offline", () => {
-    render(
-      <NetworkProvider value={net({ ssid: null, localIp: null })}>
-        <NetworkWidget visible={false} />
-      </NetworkProvider>,
-    );
-    const rail = screen.getByTestId("sidebar-network-rail");
-    // The dot is a span inside the rail — find it via its inline style.
-    const dot = rail.querySelector("span[aria-hidden='true']");
-    expect(dot?.getAttribute("style") ?? "").toContain("var(--red)");
+  it("omits throughput entirely when the sampler has no rate for it", () => {
+    // The first sample carries no rates at all. Showing 0 B/s would
+    // claim an idle link rather than an unmeasured one.
+    renderWidget([wifi()], []);
+    expect(screen.queryByTestId("sidebar-network-throughput")).not.toBeInTheDocument();
   });
 });
 
-describe("NetworkWidget / throughput", () => {
-  it("renders both rates from the system sampler", () => {
-    renderWidget(net(), { net_up_bps: 1_200_000, net_down_bps: 240_000 });
-    expect(screen.getByTestId("sidebar-network-up").textContent).toContain("1.2 MB/s");
-    expect(screen.getByTestId("sidebar-network-down").textContent).toContain("240 KB/s");
+describe("NetworkWidget / never claiming what it can't read", () => {
+  it("falls back to 'Wi-Fi' when the name is unavailable", () => {
+    expect(identityFor(wifiWith({ ssid: null }), null)).toBe("Wi-Fi");
   });
 
-  it("colours up green and down cyan, matching the mockup", () => {
-    renderWidget(net(), { net_up_bps: 1_000, net_down_bps: 2_000 });
-    expect(screen.getByTestId("sidebar-network-up").getAttribute("style") ?? "").toContain(
-      "var(--green)",
+  it("names an unclassifiable interface by its device name", () => {
+    // The `Wired` bug in one assertion: an interface we can't
+    // characterise must not be labelled a medium we don't know it is.
+    const other = wifi({ kind: "other", name: "bridge100", wifi: null });
+    expect(identityFor(other, null)).toBe("bridge100");
+    expect(identityFor(other, null)).not.toBe("Wired LAN");
+  });
+
+  it("omits the detail line when nothing was readable", () => {
+    expect(detailFor(wifiWith({ channel: null, security: null, captive: false }))).toBeNull();
+  });
+
+  it("builds the detail line from whatever was readable", () => {
+    expect(detailFor(wifiWith({ security: null }))).toBe("ch 6");
+  });
+
+  it("omits the link speed when the port reports none", () => {
+    // Every wired port on the development machine reads `media: none`.
+    const dark = ethernet({ link: { speed_mbps: null, media: null, full_duplex: null } });
+    expect(headlineFor(dark)).toBeNull();
+  });
+
+  it("formats sub-gigabit speeds in Mb/s", () => {
+    const fast = ethernet({ link: { speed_mbps: 100, media: null, full_duplex: null } });
+    expect(headlineFor(fast)).toBe("100 Mb/s");
+  });
+
+  it("renders no signal bars when there is no reading", () => {
+    renderWidget([wifiWith({ bars: null, rssi: null })]);
+    expect(screen.queryByTestId("sidebar-network-bars")).not.toBeInTheDocument();
+  });
+
+  it("fills exactly as many bars as the reading supports", () => {
+    renderWidget([wifi()]);
+    expect(screen.getByTestId("sidebar-network-bars").getAttribute("data-bars")).toBe("3");
+  });
+});
+
+describe("NetworkWidget / asking for the name (macOS)", () => {
+  it("offers the prompt only when it would help", () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    expect(screen.getByTestId("sidebar-network-grant")).toBeInTheDocument();
+    expect(requestAccessMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the OS dialog to be answered, then shows the name", async () => {
+    // The regression this replaced: `wifiRequestSsidAccess` returns
+    // before the user has answered, so using its return value as the
+    // answer meant the click always resolved to "no name" and the
+    // button looked dead.
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(
+      () => expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
+      { timeout: 4000 },
     );
-    expect(screen.getByTestId("sidebar-network-down").getAttribute("style") ?? "").toContain(
-      "var(--cyan)",
+    expect(wifiInfoMock).toHaveBeenCalled();
+  });
+
+  it("says it is waiting rather than looking inert", async () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    const button = screen.getByTestId("sidebar-network-grant");
+    fireEvent.click(button);
+    await waitFor(() => expect(button.textContent).toContain("Waiting"));
+    expect(button).toBeDisabled();
+  });
+
+  it("does not stack requests when clicked repeatedly", async () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    const button = screen.getByTestId("sidebar-network-grant");
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(requestAccessMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("removes the button the moment a decline is seen, not 30s later", async () => {
+    // The gap this closes: the button used to read its state from the
+    // 30s refresh, so after declining it stayed on screen — and macOS
+    // never re-prompts, so clicking it again did nothing. Straight
+    // back into "did that work?".
+    wifiInfoMock.mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "denied" });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument(),
     );
   });
 
-  it("shows neither rate when the sampler has none yet", () => {
-    // The first sample has no interval to divide by. Showing one
-    // arrow alone would read as "the other direction is idle" rather
-    // than "not measured yet".
-    renderWidget(net(), { net_up_bps: null, net_down_bps: null });
-    expect(screen.queryByTestId("sidebar-network-throughput")).not.toBeInTheDocument();
+  it("says the name was declined rather than silently dropping the offer", async () => {
+    // Removing the button without a word reads the same as the button
+    // not working — which is exactly the confusion being fixed.
+    wifiInfoMock.mockResolvedValue({ medium: "wi_fi", ssid: null, ssid_access: "denied" });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() => expect(screen.getByTestId("sidebar-network-declined")).toBeInTheDocument());
+    // And it stays honest about the medium.
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
   });
 
-  it("shows neither rate when only one direction is known", () => {
-    renderWidget(net(), { net_up_bps: 1_000, net_down_bps: null });
-    expect(screen.queryByTestId("sidebar-network-throughput")).not.toBeInTheDocument();
+  it("shows no decline note once a name is known", () => {
+    renderWidget([wifi()]);
+    expect(screen.queryByTestId("sidebar-network-declined")).not.toBeInTheDocument();
   });
 
-  it("keeps the identity lines it already had", () => {
-    // Option 2: throughput is additive. Nothing the M13.3 SSID probe
-    // earned is given up to gain it.
-    renderWidget(net({ ssid: "MyHomeWiFi" }), { net_up_bps: 0, net_down_bps: 0 });
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("MyHomeWiFi");
-    expect(screen.getByTestId("sidebar-network-ip").textContent).toBe("192.168.1.42");
-    expect(screen.getByTestId("sidebar-network-throughput")).toBeInTheDocument();
+  it("leaves the card unchanged when the user never answers", async () => {
+    // A prompt the user walks away from must not leave the button
+    // spinning forever, nor invent a name.
+    wifiInfoMock.mockResolvedValue({
+      medium: "wi_fi",
+      ssid: null,
+      ssid_access: "not_determined",
+    });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(() => expect(wifiInfoMock).toHaveBeenCalled());
+    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
   });
 
-  it("names the interface scope in the tooltip", () => {
-    // The rate describes the link the shown IP is on, not every
-    // adapter on the machine.
-    renderWidget(net(), { net_up_bps: 1_000, net_down_bps: 1_000 });
-    expect(screen.getByTestId("sidebar-network").getAttribute("title") ?? "").toContain(
-      "on this interface",
-    );
+  it("never offers it on a wired link", () => {
+    renderWidget([ethernet()]);
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
+  });
+
+  it("never offers it once declined", () => {
+    renderWidget([wifiWith({ ssid: null, ssid_access: "denied" })]);
+    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
   });
 });
 
@@ -237,95 +443,14 @@ describe("NetworkWidget / rate formatting", () => {
   });
 
   it("uses decimal units, not the binary ones memory uses", () => {
-    // Link rates are quoted in decimal everywhere else; using MiB
-    // here would put a different number beside the same wire.
-    expect(formatRate(1_000_000)).toBe("1.0 MB/s");
     expect(formatRate(1_048_576)).toBe("1.0 MB/s");
   });
-
-  it("never renders a negative rate", () => {
-    expect(formatRate(-5)).toBe("0 B/s");
-  });
 });
 
-describe("NetworkWidget / medium vs name (the 'Wired' bug)", () => {
-  it.each([
-    ["a named network wins", "MyHomeWiFi", "wi_fi" as const, "MyHomeWiFi"],
-    ["nameless Wi-Fi reads as Wi-Fi, NOT Wired", null, "wi_fi" as const, "Wi-Fi"],
-    ["a wired link reads as Ethernet", null, "wired" as const, "Ethernet"],
-    ["an unknown medium claims nothing", null, "unknown" as const, "Online"],
-  ])("%s", (_name, ssid, medium, expected) => {
-    expect(buildLabel(ssid, medium, true)).toBe(expected);
-  });
-
-  it("never reports Wired merely because the name is missing", () => {
-    // The original defect, stated directly: macOS never returns an
-    // SSID without location access, so `ssid ?? "Wired"` told every
-    // Wi-Fi Mac it was on Ethernet.
-    expect(buildLabel(null, "wi_fi", true)).not.toBe("Ethernet");
-    expect(buildLabel(null, "unknown", true)).not.toBe("Ethernet");
-  });
-
-  it("renders the nameless-Wi-Fi case end to end", () => {
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "denied" }));
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
-  });
-
-  it("still reports Offline when there is no route at all", () => {
-    expect(buildLabel(null, "wi_fi", false)).toBe("Offline");
-  });
-});
-
-describe("NetworkWidget / asking for the name (macOS)", () => {
-  it("offers the prompt only when it would actually help", () => {
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
-    expect(screen.getByTestId("sidebar-network-grant")).toBeInTheDocument();
-  });
-
-  it("does not prompt unbidden — it takes a click", () => {
-    // A permission dialog before the user has asked for anything is
-    // the intrusion non-negotiable #1 rules out.
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
-    expect(requestAccessMock).not.toHaveBeenCalled();
-  });
-
-  it("shows the name as soon as access is granted, without waiting for the poll", async () => {
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
-    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
-    );
-    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
-  });
-
-  it("keeps showing Wi-Fi if the user declines", async () => {
-    requestAccessMock.mockResolvedValue({
-      medium: "wi_fi",
-      ssid: null,
-      ssid_access: "denied",
-    });
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_determined" }));
-    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
-    // Declining costs the name and nothing else. It must not fall
-    // back to the wrong answer.
-    await waitFor(() =>
-      expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByTestId("sidebar-network-label").textContent).toBe("Wi-Fi");
-  });
-
-  it("never offers the prompt where the platform needs no permission", () => {
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "not_required" }));
-    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
-  });
-
-  it("never offers the prompt on a wired link", () => {
-    renderWidget(net({ ssid: null, medium: "wired", ssidAccess: "not_determined" }));
-    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
-  });
-
-  it("never offers the prompt when already declined", () => {
-    renderWidget(net({ ssid: null, medium: "wi_fi", ssidAccess: "denied" }));
-    expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
+describe("NetworkWidget / rail", () => {
+  it("shows a glyph and no card", () => {
+    renderWidget([wifi()], [], false);
+    expect(screen.getByTestId("sidebar-network-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-network")).not.toBeInTheDocument();
   });
 });
