@@ -428,6 +428,42 @@ describe("NetworkWidget / asking for the name (macOS)", () => {
     renderWidget([wifiWith({ ssid: null, ssid_access: "denied" })]);
     expect(screen.queryByTestId("sidebar-network-grant")).not.toBeInTheDocument();
   });
+
+  it("keeps polling while access is granted but the name has not caught up", async () => {
+    // The two-lag regression this closes: on macOS,
+    // `authorizationStatus()` can flip to Granted a poll or two before
+    // CoreWLAN's `ssid()` refreshes. An earlier version exited on the
+    // first non-not-determined state and stranded the widget on a bare
+    // "Wi-Fi" label until the app-level 30s refresh caught the name.
+    wifiInfoMock.mockReset();
+    wifiInfoMock
+      .mockResolvedValueOnce({ medium: "wi_fi", ssid: null, ssid_access: "granted" })
+      .mockResolvedValueOnce({ medium: "wi_fi", ssid: null, ssid_access: "granted" })
+      .mockResolvedValue({ medium: "wi_fi", ssid: "GrantedNet", ssid_access: "granted" });
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    fireEvent.click(screen.getByTestId("sidebar-network-grant"));
+    await waitFor(
+      () => expect(screen.getByTestId("sidebar-network-label").textContent).toBe("GrantedNet"),
+      { timeout: 4000 },
+    );
+    // Three calls: two null-ssid rounds skipped, third returned the name.
+    expect(wifiInfoMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("visibly dims the button while awaiting, not just changes the text", async () => {
+    // Inline styles cannot target `:disabled`, so without an explicit
+    // awaiting variant the button stays blue with a pointer cursor —
+    // the very "did that click do anything?" confusion the click-ack
+    // was meant to remove.
+    renderWidget([wifiWith({ ssid: null, ssid_access: "not_determined" })]);
+    const button = screen.getByTestId("sidebar-network-grant");
+    expect(button.style.color).toBe("var(--accent)");
+    expect(button.style.cursor).toBe("pointer");
+    fireEvent.click(button);
+    await waitFor(() => expect(button.textContent).toContain("Waiting"));
+    expect(button.style.color).toBe("var(--fg-faint)");
+    expect(button.style.cursor).toBe("default");
+  });
 });
 
 describe("NetworkWidget / rate formatting", () => {
