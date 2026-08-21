@@ -19,37 +19,34 @@ open src-tauri/target/release/bundle/macos/Shax.app
 
 `--bundles app` skips the `.dmg`; the config's `targets: "all"` is for releases, not for testing.
 
-Local builds are **ad-hoc signed**, and macOS ties permission grants to the code signature — so a rebuild can look like a different app. If permissions behave oddly across builds:
+### Getting back to a fresh `NotDetermined` on macOS 26+
+
+Location grants live in `locationd`, not in the general TCC database, and on macOS 26.x every userspace reset path is closed:
+
+- `tccutil reset Location com.shax.app` returns exit 70 — `tccutil` no longer proxies to `locationd` for the Location service on this version. Silent no-op.
+- `/var/db/locationd/clients.plist` is SIP-protected. Even `sudo /usr/libexec/PlistBuddy` / `sudo plutil` refuse to write it (`Operation not permitted`).
+- **System Settings → Privacy & Security → Location Services** shows the app with a toggle, but no `–` button to remove the entry entirely. Toggling only moves the state Granted ↔ Denied, never back to NotDetermined.
+
+To test the *first-run* flow — the "Show network name…" click that pops the OS dialog — the reliable workaround is to build the app under a fresh bundle identity that `locationd` has never seen:
 
 ```bash
-tccutil reset Location com.shax.app
+# Edit src-tauri/tauri.conf.json: change "identifier" from "com.shax.app"
+# to "com.shax.app.test" (or .test2, .test3 across successive attempts —
+# each new identifier is a fresh identity to locationd).
+pnpm tauri:build --bundles app
+open src-tauri/target/release/bundle/macos/Shax.app
+# Test the grant / decline path.
+# Revert the identifier in tauri.conf.json when done. Do NOT commit the
+# bumped identifier.
 ```
 
----
+The bumped identity persists its own app data separately from your daily Shax install, so it launches first-run every time. That's the point.
 
-## 1. The Wi-Fi name appears promptly after granting (macOS)
-
-**Why unverified:** the ~30-second delay was confirmed on a build that predated the fix. The fix itself — polling until the OS dialog is answered — has never run against a real prompt.
-
-**Background:** `CLLocationManager.requestWhenInUseAuthorization` is asynchronous. An earlier version read the authorisation state immediately after posting the dialog, so it always reported "not determined" and the button was structurally incapable of working. See PR #143.
-
-**Steps:**
-
-1. Bundled build, expand the sidebar, page to the Wi-Fi card.
-2. Click **Show network name…**. The button must immediately disable and read **Waiting for permission…** — a click that acknowledges nothing is the confusion this fixed.
-3. Click **Allow**. The network name should appear within about a second, *not* after 30 seconds.
-4. Click the button several times quickly before answering. Only one prompt should appear.
-
-**Then test the decline path**, which is separate code:
-
-1. `tccutil reset Location com.shax.app`, relaunch.
-2. Click the button, choose **Don't Allow**.
-3. The button should disappear **immediately**, not 30 seconds later, and be replaced by "Name hidden — allow Location for Shax to show it".
-4. The card must still read `Wi-Fi` — declining costs the name, never the medium.
+The `Granted` / `Denied` toggle in System Settings is fine for exercising the *decline* path against `com.shax.app` directly, once the initial grant has ever been made — it's only `NotDetermined → Granted` that needs the bundle-id bump.
 
 ---
 
-## 2. Ethernet link detail (macOS)
+## 1. Ethernet link detail (macOS)
 
 **Why unverified:** every wired port on the development machine reports `media: none`, so `parse_bsd_media` is covered only by unit tests over captured strings. The live path has never produced a value.
 
@@ -59,7 +56,7 @@ tccutil reset Location com.shax.app
 
 ---
 
-## 3. The VPN card
+## 2. The VPN card
 
 **Why unverified:** no VPN available on the development machine, and `scutil --nc list` is empty there.
 
@@ -69,7 +66,7 @@ tccutil reset Location com.shax.app
 
 ---
 
-## 4. Captive portal chip (macOS)
+## 3. Captive portal chip (macOS)
 
 **Why unverified:** needs an actual captive network.
 
@@ -79,7 +76,7 @@ tccutil reset Location com.shax.app
 
 ---
 
-## 5. Keep-awake on Linux
+## 4. Keep-awake on Linux
 
 **Why unverified:** the Ubuntu CI runner is headless with no logind session, so it proves the code compiles, not that the inhibitor takes. Needs a real Linux desktop.
 
@@ -93,7 +90,7 @@ tccutil reset Location com.shax.app
 
 ---
 
-## 6. Windows specifics
+## 5. Windows specifics
 
 **Why unverified:** no Windows machine. CI compiles the paths and nothing more.
 
@@ -104,7 +101,7 @@ tccutil reset Location com.shax.app
 
 ---
 
-## 7. Cross-platform SSID and medium
+## 6. Cross-platform SSID and medium
 
 **Why unverified:** only macOS has been exercised.
 

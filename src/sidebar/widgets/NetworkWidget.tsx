@@ -148,6 +148,18 @@ const GRANT_BUTTON: CSSProperties = {
   textAlign: "left",
 };
 
+// Disabled variant used while the CoreLocation prompt is being answered.
+// Inline styles can't target `:disabled`, so the awaiting state must be
+// spelled out explicitly — otherwise the button stays blue with a
+// pointer cursor and the text-only flip to "Waiting for permission…"
+// is the only signal the click landed. The click-ack is the whole
+// point of the flip; colour and cursor carry it.
+const GRANT_BUTTON_AWAITING: CSSProperties = {
+  ...GRANT_BUTTON,
+  color: "var(--fg-faint)",
+  cursor: "default",
+};
+
 const DECLINED_NOTE: CSSProperties = {
   marginTop: 2,
   fontSize: 11,
@@ -327,7 +339,7 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
         <button
           type="button"
           data-testid="sidebar-network-grant"
-          style={GRANT_BUTTON}
+          style={awaitingGrant ? GRANT_BUTTON_AWAITING : GRANT_BUTTON}
           onClick={askForName}
           disabled={awaitingGrant}
         >
@@ -369,7 +381,21 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   );
 }
 
-/** Wait for the location dialog to be answered.
+/** Wait for the location dialog to be answered *and* the SSID to
+ *  materialise.
+ *
+ *  Two independent lags on macOS after the user clicks Allow:
+ *    1. `CLLocationManager.authorizationStatus()` flips to Granted —
+ *       usually within a poll tick or two of the click.
+ *    2. `CWWiFiClient.interface().ssid()` returns the actual name —
+ *       CoreWLAN caches per-process and only sees the grant after its
+ *       next internal refresh, which is a further second or two.
+ *
+ *  An earlier version exited on the first non-not-determined access
+ *  state, which meant the widget snapped into a `Granted` state with
+ *  `ssid = null` and stayed as a bare `Wi-Fi` label for the rest of
+ *  the app-level 30s refresh cycle. That regression is the reason
+ *  this predicate now waits for the name too.
  *
  *  Bounded: a user who walks away from the prompt must not leave a
  *  poll running for the life of the process. Giving up returns null
@@ -380,7 +406,10 @@ async function pollUntilAnswered(attempts = 60, intervalMs = 500): Promise<WifiI
   for (let i = 0; i < attempts; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
     const info = await wifiInfo();
-    if (info.ssid_access !== "not_determined") return info;
+    // Denied is definitive — no name is coming.
+    if (info.ssid_access === "denied") return info;
+    // Granted without a name yet is CoreWLAN's cache lag; keep going.
+    if (info.ssid_access === "granted" && info.ssid !== null) return info;
   }
   return null;
 }
