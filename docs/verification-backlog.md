@@ -46,17 +46,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 1. Ethernet link detail (macOS)
-
-**Why unverified:** every wired port on the development machine reports `media: none`, so `parse_bsd_media` is covered only by unit tests over captured strings. The live path has never produced a value.
-
-**Steps:** connect a dock or cable, page to the Ethernet card. Expect the `ETHERNET` pill, a negotiated speed on the identity row (`1 Gb/s`), and `1000BASET · full duplex` beneath. Cross-check against `ifconfig <iface> | grep media`.
-
-**Watch for:** a speed shown when the link is actually down, or media reported as `AUTOSELECT` — `autoselect` is not a media type and must be omitted, not displayed.
-
----
-
-## 2. The VPN card
+## 1. The VPN card
 
 **Why unverified:** no VPN available on the development machine, and `scutil --nc list` is empty there.
 
@@ -66,7 +56,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 3. Captive portal chip (macOS)
+## 2. Captive portal chip (macOS)
 
 **Why unverified:** needs an actual captive network.
 
@@ -76,7 +66,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 4. Keep-awake on Linux
+## 3. Keep-awake on Linux
 
 **Why unverified:** the Ubuntu CI runner is headless with no logind session, so it proves the code compiles, not that the inhibitor takes. Needs a real Linux desktop.
 
@@ -90,7 +80,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 5. Windows specifics
+## 4. Windows specifics
 
 **Why unverified:** no Windows machine. CI compiles the paths and nothing more.
 
@@ -101,7 +91,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 6. Cross-platform SSID and medium
+## 5. Cross-platform SSID and medium
 
 **Why unverified:** only macOS has been exercised.
 
