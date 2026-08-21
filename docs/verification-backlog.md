@@ -66,21 +66,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 3. Keep-awake on Linux
-
-**Why unverified:** the Ubuntu CI runner is headless with no logind session, so it proves the code compiles, not that the inhibitor takes. Needs a real Linux desktop.
-
-**Steps:**
-
-1. Toggle caffeinate on, then `systemd-inhibit --list` — an entry with `Who=Shax`, the `--why` text, and `What=idle`.
-2. Toggle off; the entry disappears.
-3. Toggle on, then `kill -9` the Shax process. The entry should be gone and no orphaned `systemd-inhibit` left in `ps` — this is `PR_SET_PDEATHSIG` doing its job, and the case macOS covers with `caffeinate -w`.
-4. **The one most worth confirming:** the no-session case. Run Shax over plain SSH or in a container, where `systemd-inhibit` exists but fails. Toggling on must leave the switch **off** with a failure message — not on. An earlier version reported a cheerfully ticking toggle on a machine that then slept, because it checked for the helper's death at spawn time, when the child hasn't been scheduled yet.
-5. Confirm the tooltip mentions that the screen can still blank. `--what=idle` inhibits idle *system* sleep only; screen blanking belongs to the screensaver, which Phase 1 doesn't touch.
-
----
-
-## 4. Windows specifics
+## 3. Windows specifics
 
 **Why unverified:** no Windows machine. CI compiles the paths and nothing more.
 
@@ -91,7 +77,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 5. Cross-platform SSID and medium
+## 4. Cross-platform SSID and medium
 
 **Why unverified:** only macOS has been exercised.
 
