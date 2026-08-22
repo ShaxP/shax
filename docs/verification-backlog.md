@@ -46,17 +46,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 1. The VPN card
-
-**Why unverified:** no VPN available on the development machine, and `scutil --nc list` is empty there.
-
-**Steps:** connect any VPN, then check the card appears with a `VPN` pill, the pager count increases, and it shows name + IP + rates. It should carry **no** protocol or handshake line — both were found unobtainable and dropped by decision (`specs/19-sidebar.md` §D5 item 3, out-of-scope).
-
-**The interesting one:** page to the VPN card, then **disconnect the Wi-Fi** (an interface *earlier* in the list). The card must stay on the VPN. Selection is held by interface name precisely so a vanishing earlier interface can't slide the card onto a neighbour — this is the test of that.
-
----
-
-## 2. Captive portal chip (macOS)
+## 1. Captive portal chip (macOS)
 
 **Why unverified:** needs an actual captive network.
 
@@ -66,7 +56,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 3. Windows specifics
+## 2. Windows specifics
 
 **Why unverified:** no Windows machine. CI compiles the paths and nothing more.
 
@@ -77,7 +67,7 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 4. Cross-platform SSID and medium
+## 3. Cross-platform SSID and medium
 
 **Why unverified:** only macOS has been exercised.
 
