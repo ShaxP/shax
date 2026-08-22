@@ -35,6 +35,7 @@ Developers who live in the terminal and want it to be faster to navigate, easier
 - Not a tmux replacement for remote, detachable sessions. Multiplexing is local; tmux is respected over SSH.
 - No rich rendering of remote output over SSH in the first release.
 - No cloud account, no required sign-in, no telemetry without opt-in.
+- Not designed to run under SSH GUI forwarding (`ssh -X`, `waypipe`) or inside a container. Shax is a local desktop GUI; setups without a real user / logind session are outside supported use, and features that depend on OS session state (keep-awake, native notifications) will honestly refuse rather than fake success in those setups. Reaching a remote shell FROM a local Shax is fine — that's plain `ssh` in a pane.
 
 ## How to read these specs
 
