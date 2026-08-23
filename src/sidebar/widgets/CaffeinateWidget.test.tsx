@@ -368,13 +368,38 @@ describe("CaffeinateWidget / on-state visual reshape (M13.5 §D13)", () => {
     expect(card.style.borderColor).toContain("--accent");
   });
 
+  it("fills the card with an accent-soft background when active", async () => {
+    // The spec's first pass said "border-only"; the mockup showed
+    // border + soft fill. This case pins the fill in place so a
+    // future style refactor cannot quietly walk it back to
+    // border-only — which reads as "just another bordered card" in a
+    // sidebar where every widget already has a border.
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    const card = screen.getByTestId("sidebar-caffeinate");
+    // Resting card: transparent (or empty) background. Anything
+    // non-empty here would mean the active fill has leaked into the
+    // resting render.
+    const restingBg = card.style.background;
+    expect(restingBg === "" || restingBg === "transparent").toBe(true);
+
+    broadcast(HELD);
+    // Active card: an accent-soft fill. `--accent-soft` is the
+    // token; any bg that reads as `--accent` (full-strength) would
+    // overshoot and turn the whole card blue.
+    expect(card.style.background).toContain("--accent-soft");
+    expect(card.style.background).not.toBe(restingBg);
+  });
+
   it("carries the resting card unchanged when off", async () => {
     // Regression guard: the reshape is on-only. The resting card
-    // must not gain an accent border on mount, even briefly.
+    // must not gain an accent border OR the accent-soft background
+    // on mount, even briefly.
     renderWidget();
     await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
     const card = screen.getByTestId("sidebar-caffeinate");
     expect(card.getAttribute("data-active")).toBe("false");
     expect(card.style.borderColor).not.toContain("--accent");
+    expect(card.style.background).not.toContain("--accent");
   });
 });

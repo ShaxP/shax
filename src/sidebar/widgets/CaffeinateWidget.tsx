@@ -47,20 +47,22 @@ const CARD_RESTING: CSSProperties = {
   borderColor: "var(--border)",
 };
 
-/** The active card gains an accent border (M13.5 §D13). Border
- *  weight is unchanged from the resting card — only the colour
- *  changes — because the accent hue alone is the recognisable
- *  signal in peripheral vision; growing the border thickness on top
- *  of that would double-count and shift the card's height.
+/** The active card gains an accent border AND a soft accent-tinted
+ *  background (M13.5 §D13, per `design/caffeinated-selected.png`).
+ *  The border alone was called for by the spec's first pass but
+ *  reads too subtly against the surrounding sidebar cards, all of
+ *  which also carry borders. The soft fill is what makes the active
+ *  card visibly a *different* thing from the resting cards, not
+ *  just a differently-coloured version of the same thing.
  *
- *  `background: transparent` is set explicitly here too, defending
- *  against any layer above this widget that might apply a subtle
- *  accent-tinted background to elements with a matching border (some
- *  themes ship "selected" state as border + soft-fill; we want just
- *  the border on this card, so we pin the background empty). */
+ *  Border weight is unchanged from the resting card — only the
+ *  colour changes — because the accent hue on the border, plus the
+ *  soft fill inside, already carry the state; growing the border
+ *  thickness would shift the card's height and read as jitter on
+ *  every toggle. */
 const CARD_ACTIVE: CSSProperties = {
   ...CARD,
-  background: "transparent",
+  background: "var(--accent-soft)",
   borderColor: "var(--accent)",
 };
 
