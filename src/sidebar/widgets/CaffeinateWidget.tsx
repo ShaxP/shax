@@ -34,6 +34,18 @@ import { currentPlatform, type Platform } from "../../lib/platform";
 import { CARD } from "./styles";
 import "./CaffeinateWidget.css";
 
+/** Resting variant. Same as `CARD`, but with an explicit
+ *  `borderColor` so React's style-diffing cannot leak the previous
+ *  render's `borderColor` (e.g. leftover accent from a just-active
+ *  card) into the resting render. Without this, switching from
+ *  CARD_ACTIVE back to a bare CARD sometimes left the border in an
+ *  intermediate state on some browsers — reported once as a
+ *  "white border" on the off-state widget. */
+const CARD_RESTING: CSSProperties = {
+  ...CARD,
+  borderColor: "var(--border)",
+};
+
 /** The active card gains an accent border (M13.5 §D13). Border
  *  weight is unchanged from the resting card — only the colour
  *  changes — because the accent hue alone is the recognisable
@@ -82,7 +94,11 @@ const TITLE: CSSProperties = {
 
 const SUBTITLE: CSSProperties = {
   fontSize: 11,
-  color: "var(--fg-dim)",
+  // `--fg-faint` matches the mockup's rendering of `keep this Mac
+  // awake` / `awake for N`. The title above is the reading; the
+  // subtitle is context, and reading it at `--fg-dim` made it
+  // compete with the title for attention.
+  color: "var(--fg-faint)",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -230,7 +246,7 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
       data-testid="sidebar-caffeinate"
       data-active={on ? "true" : "false"}
       className={error !== null ? "shax-caffeinate-refusing" : undefined}
-      style={on ? CARD_ACTIVE : CARD}
+      style={on ? CARD_ACTIVE : CARD_RESTING}
       title={tooltip}
     >
       <div style={ROW}>

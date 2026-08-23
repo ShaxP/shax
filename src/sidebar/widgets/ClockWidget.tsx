@@ -53,7 +53,9 @@ const TIME_GROUP: CSSProperties = {
 
 const TIMEZONE: CSSProperties = {
   fontSize: 11,
-  color: "var(--fg-dim)",
+  // Same faintest tier as the date line — the timezone is a
+  // disambiguator, not a reading, and the mockup treats it that way.
+  color: "var(--fg-faint)",
   letterSpacing: 0.4,
   fontFamily: "var(--font-ui)",
 };
@@ -77,7 +79,10 @@ const SECONDS: CSSProperties = {
 
 const DATE_LINE: CSSProperties = {
   fontSize: 12,
-  color: "var(--fg-dim)",
+  // `--fg-faint`, not `--fg-dim`. The mockup renders the date line
+  // at the faintest tier — dim would make it compete with the time
+  // for attention, and the time is the reading; the date is context.
+  color: "var(--fg-faint)",
 };
 
 const RAIL_ROOT: CSSProperties = {
