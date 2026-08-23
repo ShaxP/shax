@@ -46,15 +46,20 @@ const USED_BYTES: CSSProperties = {
 };
 
 const TOTAL_BYTES: CSSProperties = {
-  color: "var(--fg-dim)",
+  // `--fg-faint`, not `--fg-dim`. The `used` number in green is the
+  // reading; `/ total` is context sitting alongside it. Rendering
+  // total at `--fg-dim` gave both sides similar visual weight and
+  // muddled which figure the eye should land on — the mockup pushes
+  // total to the faintest tier so used stands out.
+  color: "var(--fg-faint)",
 };
 
-// The swap line sits under the primary memory readout. Dim + small,
+// The swap line sits under the primary memory readout. Faint tier,
 // because swap is context for the RAM figure rather than a peer
 // reading — a user glancing at the card should land on RAM first.
 const SWAP_LINE: CSSProperties = {
   fontSize: 11,
-  color: "var(--fg-dim)",
+  color: "var(--fg-faint)",
   fontFamily: "var(--font-mono)",
 };
 
