@@ -79,7 +79,14 @@ const SPARKLINE: CSSProperties = {
 
 const BAR_BASE: CSSProperties = {
   flex: 1,
-  borderRadius: 1,
+  // Rounded top corners only. Bars grow up from the shared baseline
+  // (`alignItems: flex-end` on the sparkline), so the top is the
+  // growing edge and rounding it softens the row of tips per
+  // `design/sidebar-extended.png`. The bottom sits on the baseline
+  // where rounding would either be invisible or, worse, chip a
+  // pixel off the edge of the sparkline's frame.
+  borderTopLeftRadius: 2,
+  borderTopRightRadius: 2,
   minWidth: 0,
 };
 
