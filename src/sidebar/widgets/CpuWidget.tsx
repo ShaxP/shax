@@ -161,15 +161,24 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
         </span>
       </div>
       <div style={SPARKLINE} data-testid="sidebar-cpu-sparkline" aria-hidden="true">
-        {slots.map((sample, index) => (
-          <div
-            // Index is the right key here: slots are positional (a
-            // fixed-length window over time), not identities.
-            key={index}
-            data-testid={sample === null ? "sidebar-cpu-bar-empty" : "sidebar-cpu-bar"}
-            style={barStyle(sample, index === slots.length - 1)}
-          />
-        ))}
+        {slots.map((sample, index) => {
+          const isNewest = index === slots.length - 1;
+          // Gradient position over the historical bars: 0 at the
+          // oldest, 1 at the newest historical (the one just before
+          // the current). The newest bar itself ignores this — it
+          // uses the heat colour at full opacity.
+          const maxHistoricalIndex = Math.max(1, slots.length - 2);
+          const historicalT = Math.min(1, index / maxHistoricalIndex);
+          return (
+            <div
+              // Index is the right key here: slots are positional (a
+              // fixed-length window over time), not identities.
+              key={index}
+              data-testid={sample === null ? "sidebar-cpu-bar-empty" : "sidebar-cpu-bar"}
+              style={barStyle(sample, isNewest, historicalT)}
+            />
+          );
+        })}
       </div>
       {(loadLabel !== null || coreLabel !== null) && (
         <div style={FOOTER}>
@@ -181,24 +190,48 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
   );
 }
 
+/** Opacity for the oldest historical bar. Above 0 so the bar still
+ *  reads as a bar rather than as an empty slot; low enough that the
+ *  gradient toward the newest bar is visible.
+ *
+ *  These two constants define the gradient the mockup shows: older
+ *  bars are dimmer, newer historical bars are brighter, and the
+ *  newest bar (heat-coloured) sits at full opacity above them. */
+const HISTORICAL_MIN_OPACITY = 0.4;
+const HISTORICAL_MAX_OPACITY = 0.9;
+
 /** One bar. `null` is an unfilled slot and draws nothing.
  *
- *  Historical bars render in a uniform faint colour; only the
- *  newest bar carries its heat colour — the current reading. This
- *  matches `design/sidebar-extended.png`; earlier drafts heat-mapped
- *  every bar (with opacity for recency) so a red stretch behind a
- *  green newest bar read as "it spiked and recovered". The refreshed
- *  mockup deliberately trades that signal for a calmer visual: the
- *  history is shape-only (activity vs quiet), and the current bar's
- *  colour tells you the current magnitude. Spec §19 D5 item 2 is
- *  amended for the change. */
-function barStyle(sample: number | null, isNewest: boolean): CSSProperties {
+ *  Historical bars render in a monochrome faint colour with an
+ *  opacity gradient from oldest (dim) to newest historical (bright);
+ *  only the newest bar itself carries its heat colour — the current
+ *  reading. This matches `design/sidebar-extended.png`.
+ *
+ *  Earlier drafts heat-mapped every bar (with opacity for recency)
+ *  so a red stretch behind a green newest bar read as "it spiked
+ *  and recovered". The refreshed mockup deliberately trades that
+ *  magnitude signal for a calmer visual: history is shape-only
+ *  (activity vs quiet), magnitude comes from the current bar plus
+ *  the header percent, and recency is carried by the gradient
+ *  brightness alone. Spec §19 D5 item 2 is amended for the change. */
+function barStyle(sample: number | null, isNewest: boolean, historicalT: number): CSSProperties {
   if (sample === null) return BAR_BASE;
+  if (isNewest) {
+    return {
+      ...BAR_BASE,
+      height: `${Math.max(0, Math.min(100, sample))}%`,
+      minHeight: MIN_BAR_PX,
+      background: heatColour(sample),
+    };
+  }
+  const opacity =
+    HISTORICAL_MIN_OPACITY + (HISTORICAL_MAX_OPACITY - HISTORICAL_MIN_OPACITY) * historicalT;
   return {
     ...BAR_BASE,
     height: `${Math.max(0, Math.min(100, sample))}%`,
     minHeight: MIN_BAR_PX,
-    background: isNewest ? heatColour(sample) : "var(--fg-faint)",
+    background: "var(--fg-faint)",
+    opacity,
   };
 }
 

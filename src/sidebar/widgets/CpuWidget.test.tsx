@@ -190,10 +190,12 @@ describe("CpuWidget / sparkline", () => {
     expect(bars[bars.length - 1]?.style.background).toBe("var(--green)");
   });
 
-  it("gives every historical bar the same monochrome colour", () => {
+  it("gives every historical bar the same monochrome colour (only opacity varies)", () => {
     // Regression guard: if a future refactor accidentally re-enables
     // heat-per-bar for history, the two mixed-load past samples here
     // would render as different colours and this test would catch it.
+    // Opacity is allowed to vary (the recency gradient uses it) —
+    // hue must not.
     render(
       <SystemLoadProvider value={load({}, [10, 50, 85, 95])}>
         <CpuWidget visible={true} />
@@ -204,6 +206,33 @@ describe("CpuWidget / sparkline", () => {
     for (const bar of historical) {
       expect(bar.style.background).toBe("var(--fg-faint)");
     }
+  });
+
+  it("fades historical bars from dim (oldest) to bright (newest historical)", () => {
+    // Matches `design/sidebar-extended.png`: the sparkline reads as
+    // a gentle left-to-right rise in brightness, hinting at "just
+    // happened" vs "a while ago" without shouting. The newest
+    // heat-coloured bar sits above the top of the gradient.
+    render(
+      <SystemLoadProvider value={load({}, [30, 30, 30, 30, 30, 30, 30, 30])}>
+        <CpuWidget visible={true} />
+      </SystemLoadProvider>,
+    );
+    const bars = screen.getAllByTestId("sidebar-cpu-bar");
+    const historical = bars.slice(0, -1);
+    // Pin the direction rather than exact values (values depend on
+    // the total window size). Oldest strictly dimmer than newest
+    // historical, and the sequence is monotonically increasing.
+    const opacities = historical.map((b) => Number(b.style.opacity));
+    expect(opacities[0]).toBeLessThan(opacities[opacities.length - 1] ?? 0);
+    for (let i = 1; i < opacities.length; i += 1) {
+      expect(opacities[i]).toBeGreaterThanOrEqual(opacities[i - 1] ?? 0);
+    }
+    // Newest bar (heat-coloured) sits at full opacity above the
+    // gradient's ceiling.
+    expect(
+      bars[bars.length - 1]?.style.opacity === "" || bars[bars.length - 1]?.style.opacity === "1",
+    ).toBe(true);
   });
 });
 
