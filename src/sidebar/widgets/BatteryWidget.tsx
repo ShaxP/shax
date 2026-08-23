@@ -155,9 +155,6 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
     return (
       <div data-testid="sidebar-battery-rail" style={RAIL_ROOT} title={tooltip}>
         <div style={RAIL_BAR_ROW}>
-          <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
-            <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
-          </div>
           {battery.charging && (
             <BoltGlyph
               size={9}
@@ -166,6 +163,9 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
               title="Charging"
             />
           )}
+          <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
+            <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
+          </div>
         </div>
         <span style={RAIL_PERCENT} data-testid="sidebar-battery-rail-percent">
           {percent ?? "?"}

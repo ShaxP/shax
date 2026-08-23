@@ -173,13 +173,23 @@ describe("BatteryWidget / rail", () => {
     expect(screen.getByTestId("sidebar-battery-rail-fill").style.width).toBe("82%");
   });
 
-  it("shows a lightning-bolt glyph beside the bar when charging", () => {
+  it("shows a lightning-bolt glyph to the LEFT of the bar when charging", () => {
     render(
       <BatteryProvider value={status({ charging: true })}>
         <BatteryWidget visible={false} />
       </BatteryProvider>,
     );
-    expect(screen.getByTestId("sidebar-battery-rail-charging")).toBeInTheDocument();
+    const bolt = screen.getByTestId("sidebar-battery-rail-charging");
+    const track = screen.getByTestId("sidebar-battery-rail-track");
+    expect(bolt).toBeInTheDocument();
+    // DOM order maps to visual left-to-right in a flex row without
+    // `flex-direction: row-reverse`. The bolt sits before the bar
+    // (per `design/battery-charging-collapsed.png`), so a re-order
+    // that puts it back on the right would break this assertion.
+    const parent = bolt.parentElement;
+    if (parent === null) throw new Error("bolt must have a flex-row parent");
+    const children = Array.from(parent.children);
+    expect(children.indexOf(bolt)).toBeLessThan(children.indexOf(track));
   });
 
   it("hides the charging glyph in the rail when not charging", () => {
