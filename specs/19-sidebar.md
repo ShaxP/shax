@@ -278,3 +278,207 @@ Playwright end-to-end: one new file `e2e/sidebar.spec.ts` — rail-by-default, c
 ## Roadmap slot
 
 Insert as **M13 Sidebar with pinnable widgets (Phase 1)** in `12-roadmap-milestones.md`, immediately after the M12 section. Remove the current "Sidebar with pinnable widgets" bullet from Post-M8 candidates in the same commit; the Phase 2 (community widget sandbox) content stays in the roadmap file as its own "Post-M13" candidate.
+
+---
+
+# Phase 1 extensions (M13.5)
+
+Reference mockups: `design/sidebar-extended.png` (expanded), `design/sidebar-collapsed.png` (rail), `design/disk-widget-1.png` through `design/disk-widget-4.png` (Disk pager states). These supersede the M13-era `design/widget-sidebar.png`, which is deleted in the same commit as this spec — one canonical mockup per state, no fossils to argue with.
+
+## What this milestone adds
+
+Three new widgets (Calendar, Battery, Disk), three reshapes of shipped widgets (Clock, Memory, Repo), and a full remodel of the collapsed rail. Same Phase 1 charter as M13 — no runtime, no schema, no sandbox — and every widget stays Shax-authored React sitting in-repo. The extension is scoped to what daily use of the M13 sidebar surfaced as missing, plus the collapsed-rail rework that has to ship alongside because its mini-cards can only be laid out once the full extended widget set is present.
+
+## Locked decisions (extending D1–D6)
+
+Every decision below is my recommendation, called out so you can push back before we sink cost — same rule as the original D-block.
+
+### D7 — Uptime lives inside the Clock widget, not as a standalone widget
+
+The mockup shows `up 6d 04h · CEST` on the third line of the Clock card. Uptime is treated as a peer to timezone rather than as its own tile:
+
+- Both answer variants of the same question — "wall time on this machine" — and both belong in the same visual frame.
+- A standalone "uptime + boot time + load average" widget would compete with the CPU card for the same slot in the reader's eye without carrying meaningfully different content.
+- The Clock card's third line is already the "at-a-glance context for what's shown above" slot; timezone establishes when, uptime establishes how long.
+
+Requires one new probe (`system_uptime_seconds() -> u64`) added to the existing `status.rs` — `sysinfo::System::uptime()` covers all three OSes.
+
+**Rejected alternative:** a dedicated "System" widget carrying uptime + boot time + `load N.NN`. Splits the answer to one question across two widgets (CPU already carries load) and adds a fourth thing competing for glance-height. Uptime in Clock is one line of dim text; the split loses the compactness.
+
+### D8 — Calendar is a hollow month grid; no event data, no permissions
+
+The Calendar widget renders the current month as a M-T-W-T-F-S-S grid with today highlighted in an accent circle, plus prev/next chevrons for month navigation. Days from the previous and next month fill out the edge weeks in a dim colour so every week row is complete.
+
+Explicitly not:
+
+- **EventKit / macOS Calendar integration.** Reading real events needs an entitlement plus a permission prompt — the exact shape of the CoreLocation dance that turned verification-backlog entry 1 into a two-round debug session — plus a Windows / Linux equivalent story that does not exist. The benefit real events would carry does not justify a permission prompt to render a datepicker.
+- **CalDAV / iCloud / Google Calendar sync.** Auth + network, and Phase 1 explicitly ships no networked widgets.
+- **A `.ics` file reader.** A file picker + `.ics` parser is a small feature that mainly serves users who already have a first-class calendar app open elsewhere.
+
+The card exists so a user glancing at the sidebar can answer "what day of the month is it, and how far into the week?" without leaving the terminal. That is the whole scope. Real events belong in Phase 2 as a networked / entitled widget, if a real ask arises.
+
+Navigation is client-only — no probes, no persistence. Prev/next chevrons walk months; the "today" reference is preserved on return.
+
+### D9 — Battery gains a sidebar card; the statusbar chip is not removed in this milestone
+
+The statusbar carries a battery chip today (M12.4b). The sidebar's Battery card is richer: `82% · 4h 20m` labels with a full-width horizontal bar underneath, coloured by state (green when discharging comfortably, amber when low, blue when charging).
+
+Both surfaces stay for M13.5. Consolidation is a separate conversation, held after the sidebar version has landed and been lived with. Time and IP already have the same overlap — both live in the sidebar and the statusbar today — and the right time to settle "what does the statusbar carry now that the sidebar exists?" is once, across every duplicated signal at the same time, not per-widget in the milestone that first duplicates it.
+
+The card hides itself entirely when no battery is present. Desktops with no battery see no gap and no placeholder — same graceful-degradation rule the M13 widgets follow.
+
+### D10 — Disk is a pager over volumes; the Network pattern applies exactly
+
+Reference: `design/disk-widget-1.png` (system volume, comfortable), `-2.png` (a paired data volume), `-3.png` (an external drive at 91% used — bar heat-mapped red), `-4.png` (a scratch volume with a non-APFS filesystem).
+
+The card renders one volume at a time with header `DISK ◀ n ▶`, mirroring Network's pager visual. Each card:
+
+- Volume name (bold, left) and free space (right, in the same slot Network uses for signal bars).
+- Mount point (dim, second line).
+- Horizontal usage bar, heat-mapped by percent used: teal below 70%, amber 70–90%, red at or above 90%. Same colour-carries-state principle as the CPU sparkline.
+- Bottom line: `NN% used of X TB · FILESYSTEM` — filesystem type (`APFS` / `exFAT` / `NTFS` / `ext4`) right-aligned so it lines up across volumes.
+
+Volume enumeration and filtering, per OS:
+
+- **macOS:** `getmntinfo(3)` (or `libc::statfs` walk). Filter out any mount whose flags carry `MNT_SNAPSHOT`, whose filesystem type is `devfs` / `autofs` / `nullfs`, or whose mount point sits under `/System/Volumes/Preboot`, `/System/Volumes/VM`, `/System/Volumes/Update`. Keep `Macintosh HD` (the read-only system snapshot) and `Data` (the user data volume) — both are addressable and meaningful.
+- **Linux:** `/proc/mounts` + `statvfs`. Filter out `tmpfs`, `sysfs`, `proc`, `cgroup*`, `devpts`, `overlay`, and any mount under `/proc`, `/sys`, `/dev`, `/run` (unless the user has explicitly mounted a real volume there).
+- **Windows:** `GetLogicalDriveStrings` + `GetDiskFreeSpaceEx`. Keep `DRIVE_FIXED` and `DRIVE_REMOVABLE`; exclude `DRIVE_UNKNOWN`, `DRIVE_NO_ROOT_DIR`, and `DRIVE_CDROM` when no media is present.
+
+Selection is by **mount point**, not by index — same reason Network's selection is by interface name. An index would slide the card onto a neighbour when a volume unmounts. Ephemeral, not persisted.
+
+Two refresh tiers, same shape as Network:
+
+- **Enumeration + filesystem type + total capacity** on the descriptive 30s tier — volumes come and go from user action, not from data change.
+- **Free space** on the same 30s tier — it is not a delta and forking `statvfs` every 2 seconds is wasted.
+
+**Rejected alternative:** a summed "total free across all volumes" chip. Sums a Backup drive's free space against a system disk that is nearly full into one meaningless number; the reader still has to page volumes to know which one is the concerning one.
+
+### D11 — Collapsed rail remodel: dense mini-cards, not one glyph per widget
+
+Reference: `design/sidebar-collapsed.png`.
+
+The M13.1 rail was "one glyph per widget at 44px." With nine widgets in the extended set the glyph rail runs out of information density — a coffee cup and a plug do not answer "what is my machine actually doing right now?" The remodel replaces the glyph rail with **compact data cards**, one per widget:
+
+- **Clock** — `HH` above `MM` as a two-line stack (mockup shows `07` above `22`).
+- **Calendar** — three-letter month above the day-of-month in an accent circle (`AUG` / `23`).
+- **Network** — signal bars only; no SSID, no IP.
+- **CPU** — mini sparkline over the percent, matching the extended card's bar treatment at reduced width.
+- **Memory** — miniature donut with `%` inside, same language as the extended card.
+- **Disk** — free-GB figure as a bare number, no bar (bar is the width the rail doesn't have).
+- **Network throughput** — `↑1.2` / `↓240` on two lines (unit implied by context).
+- **Battery** — mini bar (colour-coded) above the percent.
+- **Repo** — `⎇` glyph above `+n ~n` on two lines when non-zero; empty when clean.
+- **Caffeinate** — coffee glyph, opacity-carried on/off state.
+- **Expand chevron** — pinned to the bottom, unchanged.
+
+Rail width may grow modestly from the M13.1 44px to accommodate two-digit figures at a legible weight. Cap at 56px — beyond that we are approaching "small expanded state" and the reader has already asked for the expanded state at 280px. Final width lands during implementation once type metrics are known.
+
+**The rail is never a mode.** Every rail card is display-only, and clicking any rail card expands the sidebar rather than invoking the widget's action. This is D1's "clicking a glyph is 'expand,' not 'toggle caffeinate'" rule, kept intact — the substitution is content-density, not interaction-model.
+
+**Rejected alternative:** a "third state" that is dense-cards-with-full-labels between the current rail and the expanded state. Three states of a binary preference — same reason D2 rejected a "fully hidden" state. Two states is enough; density substitution inside the collapsed state is not a third state.
+
+### D12 — No "local metrics only" footer on the sidebar
+
+The mockup carried a `● local metrics only` footer chip at the bottom of the expanded sidebar. Not shipped, on the reasoning that:
+
+- Phase 2 will let community widgets request network access via a capability gate (per `12-roadmap-milestones.md` Post-M13 candidate). At that point the footer either becomes a lie or has to grow into a per-widget indicator. Building it now to sunset it in Phase 2 is churn.
+- The local-first pledge is already carried in the README (M13.4 amendment extended it), the Preferences → Assistant privacy row, and the empty-state hero — the surfaces where a user asking the question would go looking. A sidebar footer preaches to the choir.
+- A per-widget capability indicator (a small globe / lock in each card's header) is the shape Phase 2 will need anyway. The footer would compete with it and lose.
+
+The pledge stays true — no M13.5 widget makes any network call — but the assurance lives where it earns its space, not as ambient sidebar chrome.
+
+## Widget set at M13.5
+
+Building on D5 (M13's five widgets), the extended set is **nine**, top-to-bottom in the order pinned by `design/sidebar-extended.png`:
+
+1. **Clock** — reshaped per D7 + mockup. Big `HH:MM` (mono, primary), accent-coloured seconds `SS` (small, right of the minutes). Second line: full weekday + day + month (`Sunday 23 August`). Third line: `up Nd NNh · TZABBR`. No change to tick source.
+2. **Calendar** — NEW per D8. Client-side render only.
+3. **Network** — unchanged from the M13 refinement pass (multi-interface pager).
+4. **CPU** — unchanged. Extended CPU card format from the M13 refinement (heat-mapped sparkline + `load N.NN · N cores`).
+5. **Memory** — donut + `used / total GB` unchanged; **adds a `swap N.N GB` line** below the primary readout. `sysinfo::System::used_swap()` supplies the number cross-platform; the line reads swap actually in use, not swap allocated (an idle Mac with `SwapTotal ≠ 0` should read `swap 0.0 GB`, not `swap 8.0 GB`). Hide the swap line entirely when `total_swap == 0`.
+6. **Disk** — NEW per D10.
+7. **Battery** — NEW per D9. Consumes the existing M12.4b `system_battery` probe — no new backend.
+8. **Repo** — extended: **the `?n` untracked count is added** to the working-tree summary line, in a dim colour (weaker than `+n` staged green and `~n` unstaged amber, but present). Reuses the existing `git_status_porcelain` output, which already carries untracked entries; the current widget just doesn't count them. Zero counts continue to be omitted rather than printed as `?0`.
+9. **Caffeinate** — unchanged.
+
+Widget order is fixed for M13.5 — drag-to-reorder remains Phase 2 territory per D5.
+
+## Slices
+
+Five sub-PRs after this spec.
+
+### M13.5.1 — This spec + mockup housekeeping
+
+Scope: land this section, wire the mockup references, delete the superseded `design/widget-sidebar.png`. No code, no widget changes.
+
+**Exit:** spec merged; canonical mockups are only the new ones.
+
+### M13.5.2 — In-place reshapes
+
+Scope: everything that changes an existing widget without adding a new one, plus the one new native probe the reshapes need.
+
+- **Clock:** format per mockup, add the third line (uptime + timezone).
+- **Memory:** add the swap line.
+- **Repo:** add the `?n` untracked count.
+- **Rust:** `system_uptime_seconds()` in `status.rs`, via `sysinfo::System::uptime()`.
+- **Frontend:** timezone read from `Intl.DateTimeFormat().resolvedOptions().timeZone`, resolved to a short abbreviation via `Intl.DateTimeFormat(..., { timeZoneName: 'short' })`. No probe — JS reads the OS timezone directly.
+
+**Exit:** Clock card matches mockup. Memory card shows a swap line on machines with active swap, hides it cleanly on machines without. Repo card carries `?n` when there are untracked files, omits when there are none.
+
+### M13.5.3 — Calendar + Battery in sidebar
+
+Scope: two new widgets, no new native probes.
+
+- New `src/sidebar/widgets/CalendarWidget.tsx` — month grid, today highlighted, prev/next chevrons. Pure client render.
+- New `src/sidebar/widgets/BatteryWidget.tsx` — consumes existing M12.4b `system_battery` probe.
+- Both wired into the sidebar's widget slot in the order pinned above.
+
+**Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present; silently omitted when not.
+
+### M13.5.4 — Disk widget + volume pager
+
+Scope: the milestone's biggest slice.
+
+- New volume-enumeration surface in `status.rs` (or a dedicated `disk.rs`, at the implementer's call): macOS `getmntinfo`, Linux `/proc/mounts` + `statvfs`, Windows `GetLogicalDriveStrings` + `GetDiskFreeSpaceEx`, all behind one `disk_volumes() -> Vec<VolumeInfo>` command. Filtering per D10.
+- New `src/sidebar/widgets/DiskWidget.tsx` — pager over volumes, mirrors `NetworkWidget`'s structure (selection by mount point, on-mount fresh probe, 30s refresh).
+
+**Exit:** Disk card shows every mounted volume the D10 filter admits, one at a time; paging arrows walk through them; the bar heat-maps to used-percent; filesystem type shows for each; a volume that unmounts drops from the pager on the next refresh without shifting the selection off the currently-viewed volume onto a neighbour.
+
+### M13.5.5 — Collapsed rail remodel
+
+Scope: replace the M13.1 glyph rail with the D11 mini-card rail, once the extended widget set is complete.
+
+- Each widget grows a `Rail` render alongside its expanded render — the existing pattern from M13, extended across all nine widgets.
+- Rail width bumped from 44px to whatever the mockup's cards land at (probably 52–56px, decided during implementation).
+- The click-to-expand contract (D1) is preserved.
+
+**Exit:** collapsed sidebar matches `design/sidebar-collapsed.png` at typical DPI; every rail card is display-only; clicking any card expands the sidebar rather than firing the card's action.
+
+## Non-goals for M13.5 (explicit, not deferred)
+
+- **Weather widget** — same reason as M13. Phase 2 with the capability gate.
+- **Uptime as a standalone widget** — folded into Clock per D7. If a user ever asks "why is uptime hiding in a Clock", we split it out; nobody has yet.
+- **Calendar with real events** — per D8. Not "eventually", not "with a flag" — Phase 2 with a networked or entitled capability, if at all.
+- **Statusbar consolidation** — per D9. Separate follow-up conversation, not a slice of this milestone.
+- **`● local metrics only` footer** — per D12.
+- **Drag-to-reorder** — still Phase 2 (D5).
+- **Per-widget preferences** — still deferred; the widgets that could earn one (Calendar first-day-of-week, Disk hide-external-drives) don't in v1.
+
+## Testing (extension)
+
+Per the CLAUDE.md testing policy, each slice writes tests alongside.
+
+- **M13.5.2** — `ClockWidget.test.tsx` grows cases for the uptime line format (`up 6d 04h`, singular/plural boundary, `up NNm` when uptime is minutes only), the timezone abbreviation, and the three-line mockup layout. `MemoryWidget.test.tsx` grows a swap-line-present case, a swap-line-hidden-when-`total_swap == 0` case, and a swap-line-reads-0.0-when-idle-but-swap-configured case. `GitBranchWidget.test.tsx` grows an untracked-count-visible case and an untracked-zero-omitted case. Rust: `status.rs` gets a smoke test that `system_uptime_seconds()` returns a plausible non-zero number on the CI host.
+- **M13.5.3** — `CalendarWidget.test.tsx` covers month rendering (current month, prev-month days greyed, today accented), prev/next chevron navigation with today-preservation, and the "widget makes zero backend calls" guarantee. `BatteryWidget.test.tsx` covers charging vs discharging colour, the estimate rendering, and the "no battery → widget hidden" case.
+- **M13.5.4** — `DiskWidget.test.tsx` covers pager navigation, heat-mapped bar at three utilisations (below 70%, 70–90%, ≥90%), the `used-of-total · filesystem` bottom line, and — the invariant Network also tests — selection sticks to mount point when a volume earlier in the pager unmounts. Rust: `disk_volumes()` gets a smoke test that it returns a non-panicking non-empty list on the CI host, plus a unit test on the filter logic against synthetic mount lists that exercises each of the "should be excluded" cases (tmpfs, sysfs, snapshot, autofs, etc.).
+- **M13.5.5** — `Sidebar.test.tsx` grows cases for the new rail rendering (each widget renders its Rail variant when `visible=false`), and the click-to-expand contract (clicking any rail card fires the sidebar-expand handler, not the widget's own action).
+
+Playwright: `e2e/sidebar.spec.ts` grows one case per new widget (renders in the extended state), and one for the rail remodel (renders in the collapsed state). Backend-dependent behaviour (disk enumeration, uptime) stays in the Rust tests where a real host is available; the Playwright harness runs against the bare Vite dev server without a Tauri host per M13's existing note.
+
+## Cross-cutting concerns (extension)
+
+The M13 spec's cross-cutting concerns still apply. Three updates:
+
+- **Local-first (non-negotiable #6).** Every M13.5 widget continues the zero-network-traffic-of-our-own rule. Disk shells out to `statvfs` / `GetDiskFreeSpaceEx`; Calendar uses no data source at all; Battery reuses the existing local probe; the Clock's timezone reads from the OS's own zone via `Intl`, in-process JS with no external lookup. **No** IP-geolocation for a Weather widget that isn't being built.
+- **Daily-driver first (non-negotiable #1).** Nine widgets is more than five; the collapsed rail remodel exists so users who don't want to give up 280px of pane width still get glanceable value out of the sidebar. The 44px → ~56px growth is a real cost, paid deliberately to make the compact state useful rather than merely present.
+- **Fidelity contract (non-negotiable #2).** Every new widget's failure mode is `None → hidden`, not `None → placeholder`: Memory hides the swap line when `total_swap == 0`, Battery hides itself when there's no battery, Calendar has no failure mode (no probes to fail), Repo's `?n` count omits when zero. Same pattern the M13 widgets already follow.
