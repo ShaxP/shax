@@ -183,23 +183,22 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
 
 /** One bar. `null` is an unfilled slot and draws nothing.
  *
- *  Every bar carries its *own* load's colour, not the current one —
- *  that's what makes the history worth drawing: a red stretch behind
- *  a green newest bar says "it spiked and recovered", which a
- *  uniformly-tinted chart cannot say.
- *
- *  Recency is carried by opacity instead, so the two signals stay
- *  independent: hue is how hot, brightness is how recent. */
+ *  Historical bars render in a uniform faint colour; only the
+ *  newest bar carries its heat colour — the current reading. This
+ *  matches `design/sidebar-extended.png`; earlier drafts heat-mapped
+ *  every bar (with opacity for recency) so a red stretch behind a
+ *  green newest bar read as "it spiked and recovered". The refreshed
+ *  mockup deliberately trades that signal for a calmer visual: the
+ *  history is shape-only (activity vs quiet), and the current bar's
+ *  colour tells you the current magnitude. Spec §19 D5 item 2 is
+ *  amended for the change. */
 function barStyle(sample: number | null, isNewest: boolean): CSSProperties {
   if (sample === null) return BAR_BASE;
   return {
     ...BAR_BASE,
     height: `${Math.max(0, Math.min(100, sample))}%`,
     minHeight: MIN_BAR_PX,
-    background: heatColour(sample),
-    // High enough that a dimmed red still reads as red rather than
-    // drifting toward the amber band.
-    opacity: isNewest ? 1 : 0.65,
+    background: isNewest ? heatColour(sample) : "var(--fg-faint)",
   };
 }
 

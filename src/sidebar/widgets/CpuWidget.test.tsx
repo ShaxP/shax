@@ -170,32 +170,40 @@ describe("CpuWidget / sparkline", () => {
     expect(screen.getByTestId("sidebar-cpu-sparkline").style.height).toBe(`${SPARKLINE_HEIGHT}px`);
   });
 
-  it("marks the newest sample by brightness, not by hue", () => {
-    // Hue is how hot, brightness is how recent. Keeping them
-    // independent is what lets a red stretch behind a green newest
-    // bar say "it spiked and recovered".
-    render(
-      <SystemLoadProvider value={load({}, [10, 90])}>
-        <CpuWidget visible={true} />
-      </SystemLoadProvider>,
-    );
-    const bars = screen.getAllByTestId("sidebar-cpu-bar");
-    expect(bars[bars.length - 1]?.style.opacity).toBe("1");
-    expect(Number(bars[0]?.style.opacity)).toBeLessThan(1);
-  });
-
-  it("colours each bar by its OWN load, not by the current reading", () => {
-    // The load-bearing property of the heat map: history keeps the
-    // colour it earned. A chart tinted by the latest value would
-    // erase the spike it exists to show.
+  it("colours only the newest bar with the heat scale; historical bars are monochrome", () => {
+    // Match `design/sidebar-extended.png`: the chart is shape-only
+    // for history (activity vs quiet) and only the current bar
+    // carries the heat colour that answers "how hot right now?".
+    // Trades the earlier "red stretch behind a green newest bar
+    // says it spiked and recovered" signal for a calmer visual.
     render(
       <SystemLoadProvider value={load({ cpu_percent: 5 }, [95, 5])}>
         <CpuWidget visible={true} />
       </SystemLoadProvider>,
     );
     const bars = screen.getAllByTestId("sidebar-cpu-bar");
-    expect(bars[0]?.style.background).toBe("var(--red)");
+    // Historical bar (at 95% load) does NOT render as red — it's
+    // in the shared monochrome tier.
+    expect(bars[0]?.style.background).not.toBe("var(--red)");
+    expect(bars[0]?.style.background).toBe("var(--fg-faint)");
+    // Newest bar (at 5% load = green) carries its own heat colour.
     expect(bars[bars.length - 1]?.style.background).toBe("var(--green)");
+  });
+
+  it("gives every historical bar the same monochrome colour", () => {
+    // Regression guard: if a future refactor accidentally re-enables
+    // heat-per-bar for history, the two mixed-load past samples here
+    // would render as different colours and this test would catch it.
+    render(
+      <SystemLoadProvider value={load({}, [10, 50, 85, 95])}>
+        <CpuWidget visible={true} />
+      </SystemLoadProvider>,
+    );
+    const bars = screen.getAllByTestId("sidebar-cpu-bar");
+    const historical = bars.slice(0, -1);
+    for (const bar of historical) {
+      expect(bar.style.background).toBe("var(--fg-faint)");
+    }
   });
 });
 
@@ -213,16 +221,19 @@ describe("CpuWidget / heat map", () => {
     expect(heatColour(percent)).toBe(expected);
   });
 
-  it("colours the header percentage on the same scale as the bars", () => {
-    // A red chart under a green number would be incoherent — they are
-    // the same reading.
+  it("colours the header percentage and the newest bar on the same scale", () => {
+    // A red percentage above a green newest bar (or vice versa)
+    // would be incoherent — both come from the current reading and
+    // must agree. Only history is monochrome; the current sample
+    // takes the same heat colour the percent uses.
     render(
       <SystemLoadProvider value={load({ cpu_percent: 91 }, [91])}>
         <CpuWidget visible={true} />
       </SystemLoadProvider>,
     );
     expect(screen.getByTestId("sidebar-cpu-percent").style.color).toBe("var(--red)");
-    expect(screen.getAllByTestId("sidebar-cpu-bar")[0]?.style.background).toBe("var(--red)");
+    const bars = screen.getAllByTestId("sidebar-cpu-bar");
+    expect(bars[bars.length - 1]?.style.background).toBe("var(--red)");
   });
 });
 
