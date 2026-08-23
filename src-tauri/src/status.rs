@@ -82,6 +82,17 @@ pub struct BatteryStatus {
     pub percent: Option<u8>,
     pub on_ac_power: bool,
     pub charging: bool,
+    /// Seconds remaining, extended in M13.5.3 for the sidebar Battery
+    /// widget's `4h 20m` label. Interpretation depends on `charging`:
+    /// - `charging = true`  → time to full
+    /// - `charging = false, on_ac_power = false` → time to empty
+    /// - Otherwise (fully-charged-on-AC, unknown, etc.) → `None`
+    ///
+    /// `None` is honest: it means the OS didn't estimate a value we
+    /// can trust — a fresh battery, a rare `State::Full` reading, a
+    /// firmware quirk. The widget hides the estimate rather than
+    /// inventing one.
+    pub seconds_remaining: Option<u64>,
 }
 
 impl BatteryStatus {
@@ -93,6 +104,7 @@ impl BatteryStatus {
             percent: None,
             on_ac_power: false,
             charging: false,
+            seconds_remaining: None,
         }
     }
 }
@@ -132,7 +144,17 @@ pub fn system_battery() -> BatteryStatus {
             continue;
         };
         let ratio = battery.state_of_charge().value;
-        if let Some(status) = snapshot_from(ratio, battery.state()) {
+        // starship-battery returns time-to-full while charging and
+        // time-to-empty while discharging as separate accessors; we
+        // pick the one that matches the current state and convert to
+        // whole seconds. Neither exists for `Full` / `Unknown`, and
+        // we honestly hand back `None` in those cases.
+        let seconds_remaining = match battery.state() {
+            State::Charging => battery.time_to_full().map(|d| d.value.round() as u64),
+            State::Discharging => battery.time_to_empty().map(|d| d.value.round() as u64),
+            _ => None,
+        };
+        if let Some(status) = snapshot_from(ratio, battery.state(), seconds_remaining) {
             return status;
         }
     }
@@ -176,7 +198,11 @@ pub fn system_battery() -> BatteryStatus {
 ///
 /// Split out so both rules are directly unit-testable without having
 /// to mock the `starship-battery` iterator.
-fn snapshot_from(ratio: f32, state: State) -> Option<BatteryStatus> {
+fn snapshot_from(
+    ratio: f32,
+    state: State,
+    seconds_remaining: Option<u64>,
+) -> Option<BatteryStatus> {
     if !ratio.is_finite() {
         tracing::debug!("skipping battery entry with non-finite state-of-charge");
         return None;
@@ -191,6 +217,7 @@ fn snapshot_from(ratio: f32, state: State) -> Option<BatteryStatus> {
         percent: Some(percent),
         on_ac_power,
         charging,
+        seconds_remaining,
     })
 }
 
@@ -622,6 +649,7 @@ mod tests {
             percent: Some(87),
             on_ac_power: false,
             charging: false,
+            seconds_remaining: Some(3_600),
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: BatteryStatus = serde_json::from_str(&json).unwrap();
@@ -638,6 +666,7 @@ mod tests {
         assert!(json.contains(r#""percent":null"#));
         assert!(json.contains(r#""on_ac_power":false"#));
         assert!(json.contains(r#""charging":false"#));
+        assert!(json.contains(r#""seconds_remaining":null"#));
     }
 
     #[test]
@@ -646,28 +675,32 @@ mod tests {
         // non-finite state-of-charge. `snapshot_from` must reject it
         // so the caller can try the next entry (or fall through to
         // `absent()` and render the desktop plug-alone chip).
-        assert!(snapshot_from(f32::NAN, State::Discharging).is_none());
-        assert!(snapshot_from(f32::INFINITY, State::Full).is_none());
-        assert!(snapshot_from(f32::NEG_INFINITY, State::Charging).is_none());
+        assert!(snapshot_from(f32::NAN, State::Discharging, None).is_none());
+        assert!(snapshot_from(f32::INFINITY, State::Full, None).is_none());
+        assert!(snapshot_from(f32::NEG_INFINITY, State::Charging, None).is_none());
     }
 
     #[test]
     fn snapshot_from_maps_state_charging_to_both_flags_true() {
         // Actively drawing energy into the battery.
-        let s = snapshot_from(0.45, State::Charging).expect("charging is real");
+        let s = snapshot_from(0.45, State::Charging, Some(1_800)).expect("charging is real");
         assert!(s.on_ac_power);
         assert!(s.charging);
         assert_eq!(s.percent, Some(45));
+        assert_eq!(s.seconds_remaining, Some(1_800));
     }
 
     #[test]
     fn snapshot_from_maps_state_full_to_on_ac_but_not_charging() {
         // Plugged-in laptop at 100%. macOS reports IsCharging=false
         // in this case — the OS-level distinction we're preserving.
-        let s = snapshot_from(1.00, State::Full).expect("full is real");
+        let s = snapshot_from(1.00, State::Full, None).expect("full is real");
         assert!(s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(100));
+        // No time-remaining at the rest state — nothing to count
+        // down to, nothing to charge toward.
+        assert_eq!(s.seconds_remaining, None);
     }
 
     #[test]
@@ -675,15 +708,16 @@ mod tests {
         // Unplugged laptop consuming battery. Note: even at 100%
         // (unplugged full-charge laptop), Discharging still resolves
         // to on-battery — this is the MBP bug the mapping fixes.
-        let s = snapshot_from(1.00, State::Discharging).expect("discharging is real");
+        let s = snapshot_from(1.00, State::Discharging, Some(14_400)).expect("discharging is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(100));
+        assert_eq!(s.seconds_remaining, Some(14_400));
     }
 
     #[test]
     fn snapshot_from_maps_state_empty_to_neither_flag() {
-        let s = snapshot_from(0.00, State::Empty).expect("empty is real");
+        let s = snapshot_from(0.00, State::Empty, None).expect("empty is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(0));
@@ -693,7 +727,7 @@ mod tests {
     fn snapshot_from_maps_state_unknown_to_neither_flag_defensively() {
         // Ambiguous OS state: default to "on battery" so we never
         // silently misreport an unplugged laptop as AC power.
-        let s = snapshot_from(0.55, State::Unknown).expect("unknown is real");
+        let s = snapshot_from(0.55, State::Unknown, None).expect("unknown is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(55));
@@ -704,9 +738,9 @@ mod tests {
         // Noisy firmware occasionally reports slightly outside
         // 0.0..=1.0 — we clamp rather than reject, because the
         // battery is still real.
-        let over = snapshot_from(1.03, State::Discharging).expect("clamped");
+        let over = snapshot_from(1.03, State::Discharging, None).expect("clamped");
         assert_eq!(over.percent, Some(100));
-        let under = snapshot_from(-0.02, State::Discharging).expect("clamped");
+        let under = snapshot_from(-0.02, State::Discharging, None).expect("clamped");
         assert_eq!(under.percent, Some(0));
     }
 

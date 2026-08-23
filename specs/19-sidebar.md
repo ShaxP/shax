@@ -445,13 +445,14 @@ Scope: everything that changes an existing widget without adding a new one. No n
 
 ### M13.5.3 — Calendar + Battery in sidebar
 
-Scope: two new widgets, no new native probes.
+Scope: two new widgets and one small extension of the existing `system_battery` probe.
 
 - New `src/sidebar/widgets/CalendarWidget.tsx` — month grid, today highlighted, prev/next chevrons. Pure client render.
-- New `src/sidebar/widgets/BatteryWidget.tsx` — consumes existing M12.4b `system_battery` probe.
-- Both wired into the sidebar's widget slot in the order pinned above.
+- New `src/sidebar/widgets/BatteryWidget.tsx` — consumes `system_battery` via a new `BatteryContext` (shared with the M12.4b statusbar chip).
+- **`BatteryStatus` gains `seconds_remaining: Option<u64>`** — the mockup's `4h 20m` label needs it and the earlier draft of this slice claimed "no new backend" in error. `starship-battery` already exposes `time_to_full` / `time_to_empty`; we pick the one that matches the current state (`Charging` → time-to-full, `Discharging` → time-to-empty, everything else → `None`). Frontend hides the label rather than inventing one when the OS returns `None`.
+- Both widgets wired into the sidebar's widget slot in the order pinned above.
 
-**Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present; silently omitted when not.
+**Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present, with `82% · 4h 20m` labels and a state-coloured bar (green when discharging comfortably, amber when < 20 %, blue when charging, dim when fully-charged-on-AC); silently omitted when no battery.
 
 ### M13.5.4 — Disk widget + volume pager
 

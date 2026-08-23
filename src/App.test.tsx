@@ -128,7 +128,15 @@ vi.mock("./lib/ipc", () => ({
     percent: number | null;
     on_ac_power: boolean;
     charging: boolean;
-  }> => Promise.resolve({ present: false, percent: null, on_ac_power: false, charging: false }),
+    seconds_remaining: number | null;
+  }> =>
+    Promise.resolve({
+      present: false,
+      percent: null,
+      on_ac_power: false,
+      charging: false,
+      seconds_remaining: null,
+    }),
   systemLocalIp: (): Promise<string | null> => Promise.resolve(null),
   // M13.3 — sidebar CPU/mem + SSID probes. Same rule: return the
   // benign fallback so the poll effects don't destabilise other
