@@ -335,6 +335,25 @@ Detail in `18-prompt-overhaul.md`. Sliced M12.1 – M12.8 (focus + mode pill, sh
 
 Detail in `19-sidebar.md`. Sliced M13.1 – M13.4 (sidebar chrome + toggle, clock + git-branch, CPU/memory + network, caffeinate).
 
+## M13.5 Sidebar Phase 1 extensions
+
+**Goal:** grow the M13 sidebar with three new widgets, four reshapes of shipped ones, and a full remodel of the collapsed rail — driven by what daily use of the M13 sidebar surfaced as missing. Same Phase 1 charter: no runtime, no schema, no sandbox. **Lead:** frontend, with core for the new native probe (`disk_volumes`).
+
+- **Clock reshape:** two-line format matching `design/sidebar-extended.png`. Line 1 is `HH:MM` (big) with accent-coloured seconds `SS` and timezone abbreviation right-aligned. Line 2 is the weekday + date. Uptime is not carried — deferred to Phase 2 per D7.
+- **Memory reshape:** adds a `swap N.N GB` line, hidden entirely when `total_swap == 0`. Uses `sysinfo::System::used_swap()`.
+- **Repo reshape:** adds the `?n` untracked count to the working-tree summary line, in a dim colour. Reuses existing `git_status_porcelain` output.
+- **Caffeinate reshape:** on-state gains an accent-blue card border; title flips from `Caffeinate` (verb) to `Caffeinated` (adjective); subtitle flips from `keep this Mac awake` to `awake for N m N s`; toggle uses accent blue rather than green. Backend, state machine, and honest-log placement unchanged. Reference: `design/caffeinated-selected.png`.
+- **Calendar widget:** hollow month grid with today highlighted, prev/next chevrons. No event data, no permissions, no OS calendar integration — that all belongs in Phase 2 as a networked / entitled capability, if a real ask arises.
+- **Battery widget:** sidebar card with `% · N h N m` and a full-width horizontal bar coloured by state (green discharging, amber low, blue charging). Reuses the existing M12.4b `system_battery` probe. Statusbar chip continues alongside; the "what does the statusbar carry now?" consolidation is a separate follow-up conversation.
+- **Disk widget:** pager over mounted volumes, mirroring the Network pager. Per-OS enumeration — macOS `getmntinfo`, Linux `/proc/mounts` + `statvfs`, Windows `GetLogicalDriveStrings` + `GetDiskFreeSpaceEx`. Filtering excludes snapshots, tmpfs, sysfs, virtual mounts. Heat-mapped usage bar (teal / amber / red). Reference: `design/disk-widget-1.png` … `-4.png`.
+- **Collapsed rail remodel:** replaces the M13.1 glyph rail with compact data cards (`HH` above `MM`, month + day-in-circle, mini sparkline, donut, throughput arrows, battery pill, etc.). Rail width may grow modestly, capped at 56px. The click-to-expand contract is preserved — every rail card is display-only.
+
+**Exit:** every window's sidebar renders the extended nine-widget set matching `design/sidebar-extended.png`; the collapsed rail matches `design/sidebar-collapsed.png` at typical DPI; Disk correctly pages through mounted volumes with the D10 filter applied on all three platforms; Battery shows on machines with a battery and hides on machines without; Clock renders in its two-line form; Caffeinate's on-state carries the accent border, adjective title, and contextual duration per `design/caffeinated-selected.png`; the click-to-expand rule holds for every rail card.
+
+**Explicitly out of scope:** Weather widget (Phase 2 with the network capability gate), uptime anywhere in the sidebar (deferred to Phase 2 per D7 — no standalone widget, no Clock line), Calendar with real events (Phase 2), statusbar consolidation (separate follow-up), `● local metrics only` footer (per D12), drag-to-reorder (Phase 2), per-widget preferences panels.
+
+Detail in `19-sidebar.md` § "Phase 1 extensions (M13.5)". Sliced M13.5.1 – M13.5.5 (spec, in-place reshapes, Calendar + Battery, Disk with volume pager, collapsed rail remodel).
+
 ## Post-M8 candidates
 
 Not-yet-sequenced work captured from a roadmap brainstorm. Each entry is a milestone-shaped chunk with its design calls already pinned; the sequencing into M14+ depends on which product lens gets prioritised — shipping to real users (installers + cross-platform), the AI-daily-driver story, filling out the terminal surface, or hardening what's already there. Move an entry into a numbered milestone once that decision is made.
