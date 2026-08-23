@@ -11,13 +11,16 @@
  *     colour because the semantic here is "actively refilling", not
  *     "current level" — a laptop at 10% but charging is on its way
  *     up, not in trouble.
- *   - **Discharging, ≥ 20%** — green. Comfortable.
- *   - **Discharging, < 20%** — amber. Low; a warning tint but not
- *     an alarm (that would be red at ≤ 10% — deferred until the
- *     signal is worth the noise).
- *   - **On AC power, not charging** (fully-charged plugged-in laptop) —
- *     dim `--fg-faint`. The battery isn't doing anything, and
- *     showing green there would falsely say "healthy discharging".
+ *   - **< 20 %** — amber. Low; a warning tint but not an alarm
+ *     (that would be red at ≤ 10% — deferred until the signal is
+ *     worth the noise).
+ *   - **Otherwise** — green. That covers everyday discharging AND
+ *     the fully-charged-on-AC case (macOS's `State::Full`, which
+ *     surfaces as `on_ac_power && !charging` on the wire): a full
+ *     battery is a healthy state, not an "inactive" one, and an
+ *     earlier draft rendered it dim on the "at rest" reading —
+ *     grey read as unhealthy / disconnected, the opposite of the
+ *     intent.
  *
  * Hides itself entirely when `present === false` — a desktop
  * machine or a probe failure. No placeholder, no "N/A".
@@ -164,14 +167,15 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
 }
 
 /** Colour rules from the widget header. Exported so a test can pin
- *  each branch without going through a render. */
-export function barColour(battery: {
-  percent: number | null;
-  on_ac_power: boolean;
-  charging: boolean;
-}): string {
+ *  each branch without going through a render.
+ *
+ *  `on_ac_power` deliberately doesn't feature: the only combination
+ *  where `on_ac_power && !charging` fires is `State::Full` (a
+ *  plugged-in laptop at 100%), and there the percent branch already
+ *  paints green — the healthy answer. Rendering the at-rest case as
+ *  dim (an earlier draft) misread as unhealthy / disconnected. */
+export function barColour(battery: { percent: number | null; charging: boolean }): string {
   if (battery.charging) return "var(--accent)";
-  if (battery.on_ac_power) return "var(--fg-faint)";
   if (battery.percent !== null && battery.percent < LOW_BATTERY_AT) return "var(--amber)";
   return "var(--green)";
 }

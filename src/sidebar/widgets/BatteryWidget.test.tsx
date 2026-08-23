@@ -99,25 +99,26 @@ describe("BatteryWidget / colour rules (barColour helper)", () => {
   it("charging is accent-blue — regardless of percent", () => {
     // A low-percent charging battery reads as "on its way up," not
     // "in trouble." Accent overrides amber.
-    expect(barColour({ percent: 10, on_ac_power: true, charging: true })).toBe("var(--accent)");
-    expect(barColour({ percent: 82, on_ac_power: true, charging: true })).toBe("var(--accent)");
+    expect(barColour({ percent: 10, charging: true })).toBe("var(--accent)");
+    expect(barColour({ percent: 82, charging: true })).toBe("var(--accent)");
   });
 
-  it("discharging low is amber (< 20%)", () => {
-    expect(barColour({ percent: 15, on_ac_power: false, charging: false })).toBe("var(--amber)");
-    expect(barColour({ percent: 0, on_ac_power: false, charging: false })).toBe("var(--amber)");
+  it("low is amber (< 20%)", () => {
+    expect(barColour({ percent: 15, charging: false })).toBe("var(--amber)");
+    expect(barColour({ percent: 0, charging: false })).toBe("var(--amber)");
   });
 
-  it("discharging comfortable is green (>= 20%)", () => {
-    expect(barColour({ percent: 20, on_ac_power: false, charging: false })).toBe("var(--green)");
-    expect(barColour({ percent: 100, on_ac_power: false, charging: false })).toBe("var(--green)");
+  it("comfortable is green (>= 20%)", () => {
+    expect(barColour({ percent: 20, charging: false })).toBe("var(--green)");
+    expect(barColour({ percent: 100, charging: false })).toBe("var(--green)");
   });
 
-  it("fully charged on AC (at rest) is dim, not green", () => {
-    // Plugged in at 100%, macOS reports charging=false. Green here
-    // would falsely say "healthy discharging"; the battery isn't
-    // discharging, so `--fg-faint` says "nothing happening here."
-    expect(barColour({ percent: 100, on_ac_power: true, charging: false })).toBe("var(--fg-faint)");
+  it("fully charged on AC is green, not grey", () => {
+    // Plugged in at 100%, macOS reports charging=false — the
+    // `State::Full` case. A full battery is a healthy state, not an
+    // "inactive" one; the earlier `--fg-faint` treatment read as
+    // unhealthy / disconnected, the opposite of the intent.
+    expect(barColour({ percent: 100, charging: false })).toBe("var(--green)");
   });
 });
 
