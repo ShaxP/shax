@@ -144,11 +144,14 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
             <span style={USED_BYTES} data-testid="sidebar-memory-used">
               {pair.used}
             </span>
-            {/* Slash + surrounding spaces baked into the string so
-             *  the visual space between the numbers is unambiguous:
-             *  a text-node leading space renders reliably; a flex
-             *  gap alone left the DOM reading as `40 GB/ 64 GB`. */}
-            <span style={TOTAL_BYTES}>{` / ${pair.total}`}</span>
+            {/* Non-breaking spaces around the slash. Regular spaces
+             *  work here in most browsers, but a leading whitespace
+             *  at the start of a flex item's content is subject to
+             *  `white-space: normal` collapsing — some layout engines
+             *  trim it, some don't, and the result is `40/ 64 GB`
+             *  with no space before the slash. U+00A0 isn't
+             *  collapsible, so the visual is stable everywhere. */}
+            <span style={TOTAL_BYTES}>{`\u00a0/\u00a0${pair.total}`}</span>
           </div>
           {swapLabel !== null && (
             <span style={SWAP_LINE} data-testid="sidebar-memory-swap">
