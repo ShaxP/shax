@@ -14,7 +14,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import { ClockProvider } from "../../lib/ClockContext";
-import { ClockWidget } from "./ClockWidget";
+import { ClockWidget, shortTimezone } from "./ClockWidget";
 
 afterEach(cleanup);
 
@@ -59,6 +59,55 @@ describe("ClockWidget / expanded", () => {
     expect(tooltip).toContain("Saturday");
     expect(tooltip).toContain("2024");
     expect(tooltip).toContain("14:35");
+  });
+
+  it("renders the OS timezone abbreviation right-aligned on the time row", () => {
+    // The abbreviation itself is host-dependent (CEST here, PST on a
+    // US west-coast dev, UTC+2 on a runtime that doesn't know the
+    // short name). What we can assert without pinning to a host: the
+    // slot renders, its content is non-empty, and it matches what the
+    // exported helper resolves against the same instant.
+    render(
+      <ClockProvider value={at(14, 35)}>
+        <ClockWidget visible={true} />
+      </ClockProvider>,
+    );
+    const label = screen.getByTestId("sidebar-clock-timezone").textContent ?? "";
+    expect(label).not.toBe("");
+    expect(label).toBe(shortTimezone(at(14, 35)));
+  });
+});
+
+describe("ClockWidget / shortTimezone helper", () => {
+  it("returns a non-empty string for any real Date", () => {
+    // Two arbitrary instants — a workday afternoon and a midnight —
+    // to make sure the helper doesn't get thrown by e.g. DST edges
+    // on a host that observes them.
+    expect(shortTimezone(new Date(2024, 5, 15, 14, 35, 0))).not.toBe("");
+    expect(shortTimezone(new Date(2024, 11, 21, 0, 0, 0))).not.toBe("");
+  });
+
+  it("falls back to the IANA zone name when Intl returned no short token", () => {
+    // The helper's fallback lives behind the `parts.find(...)` line.
+    // Simulate the empty-token case by monkey-patching Intl for the
+    // duration of the call, then restore.
+    const original = Intl.DateTimeFormat;
+    class Stub extends original {
+      override formatToParts(): Intl.DateTimeFormatPart[] {
+        return [{ type: "hour", value: "14" }];
+      }
+    }
+    // @ts-expect-error — deliberate replacement for this one call.
+    Intl.DateTimeFormat = Stub;
+    try {
+      const label = shortTimezone(new Date(2024, 5, 15, 14, 35, 0));
+      expect(label).not.toBe("");
+      // IANA zone names always contain either `/` or read as `UTC`;
+      // whatever the host is, one of these holds.
+      expect(label === "UTC" || label.includes("/")).toBe(true);
+    } finally {
+      Intl.DateTimeFormat = original;
+    }
   });
 });
 

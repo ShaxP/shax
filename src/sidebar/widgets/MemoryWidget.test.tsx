@@ -31,6 +31,10 @@ function load(overrides: Partial<SystemLoad> = {}): SystemLoadSeries {
       cpu_percent: 42.7,
       mem_used_bytes: 8 * GB,
       mem_total_bytes: 16 * GB,
+      // Default: swap is configured but idle — the shape most macOS
+      // and desktop-Linux setups have when the card renders.
+      swap_used_bytes: 0,
+      swap_total_bytes: 8 * GB,
       load_average_one: 1.84,
       core_count: 4,
       ...overrides,
@@ -125,5 +129,63 @@ describe("MemoryWidget / rail", () => {
     );
     // 1 / 16 ≈ 6% → "06".
     expect(screen.getByTestId("sidebar-memory-rail").textContent).toBe("06");
+  });
+});
+
+describe("MemoryWidget / swap line (M13.5)", () => {
+  it("renders `swap N.N GB` when swap is configured and in use", () => {
+    render(
+      <SystemLoadProvider
+        value={load({ swap_used_bytes: 200 * 1024 * 1024, swap_total_bytes: 8 * GB })}
+      >
+        <MemoryWidget visible={true} />
+      </SystemLoadProvider>,
+    );
+    const swap = screen.getByTestId("sidebar-memory-swap").textContent ?? "";
+    expect(swap).toMatch(/^swap /);
+    // Loose match on the number — the formatter's rules for MB/GB
+    // are tested separately, and we just want to confirm the label
+    // carries a sensible byte reading.
+    expect(swap).toMatch(/\d/);
+  });
+
+  it("reads `swap 0 MB` when swap is configured but idle", () => {
+    // Idle Mac case: 8 GB of swap allocated, nothing paged out.
+    // Reading `swap` (used) rather than `swap_total` is what makes
+    // the number reflect reality — the spec is explicit about this.
+    render(
+      <SystemLoadProvider value={load({ swap_used_bytes: 0, swap_total_bytes: 8 * GB })}>
+        <MemoryWidget visible={true} />
+      </SystemLoadProvider>,
+    );
+    const swap = screen.getByTestId("sidebar-memory-swap").textContent ?? "";
+    expect(swap).toMatch(/^swap /);
+    // The formatter renders sub-GB values as MB; 0 rounds to "0 MB".
+    expect(swap).toMatch(/0/);
+  });
+
+  it("hides the swap line entirely when swap_total_bytes is 0", () => {
+    // Machines with swap turned off (some Linux configurations,
+    // some sealed appliances) get no swap line — `swap 0.0 GB` on
+    // a system with no swap subsystem would misrepresent the platform.
+    render(
+      <SystemLoadProvider value={load({ swap_used_bytes: 0, swap_total_bytes: 0 })}>
+        <MemoryWidget visible={true} />
+      </SystemLoadProvider>,
+    );
+    expect(screen.queryByTestId("sidebar-memory-swap")).not.toBeInTheDocument();
+  });
+
+  it("does not render the swap line in the rail state", () => {
+    // The rail is percent-only; swap information belongs to the
+    // expanded card where there is room for a second line.
+    render(
+      <SystemLoadProvider
+        value={load({ swap_used_bytes: 200 * 1024 * 1024, swap_total_bytes: 8 * GB })}
+      >
+        <MemoryWidget visible={false} />
+      </SystemLoadProvider>,
+    );
+    expect(screen.queryByTestId("sidebar-memory-swap")).not.toBeInTheDocument();
   });
 });

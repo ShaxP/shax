@@ -916,6 +916,13 @@ export interface SystemLoad {
   cpu_percent: number;
   mem_used_bytes: number;
   mem_total_bytes: number;
+  /** Swap actually in use — not swap configured. Zero on machines
+   *  with no active swap traffic (an idle Mac often reads exactly 0
+   *  here even when `swap_total_bytes > 0`). */
+  swap_used_bytes: number;
+  /** Configured swap capacity. When 0, no swap is configured; the
+   *  memory card hides its swap line rather than reading `0.0 / 0.0`. */
+  swap_total_bytes: number;
   /** One-minute load average, or null where the platform has none to
    *  give (Windows). The CPU card omits the reading rather than
    *  printing a confident, meaningless `load 0.00`. */
@@ -928,6 +935,8 @@ const SYSTEM_LOAD_ZERO: SystemLoad = {
   cpu_percent: 0,
   mem_used_bytes: 0,
   mem_total_bytes: 0,
+  swap_used_bytes: 0,
+  swap_total_bytes: 0,
   load_average_one: null,
   core_count: null,
 };

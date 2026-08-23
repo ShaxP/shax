@@ -49,6 +49,15 @@ const TOTAL_BYTES: CSSProperties = {
   color: "var(--fg-dim)",
 };
 
+// The swap line sits under the primary memory readout. Dim + small,
+// because swap is context for the RAM figure rather than a peer
+// reading — a user glancing at the card should land on RAM first.
+const SWAP_LINE: CSSProperties = {
+  fontSize: 11,
+  color: "var(--fg-dim)",
+  fontFamily: "var(--font-mono)",
+};
+
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -72,8 +81,21 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
   const percentLabel = useMemo(() => `${Math.round(percent)}%`, [percent]);
   const usedLabel = useMemo(() => formatBytes(load.mem_used_bytes), [load.mem_used_bytes]);
   const totalLabel = useMemo(() => formatBytes(load.mem_total_bytes), [load.mem_total_bytes]);
+  // Swap line renders only when swap is actually configured. A machine
+  // with `swap_total_bytes = 0` (some Linux boxes) gets no line at
+  // all — showing `swap 0.0 GB` on a machine that literally has no
+  // swap subsystem would misrepresent the platform. The reading itself
+  // is `used`, not `total`, per the spec: an idle Mac with 8 GB of
+  // swap configured but nothing paged out reads `swap 0.0 GB`.
+  const hasSwap = load.swap_total_bytes > 0;
+  const swapLabel = useMemo(
+    () => (hasSwap ? formatBytes(load.swap_used_bytes) : null),
+    [hasSwap, load.swap_used_bytes],
+  );
   const tooltip = ready
-    ? `Memory: ${usedLabel} of ${totalLabel} in use (${percentLabel})`
+    ? hasSwap
+      ? `Memory: ${usedLabel} of ${totalLabel} in use (${percentLabel}) · swap ${swapLabel ?? "0"} in use`
+      : `Memory: ${usedLabel} of ${totalLabel} in use (${percentLabel})`
     : "Memory probe not available";
 
   if (!ready) return null;
@@ -98,6 +120,11 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
             </span>
             <span style={TOTAL_BYTES}>/ {totalLabel}</span>
           </div>
+          {swapLabel !== null && (
+            <span style={SWAP_LINE} data-testid="sidebar-memory-swap">
+              swap {swapLabel}
+            </span>
+          )}
         </div>
       </div>
     </div>

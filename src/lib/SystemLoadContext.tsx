@@ -19,6 +19,8 @@ const ZERO: SystemLoadSeries = {
     cpu_percent: 0,
     mem_used_bytes: 0,
     mem_total_bytes: 0,
+    swap_used_bytes: 0,
+    swap_total_bytes: 0,
     load_average_one: null,
     core_count: null,
   },
