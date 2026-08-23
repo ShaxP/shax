@@ -34,15 +34,16 @@ import { currentPlatform, type Platform } from "../../lib/platform";
 import { CARD } from "./styles";
 import "./CaffeinateWidget.css";
 
-/** Resting variant. Same as `CARD`, but with an explicit
- *  `borderColor` so React's style-diffing cannot leak the previous
- *  render's `borderColor` (e.g. leftover accent from a just-active
- *  card) into the resting render. Without this, switching from
- *  CARD_ACTIVE back to a bare CARD sometimes left the border in an
- *  intermediate state on some browsers — reported once as a
- *  "white border" on the off-state widget. */
+/** Resting variant. Same as `CARD`, but with `borderColor` and
+ *  `background` set explicitly so React's style-diffing cannot leak
+ *  the previous render's longhand values into the resting render.
+ *  Without this, switching from CARD_ACTIVE back to a bare CARD
+ *  sometimes left the border in an intermediate state on some
+ *  browsers — reported once as a "white border" on the off-state
+ *  widget. */
 const CARD_RESTING: CSSProperties = {
   ...CARD,
+  background: "transparent",
   borderColor: "var(--border)",
 };
 
@@ -50,9 +51,16 @@ const CARD_RESTING: CSSProperties = {
  *  weight is unchanged from the resting card — only the colour
  *  changes — because the accent hue alone is the recognisable
  *  signal in peripheral vision; growing the border thickness on top
- *  of that would double-count and shift the card's height. */
+ *  of that would double-count and shift the card's height.
+ *
+ *  `background: transparent` is set explicitly here too, defending
+ *  against any layer above this widget that might apply a subtle
+ *  accent-tinted background to elements with a matching border (some
+ *  themes ship "selected" state as border + soft-fill; we want just
+ *  the border on this card, so we pin the background empty). */
 const CARD_ACTIVE: CSSProperties = {
   ...CARD,
+  background: "transparent",
   borderColor: "var(--accent)",
 };
 
@@ -124,6 +132,12 @@ const SWITCH_BASE: CSSProperties = {
   position: "relative",
   cursor: "pointer",
   transition: "background 120ms ease-out",
+  // The UA default focus ring on a native <button> can render as
+  // a soft accent halo around the switch that reads visually as
+  // "the card has an accent tint" after clicking the toggle. Custom
+  // switch → custom (empty) focus; the click-target is unambiguous
+  // and the switch's own colour carries the state.
+  outline: "none",
 };
 
 const KNOB_BASE: CSSProperties = {
