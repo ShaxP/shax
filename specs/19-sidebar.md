@@ -293,17 +293,16 @@ Three new widgets (Calendar, Battery, Disk), three reshapes of shipped widgets (
 
 Every decision below is my recommendation, called out so you can push back before we sink cost — same rule as the original D-block.
 
-### D7 — Uptime lives inside the Clock widget, not as a standalone widget
+### D7 — Uptime is deferred to Phase 2; not shown in Clock
 
-The mockup shows `up 6d 04h · CEST` on the third line of the Clock card. Uptime is treated as a peer to timezone rather than as its own tile:
+An earlier draft of this spec placed uptime on a third Clock line (`up 6d 04h · CEST`) as a peer to timezone. The `design/sidebar-extended.png` refresh removed it, aligning with the original preference before the earlier mockup pulled it in the other direction. M13.5 Clock is a two-line card:
 
-- Both answer variants of the same question — "wall time on this machine" — and both belong in the same visual frame.
-- A standalone "uptime + boot time + load average" widget would compete with the CPU card for the same slot in the reader's eye without carrying meaningfully different content.
-- The Clock card's third line is already the "at-a-glance context for what's shown above" slot; timezone establishes when, uptime establishes how long.
+- **Line 1:** `HH:MM` (mono, primary), accent-coloured seconds `SS` (small, right of the minutes), timezone abbreviation `TZABBR` right-aligned in dim.
+- **Line 2:** full weekday + day + month (`Sunday 23 August`) in dim.
 
-Requires one new probe (`system_uptime_seconds() -> u64`) added to the existing `status.rs` — `sysinfo::System::uptime()` covers all three OSes.
+Uptime is deferred to Phase 2, where a system-metrics widget (or a Clock-with-uptime opt-in) can carry it. No probe is added in M13.5 for it, and no widget slot is reserved.
 
-**Rejected alternative:** a dedicated "System" widget carrying uptime + boot time + `load N.NN`. Splits the answer to one question across two widgets (CPU already carries load) and adds a fourth thing competing for glance-height. Uptime in Clock is one line of dim text; the split loses the compactness.
+**Rejected alternative (reversed):** uptime as a Clock third line. Uptime is a system metric; the Clock widget is about wall time on this machine. Bundling them worked in one mockup and read as clutter in the next. Deferring costs nothing that the M13.5 target promised.
 
 ### D8 — Calendar is a hollow month grid; no event data, no permissions
 
@@ -387,11 +386,28 @@ The mockup carried a `● local metrics only` footer chip at the bottom of the e
 
 The pledge stays true — no M13.5 widget makes any network call — but the assurance lives where it earns its space, not as ambient sidebar chrome.
 
+### D13 — Caffeinate widget on-state is a whole-card visual reshape
+
+Reference: `design/caffeinated-selected.png`.
+
+The M13.4 caffeinate widget signals its on state by swapping the subtitle line — the card border and title stay the same. Daily use flagged this as too subtle: from a glance across the sidebar it looks like the same card whether the assertion is held or not.
+
+The reshape:
+
+- **Card border becomes accent-blue** when the assertion is held. Same border weight as the resting card; only the colour changes. This is the strongest signal in the reshape, and the whole reason for it — the border is what makes on/off legible in peripheral vision.
+- **Title flips** from `Caffeinate` (verb, imperative — "do this") to `Caffeinated` (adjective, describing state — "this is what I am"). Small change, honest one.
+- **Subtitle flips** from `keep this Mac awake` to `awake for N m N s`. Duration is contextualised rather than bare — a reader who doesn't know what "1m 13s" refers to now does. The duration string continues to come from the backend's shared start stamp per M13.4 D6, not from the widget's first render.
+- **Toggle switch uses accent blue** when active, not the green called for in the M13.4 spec. Rationale: the M13.4 green was intended as "on / good", but the semantic of caffeinate isn't good-vs-bad — it's active-vs-idle. Accent blue is the app-wide colour for user-selected active state (assistant dock, focused pane, palette selection), and using it here makes the widget consistent with every other "this is on because you asked" surface. Green stays reserved for things where the semantic is genuinely "healthy" — free disk space, low CPU, in-sync git.
+
+**Failure states are unchanged.** A refused acquire still shows the off state with a short label and the tooltip carrying the full error — same as M13.4. The reshape is only about the successful-hold visual.
+
+**Rejected alternative:** an animated pulse on the coffee glyph when active. Motion for its own sake violates the daily-driver "calm" principle. Border + title + subtitle carry the state; motion adds nothing a reader would thank us for.
+
 ## Widget set at M13.5
 
 Building on D5 (M13's five widgets), the extended set is **nine**, top-to-bottom in the order pinned by `design/sidebar-extended.png`:
 
-1. **Clock** — reshaped per D7 + mockup. Big `HH:MM` (mono, primary), accent-coloured seconds `SS` (small, right of the minutes). Second line: full weekday + day + month (`Sunday 23 August`). Third line: `up Nd NNh · TZABBR`. No change to tick source.
+1. **Clock** — reshaped per D7 + mockup. Two lines. Line 1: big `HH:MM` (mono, primary), accent-coloured seconds `SS` (small, right of the minutes), timezone abbreviation right-aligned in dim (e.g. `CEST`). Line 2: full weekday + day + month (`Sunday 23 August`) in dim. No change to tick source. No uptime line — deferred to Phase 2 per D7.
 2. **Calendar** — NEW per D8. Client-side render only.
 3. **Network** — unchanged from the M13 refinement pass (multi-interface pager).
 4. **CPU** — unchanged. Extended CPU card format from the M13 refinement (heat-mapped sparkline + `load N.NN · N cores`).
@@ -399,7 +415,7 @@ Building on D5 (M13's five widgets), the extended set is **nine**, top-to-bottom
 6. **Disk** — NEW per D10.
 7. **Battery** — NEW per D9. Consumes the existing M12.4b `system_battery` probe — no new backend.
 8. **Repo** — extended: **the `?n` untracked count is added** to the working-tree summary line, in a dim colour (weaker than `+n` staged green and `~n` unstaged amber, but present). Reuses the existing `git_status_porcelain` output, which already carries untracked entries; the current widget just doesn't count them. Zero counts continue to be omitted rather than printed as `?0`.
-9. **Caffeinate** — unchanged.
+9. **Caffeinate** — on-state visual reshape per D13 (accent-blue card border when active, `Caffeinated` / `awake for N m N s` labels, accent-blue toggle). The M13.4 state machine, backend, and honest-log placement are unchanged.
 
 Widget order is fixed for M13.5 — drag-to-reorder remains Phase 2 territory per D5.
 
@@ -415,15 +431,15 @@ Scope: land this section, wire the mockup references, delete the superseded `des
 
 ### M13.5.2 — In-place reshapes
 
-Scope: everything that changes an existing widget without adding a new one, plus the one new native probe the reshapes need.
+Scope: everything that changes an existing widget without adding a new one. No new native probes — the reshapes are pure frontend or reuse what's already there.
 
-- **Clock:** format per mockup, add the third line (uptime + timezone).
+- **Clock:** two-line format per mockup + D7. Big `HH:MM` with accent seconds `SS` and timezone `TZABBR` right-aligned on line 1; weekday + date on line 2.
 - **Memory:** add the swap line.
 - **Repo:** add the `?n` untracked count.
-- **Rust:** `system_uptime_seconds()` in `status.rs`, via `sysinfo::System::uptime()`.
+- **Caffeinate:** on-state visual reshape per D13 — accent-blue card border, `Caffeinated` title, `awake for N m N s` subtitle, accent-blue toggle. The state machine and backend are untouched; this is purely how the on-state renders.
 - **Frontend:** timezone read from `Intl.DateTimeFormat().resolvedOptions().timeZone`, resolved to a short abbreviation via `Intl.DateTimeFormat(..., { timeZoneName: 'short' })`. No probe — JS reads the OS timezone directly.
 
-**Exit:** Clock card matches mockup. Memory card shows a swap line on machines with active swap, hides it cleanly on machines without. Repo card carries `?n` when there are untracked files, omits when there are none.
+**Exit:** Clock card matches mockup. Memory card shows a swap line on machines with active swap, hides it cleanly on machines without. Repo card carries `?n` when there are untracked files, omits when there are none. Caffeinate card shows the accent-blue border, adjective title, and duration subtitle when active; reverts to the resting card when toggled off; failure states are unchanged from M13.4.
 
 ### M13.5.3 — Calendar + Battery in sidebar
 
@@ -457,7 +473,7 @@ Scope: replace the M13.1 glyph rail with the D11 mini-card rail, once the extend
 ## Non-goals for M13.5 (explicit, not deferred)
 
 - **Weather widget** — same reason as M13. Phase 2 with the capability gate.
-- **Uptime as a standalone widget** — folded into Clock per D7. If a user ever asks "why is uptime hiding in a Clock", we split it out; nobody has yet.
+- **Uptime, anywhere** — deferred to Phase 2 per D7 (both as a standalone widget and as a Clock line). No probe added in M13.5. When a Phase 2 system-metrics widget lands, it earns uptime; the Clock stays about wall time.
 - **Calendar with real events** — per D8. Not "eventually", not "with a flag" — Phase 2 with a networked or entitled capability, if at all.
 - **Statusbar consolidation** — per D9. Separate follow-up conversation, not a slice of this milestone.
 - **`● local metrics only` footer** — per D12.
@@ -468,7 +484,7 @@ Scope: replace the M13.1 glyph rail with the D11 mini-card rail, once the extend
 
 Per the CLAUDE.md testing policy, each slice writes tests alongside.
 
-- **M13.5.2** — `ClockWidget.test.tsx` grows cases for the uptime line format (`up 6d 04h`, singular/plural boundary, `up NNm` when uptime is minutes only), the timezone abbreviation, and the three-line mockup layout. `MemoryWidget.test.tsx` grows a swap-line-present case, a swap-line-hidden-when-`total_swap == 0` case, and a swap-line-reads-0.0-when-idle-but-swap-configured case. `GitBranchWidget.test.tsx` grows an untracked-count-visible case and an untracked-zero-omitted case. Rust: `status.rs` gets a smoke test that `system_uptime_seconds()` returns a plausible non-zero number on the CI host.
+- **M13.5.2** — `ClockWidget.test.tsx` grows cases for the two-line mockup layout, the accent-coloured seconds slot, and the right-aligned timezone abbreviation. `MemoryWidget.test.tsx` grows a swap-line-present case, a swap-line-hidden-when-`total_swap == 0` case, and a swap-line-reads-0.0-when-idle-but-swap-configured case. `GitBranchWidget.test.tsx` grows an untracked-count-visible case and an untracked-zero-omitted case. `CaffeinateWidget.test.tsx` grows: on-state renders the accent-blue border (assert a class or inline-style delta between off and on), title reads `Caffeinated` when active vs `Caffeinate` when resting, subtitle reads `awake for N m N s` when active vs the resting explanation when off, toggle style differs off vs on. The M13.4 state-machine cases continue to hold — no rework of what already tests the failed-acquire and reconciliation paths.
 - **M13.5.3** — `CalendarWidget.test.tsx` covers month rendering (current month, prev-month days greyed, today accented), prev/next chevron navigation with today-preservation, and the "widget makes zero backend calls" guarantee. `BatteryWidget.test.tsx` covers charging vs discharging colour, the estimate rendering, and the "no battery → widget hidden" case.
 - **M13.5.4** — `DiskWidget.test.tsx` covers pager navigation, heat-mapped bar at three utilisations (below 70%, 70–90%, ≥90%), the `used-of-total · filesystem` bottom line, and — the invariant Network also tests — selection sticks to mount point when a volume earlier in the pager unmounts. Rust: `disk_volumes()` gets a smoke test that it returns a non-panicking non-empty list on the CI host, plus a unit test on the filter logic against synthetic mount lists that exercises each of the "should be excluded" cases (tmpfs, sysfs, snapshot, autofs, etc.).
 - **M13.5.5** — `Sidebar.test.tsx` grows cases for the new rail rendering (each widget renders its Rail variant when `visible=false`), and the click-to-expand contract (clicking any rail card fires the sidebar-expand handler, not the widget's own action).
