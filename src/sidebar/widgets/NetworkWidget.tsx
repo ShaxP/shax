@@ -65,7 +65,11 @@ const PAGER_BUTTON: CSSProperties = {
 };
 
 const PAGER_COUNT: CSSProperties = {
-  fontFamily: "var(--font-mono)",
+  // UI font, not mono. The position number is chrome — it sits with
+  // the `NETWORK` label and the `WI-FI` pill, all in the UI font —
+  // and mono numerals here read as "data" alongside three tokens that
+  // aren't. Per `design/sidebar-extended.png`.
+  fontFamily: "var(--font-ui)",
   fontSize: 11,
   color: "var(--fg-dim)",
   minWidth: 10,
