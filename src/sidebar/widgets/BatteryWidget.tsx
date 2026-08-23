@@ -8,19 +8,17 @@
  *
  * Colour rules:
  *   - **Charging** — blue (`--accent`). Overrides the percent-based
- *     colour because the semantic here is "actively refilling", not
- *     "current level" — a laptop at 10% but charging is on its way
- *     up, not in trouble.
- *   - **< 20 %** — amber. Low; a warning tint but not an alarm
- *     (that would be red at ≤ 10% — deferred until the signal is
- *     worth the noise).
- *   - **Otherwise** — green. That covers everyday discharging AND
- *     the fully-charged-on-AC case (macOS's `State::Full`, which
- *     surfaces as `on_ac_power && !charging` on the wire): a full
- *     battery is a healthy state, not an "inactive" one, and an
- *     earlier draft rendered it dim on the "at rest" reading —
- *     grey read as unhealthy / disconnected, the opposite of the
- *     intent.
+ *     heat map because the semantic here is "actively refilling",
+ *     not "current level" — a laptop at 10% but charging is on its
+ *     way up, not in trouble.
+ *   - **Otherwise**, a three-tier heat map inverted from the CPU
+ *     widget (low is bad for battery, high is bad for CPU):
+ *     - **< 10 %** → red. Alarm — plug in now.
+ *     - **< 20 %** → amber. Warning tint.
+ *     - **≥ 20 %** → green. Healthy — everyday discharging AND the
+ *       fully-charged-on-AC case (macOS's `State::Full` surfaces as
+ *       `on_ac_power && !charging` on the wire); a full battery is
+ *       a healthy state, not an "inactive" one.
  *
  * Hides itself entirely when `present === false` — a desktop
  * machine or a probe failure. No placeholder, no "N/A".
@@ -34,7 +32,12 @@ import { useMemo, type CSSProperties } from "react";
 import { useBattery } from "../../lib/BatteryContext";
 import { CARD, CARD_HEADER, CARD_LABEL } from "./styles";
 
-const LOW_BATTERY_AT = 20;
+/** Thresholds for the three-tier battery heat map. Inverted from the
+ *  CPU widget — where higher is hotter, on battery *lower* is worse.
+ *  Named separately from CpuWidget's `AMBER_AT` / `RED_AT` to keep
+ *  the two independent (a change to one shouldn't move the other). */
+const BATTERY_AMBER_AT = 20;
+const BATTERY_RED_AT = 10;
 
 const HEADER_RIGHT: CSSProperties = {
   display: "flex",
@@ -176,7 +179,16 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
  *  dim (an earlier draft) misread as unhealthy / disconnected. */
 export function barColour(battery: { percent: number | null; charging: boolean }): string {
   if (battery.charging) return "var(--accent)";
-  if (battery.percent !== null && battery.percent < LOW_BATTERY_AT) return "var(--amber)";
+  if (battery.percent === null) return "var(--green)";
+  return batteryHeatColour(battery.percent);
+}
+
+/** Red < `BATTERY_RED_AT`, amber < `BATTERY_AMBER_AT`, green above.
+ *  Exported so tests can pin the thresholds directly. Mirrors the
+ *  shape of `CpuWidget`'s `heatColour` (thresholds inverted). */
+export function batteryHeatColour(percent: number): string {
+  if (percent < BATTERY_RED_AT) return "var(--red)";
+  if (percent < BATTERY_AMBER_AT) return "var(--amber)";
   return "var(--green)";
 }
 

@@ -17,7 +17,7 @@ import "@testing-library/jest-dom";
 
 import { BatteryProvider } from "../../lib/BatteryContext";
 import type { BatteryStatus } from "../../lib/ipc";
-import { barColour, BatteryWidget, formatRemaining } from "./BatteryWidget";
+import { barColour, batteryHeatColour, BatteryWidget, formatRemaining } from "./BatteryWidget";
 
 afterEach(cleanup);
 
@@ -98,19 +98,22 @@ describe("BatteryWidget / expanded", () => {
 describe("BatteryWidget / colour rules (barColour helper)", () => {
   it("charging is accent-blue — regardless of percent", () => {
     // A low-percent charging battery reads as "on its way up," not
-    // "in trouble." Accent overrides amber.
-    expect(barColour({ percent: 10, charging: true })).toBe("var(--accent)");
+    // "in trouble." Accent overrides the heat map.
+    expect(barColour({ percent: 5, charging: true })).toBe("var(--accent)");
     expect(barColour({ percent: 82, charging: true })).toBe("var(--accent)");
   });
 
-  it("low is amber (< 20%)", () => {
+  it("delegates to the heat map when not charging", () => {
+    expect(barColour({ percent: 5, charging: false })).toBe("var(--red)");
     expect(barColour({ percent: 15, charging: false })).toBe("var(--amber)");
-    expect(barColour({ percent: 0, charging: false })).toBe("var(--amber)");
+    expect(barColour({ percent: 82, charging: false })).toBe("var(--green)");
   });
 
-  it("comfortable is green (>= 20%)", () => {
-    expect(barColour({ percent: 20, charging: false })).toBe("var(--green)");
-    expect(barColour({ percent: 100, charging: false })).toBe("var(--green)");
+  it("null percent falls back to green rather than fabricating a state", () => {
+    // Firmware may momentarily report present=true with no numeric
+    // percent. Painting red on a `null` reading would be a false
+    // alarm; green is the honest default.
+    expect(barColour({ percent: null, charging: false })).toBe("var(--green)");
   });
 
   it("fully charged on AC is green, not grey", () => {
@@ -119,6 +122,23 @@ describe("BatteryWidget / colour rules (barColour helper)", () => {
     // "inactive" one; the earlier `--fg-faint` treatment read as
     // unhealthy / disconnected, the opposite of the intent.
     expect(barColour({ percent: 100, charging: false })).toBe("var(--green)");
+  });
+});
+
+describe("BatteryWidget / heat map (batteryHeatColour)", () => {
+  it.each([
+    [0, "var(--red)"],
+    [9.9, "var(--red)"],
+    [10, "var(--amber)"],
+    [19.9, "var(--amber)"],
+    [20, "var(--green)"],
+    [50, "var(--green)"],
+    [100, "var(--green)"],
+  ])("%s%% is %s", (percent, expected) => {
+    // Boundaries are inclusive on the *safer* side (`10` and `20`
+    // are amber and green respectively), so a battery on the cusp
+    // isn't flattered by rounding into a hotter tier.
+    expect(batteryHeatColour(percent)).toBe(expected);
   });
 });
 
