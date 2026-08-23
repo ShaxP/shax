@@ -72,7 +72,14 @@ const DAY_BASE: CSSProperties = {
   textAlign: "center",
   color: "var(--fg-dim)",
   padding: "2px 0",
-  borderRadius: "50%",
+  // Rounded rectangle, not a circle — per `design/sidebar-extended.png`.
+  // A circle at the natural cell width visibly clips two-digit days
+  // (`22`, `23`, `24` etc. end up cramped against a curved edge);
+  // a rounded rectangle at 4px sits comfortably around one or two
+  // digits at the same weight. The rail's own day mark stays a
+  // circle (see `RAIL_DAY`) because there it sits on its own row
+  // with room to breathe.
+  borderRadius: 4,
   lineHeight: "18px",
 };
 
