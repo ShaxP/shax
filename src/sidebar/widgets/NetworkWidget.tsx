@@ -65,13 +65,15 @@ const PAGER_BUTTON: CSSProperties = {
 };
 
 const PAGER_COUNT: CSSProperties = {
-  // UI font, not mono. The position number is chrome — it sits with
-  // the `NETWORK` label and the `WI-FI` pill, all in the UI font —
-  // and mono numerals here read as "data" alongside three tokens that
-  // aren't. Per `design/sidebar-extended.png`.
-  fontFamily: "var(--font-ui)",
+  // Matches the detail line beneath the identity (`1000BASET · full
+  // duplex` on Ethernet, `ch 44 · WPA3` on Wi-Fi): mono family at
+  // 11px in the faint tier. The pager count is a value the user is
+  // navigating with, not a label describing the card, so it takes
+  // the data-typography of the detail line rather than the chrome
+  // typography of the `NETWORK` label alongside it.
+  fontFamily: "var(--font-mono)",
   fontSize: 11,
-  color: "var(--fg-dim)",
+  color: "var(--fg-faint)",
   minWidth: 10,
   textAlign: "center",
 };
