@@ -322,7 +322,9 @@ Navigation is client-only — no probes, no persistence. Prev/next chevrons walk
 
 ### D9 — Battery gains a sidebar card; the statusbar chip is not removed in this milestone
 
-The statusbar carries a battery chip today (M12.4b). The sidebar's Battery card is richer: `82% · 4h 20m` labels with a full-width horizontal bar underneath, coloured by state (green when discharging comfortably, amber when low, blue when charging).
+The statusbar carries a battery chip today (M12.4b). The sidebar's Battery card is richer: `82% · 4h 20m` labels with a full-width horizontal bar underneath.
+
+Bar colour is a three-tier heat map on percent, mirroring the CPU widget's `heatColour` shape but inverted (low is bad for battery, high is bad for CPU): green ≥ 20 %, amber < 20 %, red < 10 %. When charging, the bar's colour is unchanged — a battery-outline-with-bolt icon in the header carries "actively charging", and a `charging · 1h 05m to full` line under the bar carries the outcome (per `design/battery-charging-expanded.png`). Triple-encoding "charging" on the bar colour too would be waste of ink; the bar stays on its one job (how much charge is in there). Rail state gains a small lightning-bolt glyph next to the mini bar when charging.
 
 Both surfaces stay for M13.5. Consolidation is a separate conversation, held after the sidebar version has landed and been lived with. Time and IP already have the same overlap — both live in the sidebar and the statusbar today — and the right time to settle "what does the statusbar carry now that the sidebar exists?" is once, across every duplicated signal at the same time, not per-widget in the milestone that first duplicates it.
 

@@ -96,32 +96,27 @@ describe("BatteryWidget / expanded", () => {
 });
 
 describe("BatteryWidget / colour rules (barColour helper)", () => {
-  it("charging is accent-blue — regardless of percent", () => {
-    // A low-percent charging battery reads as "on its way up," not
-    // "in trouble." Accent overrides the heat map.
-    expect(barColour({ percent: 5, charging: true })).toBe("var(--accent)");
-    expect(barColour({ percent: 82, charging: true })).toBe("var(--accent)");
-  });
-
-  it("delegates to the heat map when not charging", () => {
-    expect(barColour({ percent: 5, charging: false })).toBe("var(--red)");
-    expect(barColour({ percent: 15, charging: false })).toBe("var(--amber)");
-    expect(barColour({ percent: 82, charging: false })).toBe("var(--green)");
+  it("delegates to the heat map at every percent", () => {
+    expect(barColour({ percent: 5 })).toBe("var(--red)");
+    expect(barColour({ percent: 15 })).toBe("var(--amber)");
+    expect(barColour({ percent: 82 })).toBe("var(--green)");
   });
 
   it("null percent falls back to green rather than fabricating a state", () => {
     // Firmware may momentarily report present=true with no numeric
     // percent. Painting red on a `null` reading would be a false
     // alarm; green is the honest default.
-    expect(barColour({ percent: null, charging: false })).toBe("var(--green)");
+    expect(barColour({ percent: null })).toBe("var(--green)");
   });
 
-  it("fully charged on AC is green, not grey", () => {
-    // Plugged in at 100%, macOS reports charging=false — the
-    // `State::Full` case. A full battery is a healthy state, not an
-    // "inactive" one; the earlier `--fg-faint` treatment read as
-    // unhealthy / disconnected, the opposite of the intent.
-    expect(barColour({ percent: 100, charging: false })).toBe("var(--green)");
+  it("does NOT paint anything special for charging — that's the icon's job", () => {
+    // Earlier drafts painted accent-blue on charging so the bar
+    // itself carried the signal. The charging mockup uses an icon +
+    // the "charging · N to full" line beneath the bar, so the bar
+    // colour is free to stay on its one job: how much charge is in
+    // there right now. Nothing here mentions `charging`.
+    expect(barColour({ percent: 82 })).toBe("var(--green)");
+    expect(barColour({ percent: 15 })).toBe("var(--amber)");
   });
 });
 
@@ -176,6 +171,97 @@ describe("BatteryWidget / rail", () => {
     expect(screen.getByTestId("sidebar-battery-rail")).toBeInTheDocument();
     expect(screen.getByTestId("sidebar-battery-rail-percent").textContent).toBe("82");
     expect(screen.getByTestId("sidebar-battery-rail-fill").style.width).toBe("82%");
+  });
+
+  it("shows a lightning-bolt glyph beside the bar when charging", () => {
+    render(
+      <BatteryProvider value={status({ charging: true })}>
+        <BatteryWidget visible={false} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-rail-charging")).toBeInTheDocument();
+  });
+
+  it("hides the charging glyph in the rail when not charging", () => {
+    render(
+      <BatteryProvider value={status({ charging: false })}>
+        <BatteryWidget visible={false} />
+      </BatteryProvider>,
+    );
+    expect(screen.queryByTestId("sidebar-battery-rail-charging")).not.toBeInTheDocument();
+  });
+});
+
+describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
+  // Per `design/battery-charging-expanded.png`: an icon in the
+  // header + a `charging · N to full` line beneath the bar.
+
+  it("shows the charging badge in the header when charging", () => {
+    render(
+      <BatteryProvider value={status({ charging: true })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-charging-badge")).toBeInTheDocument();
+  });
+
+  it("does not render the charging badge when not charging", () => {
+    render(
+      <BatteryProvider value={status({ charging: false })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.queryByTestId("sidebar-battery-charging-badge")).not.toBeInTheDocument();
+  });
+
+  it("moves the time estimate under the bar as `charging · N to full`", () => {
+    render(
+      <BatteryProvider value={status({ charging: true, seconds_remaining: 3600 + 5 * 60 })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    const line = screen.getByTestId("sidebar-battery-charging-line").textContent ?? "";
+    expect(line).toBe("charging · 1h 05m to full");
+    // And the inline `· N` next to the percent is gone — the estimate
+    // lives in exactly one place, not two.
+    expect(screen.queryByTestId("sidebar-battery-remaining")).not.toBeInTheDocument();
+  });
+
+  it("still renders the charging line when the OS didn't estimate a time (bare `charging`)", () => {
+    // Charging is real state even without an ETA — hide the estimate
+    // suffix but not the line itself.
+    render(
+      <BatteryProvider value={status({ charging: true, seconds_remaining: null })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-charging-line").textContent).toBe("charging");
+  });
+
+  it("hides the charging line entirely when discharging", () => {
+    render(
+      <BatteryProvider value={status({ charging: false })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.queryByTestId("sidebar-battery-charging-line")).not.toBeInTheDocument();
+    // And the discharging layout keeps the estimate inline with
+    // the percent, matching the earlier mockup.
+    expect(screen.getByTestId("sidebar-battery-remaining")).toBeInTheDocument();
+  });
+
+  it("keeps the bar heat-coloured when charging (no accent override)", () => {
+    // The bar's job is unchanged when charging — how much charge is
+    // in there. The icon in the header + the line beneath carry the
+    // "actively charging" signal. Triple-encoding it on the bar too
+    // would be waste of ink.
+    render(
+      <BatteryProvider value={status({ charging: true, percent: 82 })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-fill").style.background).toBe("var(--green)");
+    expect(screen.getByTestId("sidebar-battery-fill").style.background).not.toContain("--accent");
   });
 });
 

@@ -1,27 +1,37 @@
 /**
- * BatteryWidget (M13.5.3, spec §19 D9 and design/sidebar-extended.png).
+ * BatteryWidget (M13.5.3, spec §19 D9).
  *
  * A sidebar card mirroring the M12.4b statusbar chip's underlying
- * data but expressed at a card's scale: a `BATTERY` label with `82%`
- * and the remaining-time estimate on the header, and a full-width
- * horizontal fill beneath, coloured by state.
+ * data but expressed at a card's scale.
  *
- * Colour rules:
- *   - **Charging** — blue (`--accent`). Overrides the percent-based
- *     heat map because the semantic here is "actively refilling",
- *     not "current level" — a laptop at 10% but charging is on its
- *     way up, not in trouble.
- *   - **Otherwise**, a three-tier heat map inverted from the CPU
- *     widget (low is bad for battery, high is bad for CPU):
- *     - **< 10 %** → red. Alarm — plug in now.
- *     - **< 20 %** → amber. Warning tint.
- *     - **≥ 20 %** → green. Healthy — everyday discharging AND the
- *       fully-charged-on-AC case (macOS's `State::Full` surfaces as
- *       `on_ac_power && !charging` on the wire); a full battery is
- *       a healthy state, not an "inactive" one.
+ * Layout (discharging) per `design/sidebar-extended.png`:
+ *   BATTERY               [`82%` · `4h 20m`]
+ *   [────────── heat-mapped bar ──────────]
  *
- * Hides itself entirely when `present === false` — a desktop
- * machine or a probe failure. No placeholder, no "N/A".
+ * Layout (charging) per `design/battery-charging-expanded.png`:
+ *   BATTERY                       [⚡] [`82%`]
+ *   [────────── heat-mapped bar ──────────]
+ *   charging · 1h 05m to full
+ *
+ * Bar colour uses a three-tier heat map inverted from the CPU widget
+ * (low is bad for battery, high is bad for CPU):
+ *   - **< 10 %** → red. Alarm — plug in now.
+ *   - **< 20 %** → amber. Warning tint.
+ *   - **≥ 20 %** → green. Healthy — everyday discharging AND the
+ *     fully-charged-on-AC case (macOS's `State::Full` surfaces as
+ *     `on_ac_power && !charging` on the wire); a full battery is a
+ *     healthy state, not an "inactive" one.
+ *
+ * **The bar does NOT change colour when charging.** An earlier draft
+ * painted `--accent` on any charging state and the header carried no
+ * icon; the charging mockup redistributes the signal — the icon in
+ * the header carries "actively charging", the `charging · N to full`
+ * line beneath the bar carries the outcome, and the bar's job is
+ * unchanged (how much charge is in there right now). Triple-encoding
+ * the same signal in the bar colour on top would be a waste of ink.
+ *
+ * Hides itself entirely when `present === false` — a desktop machine
+ * or a probe failure. No placeholder, no "N/A".
  *
  * Consumes the M12.4b `system_battery` probe via `BatteryContext`,
  * shared with the statusbar chip. Statusbar consolidation is a
@@ -41,7 +51,7 @@ const BATTERY_RED_AT = 10;
 
 const HEADER_RIGHT: CSSProperties = {
   display: "flex",
-  alignItems: "baseline",
+  alignItems: "center",
   gap: 6,
   marginLeft: "auto",
 };
@@ -53,7 +63,16 @@ const PERCENT_VALUE: CSSProperties = {
   color: "var(--fg)",
 };
 
-const REMAINING: CSSProperties = {
+const REMAINING_INLINE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  color: "var(--fg-faint)",
+};
+
+/** The `charging · 1h 05m to full` line beneath the bar. Faint tier
+ *  like the network detail line and the memory swap line — it's
+ *  context for the reading above, not a peer to it. */
+const CHARGING_LINE: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
   color: "var(--fg-faint)",
@@ -81,6 +100,12 @@ const RAIL_ROOT: CSSProperties = {
   alignItems: "center",
   gap: 2,
   cursor: "default",
+};
+
+const RAIL_BAR_ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
 };
 
 const RAIL_BAR_TRACK: CSSProperties = {
@@ -129,8 +154,18 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
     };
     return (
       <div data-testid="sidebar-battery-rail" style={RAIL_ROOT} title={tooltip}>
-        <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
-          <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
+        <div style={RAIL_BAR_ROW}>
+          <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
+            <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
+          </div>
+          {battery.charging && (
+            <BoltGlyph
+              size={9}
+              colour="var(--green)"
+              testid="sidebar-battery-rail-charging"
+              title="Charging"
+            />
+          )}
         </div>
         <span style={RAIL_PERCENT} data-testid="sidebar-battery-rail-percent">
           {percent ?? "?"}
@@ -150,13 +185,20 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
       <div style={CARD_HEADER}>
         <span style={CARD_LABEL}>Battery</span>
         <span style={HEADER_RIGHT}>
+          {battery.charging && (
+            <ChargingBadge testid="sidebar-battery-charging-badge" title="Charging" />
+          )}
           {percent !== null && (
             <span style={PERCENT_VALUE} data-testid="sidebar-battery-percent">
               {percent}%
             </span>
           )}
-          {remainingLabel !== null && (
-            <span style={REMAINING} data-testid="sidebar-battery-remaining">
+          {/* Discharging shows the time inline with the percent, as
+           *  in the sidebar-extended mockup. Charging moves it to a
+           *  dedicated line beneath the bar (see below) so the
+           *  `charging · … to full` phrasing has room to breathe. */}
+          {!battery.charging && remainingLabel !== null && (
+            <span style={REMAINING_INLINE} data-testid="sidebar-battery-remaining">
               · {remainingLabel}
             </span>
           )}
@@ -165,20 +207,90 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
       <div style={BAR_TRACK} data-testid="sidebar-battery-track">
         <div style={fillStyle} data-testid="sidebar-battery-fill" />
       </div>
+      {battery.charging && (
+        <span style={CHARGING_LINE} data-testid="sidebar-battery-charging-line">
+          charging{remainingLabel !== null ? ` · ${remainingLabel} to full` : ""}
+        </span>
+      )}
     </div>
+  );
+}
+
+/** The battery-outline-with-bolt chip that sits before the percent
+ *  in the header when charging. Inline SVG so it themes with the
+ *  card and doesn't ship a glyph font just for this one icon.
+ *
+ *  Battery shape: rounded outline + terminal nub on the right, with
+ *  a lightning bolt cut through the interior in accent green. The
+ *  outline picks up `--fg-dim` so it reads as chrome, not data. */
+function ChargingBadge({ testid, title }: { testid: string; title?: string }): React.ReactElement {
+  return (
+    <svg
+      width="18"
+      height="12"
+      viewBox="0 0 18 12"
+      data-testid={testid}
+      aria-label={title ?? "Charging"}
+      role="img"
+    >
+      <title>{title ?? "Charging"}</title>
+      {/* Battery outline */}
+      <rect
+        x="0.5"
+        y="1.5"
+        width="14"
+        height="9"
+        rx="1.5"
+        fill="none"
+        stroke="var(--fg-dim)"
+        strokeWidth="1"
+      />
+      {/* Terminal nub on the right */}
+      <rect x="15" y="4" width="2" height="4" rx="0.5" fill="var(--fg-dim)" />
+      {/* Lightning bolt inside the battery */}
+      <path d="M 8 3 L 5 7 H 7 L 6.5 9 L 9.5 5 H 7.5 L 8 3 Z" fill="var(--green)" />
+    </svg>
+  );
+}
+
+/** A tiny lightning-bolt glyph for the rail — no battery outline,
+ *  because the rail's mini bar already carries the "how much charge"
+ *  visual and the outline would double the width. */
+function BoltGlyph({
+  size,
+  colour,
+  testid,
+  title,
+}: {
+  size: number;
+  colour: string;
+  testid: string;
+  title?: string;
+}): React.ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 8 8"
+      data-testid={testid}
+      aria-label={title ?? "Charging"}
+      role="img"
+    >
+      <title>{title ?? "Charging"}</title>
+      <path d="M 5 0 L 1 5 H 3.5 L 3 8 L 7 3 H 4.5 L 5 0 Z" fill={colour} />
+    </svg>
   );
 }
 
 /** Colour rules from the widget header. Exported so a test can pin
  *  each branch without going through a render.
  *
- *  `on_ac_power` deliberately doesn't feature: the only combination
- *  where `on_ac_power && !charging` fires is `State::Full` (a
- *  plugged-in laptop at 100%), and there the percent branch already
- *  paints green — the healthy answer. Rendering the at-rest case as
- *  dim (an earlier draft) misread as unhealthy / disconnected. */
-export function barColour(battery: { percent: number | null; charging: boolean }): string {
-  if (battery.charging) return "var(--accent)";
+ *  Neither `charging` nor `on_ac_power` feature here. Charging is
+ *  communicated by the icon in the header and the line beneath the
+ *  bar (see the widget docstring); `on_ac_power && !charging` only
+ *  ever fires at 100% (macOS `State::Full`), where the heat map
+ *  already paints green — the healthy answer. */
+export function barColour(battery: { percent: number | null }): string {
   if (battery.percent === null) return "var(--green)";
   return batteryHeatColour(battery.percent);
 }
