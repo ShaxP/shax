@@ -17,7 +17,7 @@ import "@testing-library/jest-dom";
 
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
 import type { SystemLoad, SystemLoadSeries } from "../../lib/ipc";
-import { MemoryWidget } from "./MemoryWidget";
+import { formatMemPair, MemoryWidget } from "./MemoryWidget";
 
 afterEach(cleanup);
 
@@ -63,7 +63,9 @@ describe("MemoryWidget / expanded", () => {
     );
     // 4 / 16 = 25%.
     expect(screen.getByTestId("sidebar-memory-percent").textContent).toBe("25%");
-    expect(screen.getByTestId("sidebar-memory-used").textContent).toBe("4.0 GB");
+    // Used renders as the raw number; the unit lives on total. Same
+    // shape as the mockup: `4.0 / 16 GB`, not `4.0 GB / 16 GB`.
+    expect(screen.getByTestId("sidebar-memory-used").textContent).toBe("4.0");
     expect(screen.getByTestId("sidebar-memory")).toHaveTextContent("/ 16 GB");
   });
 
@@ -90,7 +92,9 @@ describe("MemoryWidget / expanded", () => {
         <MemoryWidget visible={true} />
       </SystemLoadProvider>,
     );
-    expect(screen.getByTestId("sidebar-memory-used").textContent).toBe("512 MB");
+    // MB branch: unit chosen from total (< 1 GB → MB), used stays
+    // unitless and formatted in the same unit as total.
+    expect(screen.getByTestId("sidebar-memory-used").textContent).toBe("512");
     expect(screen.getByTestId("sidebar-memory")).toHaveTextContent("/ 800 MB");
   });
 
@@ -117,6 +121,44 @@ describe("MemoryWidget / expanded", () => {
     );
     const halfCircumference = 2 * Math.PI * ((44 - 4) / 2) * 0.5;
     expect(arcOffset()).toBeCloseTo(halfCircumference, 5);
+  });
+});
+
+describe("formatMemPair helper", () => {
+  it("chooses the unit from total, not from used", () => {
+    // Small `used`, large `total` → both render in GB. The old
+    // per-value formatter would have given `used: 500 MB` and
+    // `total: 16 GB`, making the pair read as `500 > 16`.
+    const pair = formatMemPair(500 * 1024 * 1024, 16 * GB);
+    expect(pair.total).toBe("16 GB");
+    // 500 MB / 1024 = 0.488 GB → `.toFixed(1)` = "0.5".
+    expect(pair.used).toBe("0.5");
+  });
+
+  it("uses one decimal for values below 10 GB, integer above", () => {
+    expect(formatMemPair(4 * GB, 16 * GB).used).toBe("4.0");
+    expect(formatMemPair(40 * GB, 64 * GB).used).toBe("40");
+    expect(formatMemPair(40 * GB, 64 * GB).total).toBe("64 GB");
+  });
+
+  it("falls back to MB when total is below 1 GB", () => {
+    const pair = formatMemPair(512 * 1024 * 1024, 800 * 1024 * 1024);
+    expect(pair.used).toBe("512");
+    expect(pair.total).toBe("800 MB");
+  });
+
+  it("carries the unit only on total, never on used", () => {
+    // The whole point of the pair-format: read `40 / 64 GB`, not
+    // `40 GB / 64 GB`. `used` must never contain a unit token.
+    for (const [used, total] of [
+      [4 * GB, 16 * GB],
+      [40 * GB, 64 * GB],
+      [512 * 1024 * 1024, 800 * 1024 * 1024],
+    ] as const) {
+      const pair = formatMemPair(used, total);
+      expect(pair.used).not.toContain("GB");
+      expect(pair.used).not.toContain("MB");
+    }
   });
 });
 

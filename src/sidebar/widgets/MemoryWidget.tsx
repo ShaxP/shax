@@ -42,7 +42,13 @@ const BYTES_ROW: CSSProperties = {
 };
 
 const USED_BYTES: CSSProperties = {
-  color: "var(--green)",
+  // `--fg`, not `--green`. The mockup renders the used figure in the
+  // regular text colour, not the accent-green treatment the earlier
+  // pass had. Green here was a hangover from CPU-load styling; the
+  // Memory reading isn't semantically "healthy/warning" the way CPU
+  // is, and rendering it in the app's normal text colour keeps it
+  // reading as a number, not a status.
+  color: "var(--fg)",
 };
 
 const TOTAL_BYTES: CSSProperties = {
@@ -84,8 +90,23 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
   const ready = load.mem_total_bytes > 0;
   const percent = ready ? (load.mem_used_bytes / load.mem_total_bytes) * 100 : 0;
   const percentLabel = useMemo(() => `${Math.round(percent)}%`, [percent]);
-  const usedLabel = useMemo(() => formatBytes(load.mem_used_bytes), [load.mem_used_bytes]);
-  const totalLabel = useMemo(() => formatBytes(load.mem_total_bytes), [load.mem_total_bytes]);
+  // `used` is rendered without a unit; `total` carries the unit for
+  // the pair (`40 / 64 GB`, not `40 GB / 64 GB`). Both are formatted
+  // in the same unit — the unit is chosen from `total` — so `used`
+  // never reads as a bigger number in a smaller unit than `total`.
+  const pair = useMemo(
+    () => formatMemPair(load.mem_used_bytes, load.mem_total_bytes),
+    [load.mem_used_bytes, load.mem_total_bytes],
+  );
+  // The tooltip keeps both figures with their unit and the word `of`
+  // between them — a screen-reader / hover context has room for the
+  // longer phrasing and the ambiguity of "40 / 64" without "GB"
+  // is worse there than in the card, where the unit sits inches away.
+  const usedTooltipLabel = useMemo(() => formatBytes(load.mem_used_bytes), [load.mem_used_bytes]);
+  const totalTooltipLabel = useMemo(
+    () => formatBytes(load.mem_total_bytes),
+    [load.mem_total_bytes],
+  );
   // Swap line renders only when swap is actually configured. A machine
   // with `swap_total_bytes = 0` (some Linux boxes) gets no line at
   // all — showing `swap 0.0 GB` on a machine that literally has no
@@ -99,8 +120,8 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
   );
   const tooltip = ready
     ? hasSwap
-      ? `Memory: ${usedLabel} of ${totalLabel} in use (${percentLabel}) · swap ${swapLabel ?? "0"} in use`
-      : `Memory: ${usedLabel} of ${totalLabel} in use (${percentLabel})`
+      ? `Memory: ${usedTooltipLabel} of ${totalTooltipLabel} in use (${percentLabel}) · swap ${swapLabel ?? "0"} in use`
+      : `Memory: ${usedTooltipLabel} of ${totalTooltipLabel} in use (${percentLabel})`
     : "Memory probe not available";
 
   if (!ready) return null;
@@ -121,9 +142,13 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
           <span style={CARD_LABEL}>Memory</span>
           <div style={BYTES_ROW}>
             <span style={USED_BYTES} data-testid="sidebar-memory-used">
-              {usedLabel}
+              {pair.used}
             </span>
-            <span style={TOTAL_BYTES}>/ {totalLabel}</span>
+            {/* Slash + surrounding spaces baked into the string so
+             *  the visual space between the numbers is unambiguous:
+             *  a text-node leading space renders reliably; a flex
+             *  gap alone left the DOM reading as `40 GB/ 64 GB`. */}
+            <span style={TOTAL_BYTES}>{` / ${pair.total}`}</span>
           </div>
           {swapLabel !== null && (
             <span style={SWAP_LINE} data-testid="sidebar-memory-swap">
@@ -208,4 +233,30 @@ function formatBytes(n: number): string {
     return n >= 10 * GIB ? `${Math.round(n / GIB)} GB` : `${(n / GIB).toFixed(1)} GB`;
   }
   return `${Math.round(n / MIB)} MB`;
+}
+
+/** Format a used / total memory pair for the "N / N UNIT" render.
+ *
+ *  The unit is chosen from `total`, not per-value — a system with
+ *  16 GB total and 500 MB used renders `0.5 / 16 GB`, not
+ *  `500 MB / 16 GB` (which would read as though `500 > 16`). The
+ *  companion tooltip keeps both figures with their unit, since the
+ *  hover has room for the longer phrasing.
+ *
+ *  Exported so the tests can pin the two branches independently
+ *  without going through the widget render.
+ */
+export function formatMemPair(used: number, total: number): { used: string; total: string } {
+  const GIB = 1024 ** 3;
+  const MIB = 1024 ** 2;
+  if (total >= GIB) {
+    // ≥10 units gets an integer, <10 gets one decimal — same rule as
+    // formatBytes for a single value, applied twice against the same
+    // unit choice.
+    const usedText = used >= 10 * GIB ? `${Math.round(used / GIB)}` : `${(used / GIB).toFixed(1)}`;
+    const totalText =
+      total >= 10 * GIB ? `${Math.round(total / GIB)}` : `${(total / GIB).toFixed(1)}`;
+    return { used: usedText, total: `${totalText} GB` };
+  }
+  return { used: `${Math.round(used / MIB)}`, total: `${Math.round(total / MIB)} MB` };
 }
