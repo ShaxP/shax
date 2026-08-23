@@ -158,7 +158,9 @@ describe("CaffeinateWidget / the OS is the source of truth", () => {
       </ClockProvider>,
     );
     await waitFor(() =>
-      expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe("2m 14s"),
+      expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe(
+        "awake for 2m 14s",
+      ),
     );
   });
 });
@@ -191,7 +193,7 @@ describe("CaffeinateWidget / one assertion, many windows", () => {
     broadcast(HELD);
     // 45s after the backend's stamp, not 0s from this widget's own
     // first sight of the assertion.
-    expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe("45s");
+    expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe("awake for 45s");
   });
 
   it("unsubscribes on unmount so a dead widget can't be updated", async () => {
@@ -227,7 +229,7 @@ describe("CaffeinateWidget / duration", () => {
         <CaffeinateWidget visible={true} />
       </ClockProvider>,
     );
-    expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe("2m 14s");
+    expect(screen.getByTestId("sidebar-caffeinate-duration").textContent).toBe("awake for 2m 14s");
     vi.useRealTimers();
   });
 });
@@ -295,5 +297,109 @@ describe("CaffeinateWidget / rail", () => {
     // The rail click-target is "expand the sidebar", never "operate
     // the widget".
     expect(keepAwakeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("CaffeinateWidget / on-state visual reshape (M13.5 §D13)", () => {
+  // The mockup shows a card whose whole outline flips to the accent
+  // colour when active, with a title flipping verb → adjective and a
+  // subtitle carrying the duration in-context. Off-state is
+  // unchanged from M13.4. These cases pin the reshape so a future
+  // restyle can't quietly walk it back.
+
+  it("flips the title from verb to adjective when active", async () => {
+    // Off: "Caffeinate" (imperative — do this).
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    expect(screen.getByTestId("sidebar-caffeinate-title").textContent).toBe("Caffeinate");
+
+    // On: "Caffeinated" (adjective — describing the state).
+    broadcast(HELD);
+    expect(screen.getByTestId("sidebar-caffeinate-title").textContent).toBe("Caffeinated");
+  });
+
+  it("renders `awake for N` when active, not the bare duration", () => {
+    renderWidget(new Date(HELD.since_ms + 45_000));
+    broadcast(HELD);
+    const line = screen.getByTestId("sidebar-caffeinate-duration").textContent ?? "";
+    // The duration is embedded in prose so a reader who doesn't know
+    // what `45s` counts now does. The number itself is still there.
+    expect(line).toMatch(/^awake for /);
+    expect(line).toContain("45s");
+  });
+
+  it("changes the toggle switch background from surface to accent when active", async () => {
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    const offBg = toggle().style.background;
+
+    broadcast(HELD);
+    const onBg = toggle().style.background;
+
+    // We assert the delta rather than the exact string because
+    // browsers normalise `var(--accent)` differently. The point is:
+    // the two states must render distinct backgrounds — a common
+    // regression when a restyle drops the conditional.
+    expect(onBg).not.toBe("");
+    expect(onBg).not.toBe(offBg);
+    // And it must be the accent variable (D13 explicitly rejected
+    // green as the on-colour — semantic is active-vs-idle, not
+    // good-vs-bad).
+    expect(onBg).toContain("--accent");
+    expect(onBg).not.toContain("--green");
+  });
+
+  it("flips the card's border colour when active", async () => {
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    const card = screen.getByTestId("sidebar-caffeinate");
+    const restingBorder = card.style.borderColor;
+    // The `data-active` attribute is the machine-readable form of
+    // the same visual state — assert it alongside the styling so a
+    // renderer regression that drops one but not the other is caught.
+    expect(card.getAttribute("data-active")).toBe("false");
+
+    broadcast(HELD);
+    expect(card.getAttribute("data-active")).toBe("true");
+    // Border colour must change on activation. Exact value depends
+    // on how the browser resolves `var(--accent)`, so we compare
+    // against the resting value rather than a fixed string.
+    expect(card.style.borderColor).not.toBe(restingBorder);
+    expect(card.style.borderColor).toContain("--accent");
+  });
+
+  it("fills the card with an accent-soft background when active", async () => {
+    // The spec's first pass said "border-only"; the mockup showed
+    // border + soft fill. This case pins the fill in place so a
+    // future style refactor cannot quietly walk it back to
+    // border-only — which reads as "just another bordered card" in a
+    // sidebar where every widget already has a border.
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    const card = screen.getByTestId("sidebar-caffeinate");
+    // Resting card: transparent (or empty) background. Anything
+    // non-empty here would mean the active fill has leaked into the
+    // resting render.
+    const restingBg = card.style.background;
+    expect(restingBg === "" || restingBg === "transparent").toBe(true);
+
+    broadcast(HELD);
+    // Active card: an accent-soft fill. `--accent-soft` is the
+    // token; any bg that reads as `--accent` (full-strength) would
+    // overshoot and turn the whole card blue.
+    expect(card.style.background).toContain("--accent-soft");
+    expect(card.style.background).not.toBe(restingBg);
+  });
+
+  it("carries the resting card unchanged when off", async () => {
+    // Regression guard: the reshape is on-only. The resting card
+    // must not gain an accent border OR the accent-soft background
+    // on mount, even briefly.
+    renderWidget();
+    await waitFor(() => expect(keepAwakeStateMock).toHaveBeenCalled());
+    const card = screen.getByTestId("sidebar-caffeinate");
+    expect(card.getAttribute("data-active")).toBe("false");
+    expect(card.style.borderColor).not.toContain("--accent");
+    expect(card.style.background).not.toContain("--accent");
   });
 });

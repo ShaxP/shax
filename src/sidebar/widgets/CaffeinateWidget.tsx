@@ -34,6 +34,38 @@ import { currentPlatform, type Platform } from "../../lib/platform";
 import { CARD } from "./styles";
 import "./CaffeinateWidget.css";
 
+/** Resting variant. Same as `CARD`, but with `borderColor` and
+ *  `background` set explicitly so React's style-diffing cannot leak
+ *  the previous render's longhand values into the resting render.
+ *  Without this, switching from CARD_ACTIVE back to a bare CARD
+ *  sometimes left the border in an intermediate state on some
+ *  browsers — reported once as a "white border" on the off-state
+ *  widget. */
+const CARD_RESTING: CSSProperties = {
+  ...CARD,
+  background: "transparent",
+  borderColor: "var(--border)",
+};
+
+/** The active card gains an accent border AND a soft accent-tinted
+ *  background (M13.5 §D13, per `design/caffeinated-selected.png`).
+ *  The border alone was called for by the spec's first pass but
+ *  reads too subtly against the surrounding sidebar cards, all of
+ *  which also carry borders. The soft fill is what makes the active
+ *  card visibly a *different* thing from the resting cards, not
+ *  just a differently-coloured version of the same thing.
+ *
+ *  Border weight is unchanged from the resting card — only the
+ *  colour changes — because the accent hue on the border, plus the
+ *  soft fill inside, already carry the state; growing the border
+ *  thickness would shift the card's height and read as jitter on
+ *  every toggle. */
+const CARD_ACTIVE: CSSProperties = {
+  ...CARD,
+  background: "var(--accent-soft)",
+  borderColor: "var(--accent)",
+};
+
 /** How long a failure message stays on the card before it reverts to
  *  the resting subtitle. Long enough to read, short enough that a
  *  transient failure doesn't become permanent furniture. */
@@ -72,7 +104,11 @@ const TITLE: CSSProperties = {
 
 const SUBTITLE: CSSProperties = {
   fontSize: 11,
-  color: "var(--fg-dim)",
+  // `--fg-faint` matches the mockup's rendering of `keep this Mac
+  // awake` / `awake for N`. The title above is the reading; the
+  // subtitle is context, and reading it at `--fg-dim` made it
+  // compete with the title for attention.
+  color: "var(--fg-faint)",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -81,7 +117,6 @@ const SUBTITLE: CSSProperties = {
 const DURATION: CSSProperties = {
   ...SUBTITLE,
   fontFamily: "var(--font-mono)",
-  color: "var(--green)",
 };
 
 const ERROR_LINE: CSSProperties = {
@@ -99,6 +134,12 @@ const SWITCH_BASE: CSSProperties = {
   position: "relative",
   cursor: "pointer",
   transition: "background 120ms ease-out",
+  // The UA default focus ring on a native <button> can render as
+  // a soft accent halo around the switch that reads visually as
+  // "the card has an accent tint" after clicking the toggle. Custom
+  // switch → custom (empty) focus; the click-target is unambiguous
+  // and the switch's own colour carries the state.
+  outline: "none",
 };
 
 const KNOB_BASE: CSSProperties = {
@@ -206,17 +247,22 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
     );
   }
 
+  // Accent blue rather than green when active (M13.5 §D13). The
+  // semantic here is active-vs-idle, not good-vs-bad, so accent —
+  // the app-wide "user-selected active" colour — is honest where
+  // green would read as "healthy."
   const switchStyle: CSSProperties = {
     ...SWITCH_BASE,
-    background: on ? "var(--green)" : "var(--surface)",
+    background: on ? "var(--accent)" : "var(--surface)",
     opacity: busy ? 0.6 : 1,
   };
 
   return (
     <div
       data-testid="sidebar-caffeinate"
+      data-active={on ? "true" : "false"}
       className={error !== null ? "shax-caffeinate-refusing" : undefined}
-      style={CARD}
+      style={on ? CARD_ACTIVE : CARD_RESTING}
       title={tooltip}
     >
       <div style={ROW}>
@@ -224,7 +270,12 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
           ☕
         </span>
         <div style={TEXT_COLUMN}>
-          <span style={TITLE}>Caffeinate</span>
+          {/* Title flips verb → adjective on state. "Caffeinate"
+              reads as an invitation to do the thing; "Caffeinated"
+              reads as the state you're in. */}
+          <span style={TITLE} data-testid="sidebar-caffeinate-title">
+            {on ? "Caffeinated" : "Caffeinate"}
+          </span>
           {renderSecondLine(on, elapsed, error, platform)}
         </div>
         <button
@@ -262,9 +313,13 @@ function renderSecondLine(
     );
   }
   if (on && elapsed !== null) {
+    // Duration is contextualised as "awake for N m N s" rather than
+    // the bare `2m 14s` the M13.4 spec called for. A reader who
+    // doesn't know what the number counts now does; the mono
+    // treatment on the number keeps the reading itself glanceable.
     return (
-      <span style={DURATION} data-testid="sidebar-caffeinate-duration">
-        {formatDuration(elapsed)}
+      <span style={SUBTITLE} data-testid="sidebar-caffeinate-duration">
+        awake for <span style={DURATION}>{formatDuration(elapsed)}</span>
       </span>
     );
   }

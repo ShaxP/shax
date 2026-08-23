@@ -226,6 +226,15 @@ pub struct SystemLoad {
     pub cpu_percent: f32,
     pub mem_used_bytes: u64,
     pub mem_total_bytes: u64,
+    /// Swap in use (not merely allocated) — matches what
+    /// `sysinfo::System::used_swap()` returns. Zero on machines
+    /// where swap is turned off entirely, which is a signal to
+    /// the frontend to hide the swap line rather than print `0.0`.
+    pub swap_used_bytes: u64,
+    /// Configured swap capacity. When `0`, no swap is configured
+    /// (some Linux boxes, some sealed appliances); the frontend
+    /// hides the whole swap line rather than showing `0.0 / 0.0`.
+    pub swap_total_bytes: u64,
     /// One-minute load average. `None` on Windows, which has no
     /// equivalent metric — `sysinfo` documents `load_average` as not
     /// working there and returns zeros, and rendering "load 0.00"
@@ -290,6 +299,8 @@ impl SystemLoadSeries {
                 cpu_percent: 0.0,
                 mem_used_bytes: 0,
                 mem_total_bytes: 0,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
                 load_average_one: None,
                 core_count: None,
             },
@@ -403,11 +414,16 @@ fn sample_once() -> SystemLoadSeries {
             )
         });
         sys.refresh_cpu_usage();
+        // `refresh_memory()` also refreshes swap in sysinfo 0.32 —
+        // one call, both signals. `MemoryRefreshKind::everything()`
+        // on the initialiser above enables swap alongside RAM.
         sys.refresh_memory();
         SystemLoad {
             cpu_percent: sys.global_cpu_usage(),
             mem_used_bytes: sys.used_memory(),
             mem_total_bytes: sys.total_memory(),
+            swap_used_bytes: sys.used_swap(),
+            swap_total_bytes: sys.total_swap(),
             load_average_one: load_average_one(),
             core_count: sys.physical_core_count(),
         }
