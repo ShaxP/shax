@@ -173,23 +173,25 @@ describe("BatteryWidget / rail", () => {
     expect(screen.getByTestId("sidebar-battery-rail-fill").style.width).toBe("82%");
   });
 
-  it("shows a lightning-bolt glyph to the LEFT of the bar when charging", () => {
+  it("shows a lightning-bolt glyph to the LEFT of the percent when charging", () => {
     render(
       <BatteryProvider value={status({ charging: true })}>
         <BatteryWidget visible={false} />
       </BatteryProvider>,
     );
     const bolt = screen.getByTestId("sidebar-battery-rail-charging");
-    const track = screen.getByTestId("sidebar-battery-rail-track");
+    const percent = screen.getByTestId("sidebar-battery-rail-percent");
     expect(bolt).toBeInTheDocument();
-    // DOM order maps to visual left-to-right in a flex row without
-    // `flex-direction: row-reverse`. The bolt sits before the bar
-    // (per `design/battery-charging-collapsed.png`), so a re-order
-    // that puts it back on the right would break this assertion.
+    // Bolt and percent share a flex-row parent, and the bolt sits
+    // before the percent in DOM order — flex row maps that to
+    // visual left. Pinned per `design/battery-charging-collapsed.png`:
+    // the charging indicator qualifies the number ("this many
+    // percent, and it's growing"), not the bar above.
+    expect(bolt.parentElement).toBe(percent.parentElement);
     const parent = bolt.parentElement;
-    if (parent === null) throw new Error("bolt must have a flex-row parent");
+    if (parent === null) throw new Error("bolt and percent share a flex-row parent");
     const children = Array.from(parent.children);
-    expect(children.indexOf(bolt)).toBeLessThan(children.indexOf(track));
+    expect(children.indexOf(bolt)).toBeLessThan(children.indexOf(percent));
   });
 
   it("hides the charging glyph in the rail when not charging", () => {

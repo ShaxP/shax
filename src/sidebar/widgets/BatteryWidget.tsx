@@ -102,12 +102,6 @@ const RAIL_ROOT: CSSProperties = {
   cursor: "default",
 };
 
-const RAIL_BAR_ROW: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 2,
-};
-
 const RAIL_BAR_TRACK: CSSProperties = {
   width: 22,
   height: 6,
@@ -119,6 +113,12 @@ const RAIL_BAR_TRACK: CSSProperties = {
 const RAIL_BAR_FILL_BASE: CSSProperties = {
   height: "100%",
   borderRadius: 3,
+};
+
+const RAIL_PERCENT_ROW: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 3,
 };
 
 const RAIL_PERCENT: CSSProperties = {
@@ -154,7 +154,14 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
     };
     return (
       <div data-testid="sidebar-battery-rail" style={RAIL_ROOT} title={tooltip}>
-        <div style={RAIL_BAR_ROW}>
+        <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
+          <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
+        </div>
+        {/* Bolt sits to the LEFT of the percent number when charging
+         *  (per `design/battery-charging-collapsed.png`). The row
+         *  wrapper renders even when not charging so the percent's
+         *  vertical position doesn't jump between states. */}
+        <div style={RAIL_PERCENT_ROW}>
           {battery.charging && (
             <BoltGlyph
               size={9}
@@ -163,13 +170,10 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
               title="Charging"
             />
           )}
-          <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
-            <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
-          </div>
+          <span style={RAIL_PERCENT} data-testid="sidebar-battery-rail-percent">
+            {percent ?? "?"}
+          </span>
         </div>
-        <span style={RAIL_PERCENT} data-testid="sidebar-battery-rail-percent">
-          {percent ?? "?"}
-        </span>
       </div>
     );
   }
