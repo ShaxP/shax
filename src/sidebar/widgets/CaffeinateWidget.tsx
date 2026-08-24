@@ -173,14 +173,16 @@ const RAIL_ROOT_BASE: CSSProperties = {
   // longhands it cares about without React re-emitting the
   // shorthand and stomping the rest.
   borderStyle: "solid",
-  // Square corners in the collapsed rail. The extended card
-  // carries a 10 px radius that reads as "a card"; the rail
-  // outline is denser and closer to a rule than a card, so
-  // rounded corners just added weight without a signal.
-  borderRadius: 0,
+  borderRadius: 8,
+  // Rounded-square: aspectRatio: 1 pins the card's height to its
+  // computed width so the outline reads as a proper touch target /
+  // pin shape rather than a wide-and-short strip. Since the sidebar
+  // slot stretches every widget to the rail's ~40 px content area,
+  // aspectRatio delivers a 40 × 40 outline without a magic-number
+  // height that would drift if the rail width ever changes.
+  aspectRatio: "1",
   fontSize: 15,
   cursor: "default",
-  minHeight: 32,
   boxSizing: "border-box",
 };
 

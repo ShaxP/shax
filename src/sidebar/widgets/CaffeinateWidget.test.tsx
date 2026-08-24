@@ -305,10 +305,15 @@ describe("CaffeinateWidget / rail", () => {
     expect(rail.style.borderStyle).toBe("solid");
     expect(rail.style.borderColor).toBe("var(--border)");
     expect(rail.style.background).toBe("transparent");
-    // Square corners in the rail — the outline reads as a rule
-    // more than a card at this density; a radius adds visual weight
-    // without a signal.
-    expect(rail.style.borderRadius).toBe("0px");
+    // Rounded-square: 8 px corners plus a 1:1 aspect ratio so the
+    // outline reads as a proper pin shape rather than a wide-and-
+    // short strip. Height tracks the sidebar rail's content width
+    // via aspectRatio — no magic-number height that would drift if
+    // the rail width ever changes.
+    expect(rail.style.borderRadius).toBe("8px");
+    // jsdom normalises `aspectRatio: "1"` to the canonical "1 / 1"
+    // form (which browsers accept identically).
+    expect(rail.style.aspectRatio).toBe("1 / 1");
   });
 
   it("flips the rail card to the accent border + soft fill when active", async () => {
