@@ -33,7 +33,9 @@
  */
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { BatteryWidget } from "./widgets/BatteryWidget";
 import { CaffeinateWidget } from "./widgets/CaffeinateWidget";
+import { CalendarWidget } from "./widgets/CalendarWidget";
 import { ClockWidget } from "./widgets/ClockWidget";
 import { CpuWidget } from "./widgets/CpuWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
@@ -151,10 +153,18 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
       onMouseDown={onRootMouseDown}
     >
       <div data-testid="sidebar-widgets" style={widgetSlot}>
+        {/* Widget order is the M13.5 target per §D5 / D8 / D9 —
+         *  Calendar sits under Clock, Network above CPU/Memory,
+         *  Battery under Memory, Repo and Caffeinate at the tail.
+         *  Disk (M13.5.4) will slot between Memory and Battery
+         *  when it lands. Fixed for M13.5; drag-to-reorder is
+         *  Phase 2. */}
         <ClockWidget visible={visible} />
+        <CalendarWidget visible={visible} />
+        <NetworkWidget visible={visible} />
         <CpuWidget visible={visible} />
         <MemoryWidget visible={visible} />
-        <NetworkWidget visible={visible} />
+        <BatteryWidget visible={visible} />
         <GitBranchWidget visible={visible} />
         <CaffeinateWidget visible={visible} />
       </div>

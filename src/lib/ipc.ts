@@ -878,6 +878,11 @@ export interface BatteryStatus {
   percent: number | null;
   on_ac_power: boolean;
   charging: boolean;
+  /** OS-reported seconds until full (when charging) or until empty
+   *  (when discharging), or null when at rest / unknown. Consumed by
+   *  the sidebar Battery widget's `4h 20m` label; the statusbar chip
+   *  currently only uses `percent`, `on_ac_power`, and `charging`. */
+  seconds_remaining: number | null;
 }
 
 /** Absent-battery sentinel — used as the default before the first
@@ -887,6 +892,7 @@ const BATTERY_ABSENT: BatteryStatus = {
   percent: null,
   on_ac_power: false,
   charging: false,
+  seconds_remaining: null,
 };
 
 /** Poll the host's power state. Outside Tauri returns the absent

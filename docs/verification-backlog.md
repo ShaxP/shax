@@ -67,7 +67,17 @@ The `Granted` / `Denied` toggle in System Settings is fine for exercising the *d
 
 ---
 
-## 3. Cross-platform SSID and medium
+## 3. Linux AC-power detection (battery bolt)
+
+**Why unverified:** no Linux machine. The sysfs reader is unit-tested against a fake `power_supply` tree, which proves the parsing and nothing about the real one.
+
+**Steps:** on a plugged-in Linux laptop, the Battery card shows the bolt and no time-to-empty estimate. Then set a charge threshold below the current charge (`echo 80 | sudo tee /sys/class/power_supply/BAT0/charge_control_end_threshold` on ThinkPads) and confirm the bolt **stays lit** while the battery sits at the threshold, with the line reading `on AC · not charging`.
+
+**Worth knowing:** that threshold state is the whole reason this exists. `starship-battery` can't parse Linux's `Not charging` status — `State::FromStr` has an explicit `TODO` for it and errors, which sysfs downgrades to `State::Unknown` — so `on_ac_power` there rests entirely on our own read of `/sys/class/power_supply/*/online`. If the bolt is dark while plugged in, check that the machine's charger enumerates with a `type` we accept (anything but `Battery`) and exposes `online`; a supply with no `online` file is skipped.
+
+---
+
+## 4. Cross-platform SSID and medium
 
 **Why unverified:** only macOS has been exercised.
 
