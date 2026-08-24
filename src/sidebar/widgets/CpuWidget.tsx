@@ -122,14 +122,21 @@ const RAIL_SPARKLINE: CSSProperties = {
   alignItems: "flex-end",
   gap: 1,
   width: 40,
-  height: 12,
+  // Doubled from the initial 12 px: at 12 px a 100 % reading was a
+  // stub that read as a bar rather than a spike, and a full-scale
+  // reading is exactly what the eye wants the rail to shout about.
+  // 24 px still leaves plenty of vertical room for the percent
+  // label underneath before the card starts pushing on its
+  // neighbours (the widget slot is scrollable).
+  height: 24,
 };
 
 const RAIL_BAR_BASE: CSSProperties = {
   flex: 1,
   // `minWidth: 1` (not 0) so browsers don't collapse a narrow bar
-  // to zero on sub-pixel rounding. At RAIL_SAMPLES = 12 in a 40 px
-  // track this is never binding, but it defends the invariant.
+  // to zero on sub-pixel rounding. At RAIL_SAMPLES = 6 in a 40 px
+  // track (~5.8 px per bar) this is never binding, but it defends
+  // the invariant against future tuning.
   minWidth: 1,
   borderTopLeftRadius: 1,
   borderTopRightRadius: 1,
