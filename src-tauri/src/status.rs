@@ -175,12 +175,15 @@ pub fn system_battery() -> BatteryStatus {
         let pmset_hint = pmset.as_deref().and_then(parse_pmset_state);
         let effective_state =
             effective_charging_state(battery.state(), time_to_full_secs, pmset_hint);
-        // `pmset`'s "Now drawing from …" header answers "is the cable
-        // in?" directly. The state enum can only infer it, and infers
-        // wrong whenever macOS is plugged in but not charging.
+        // Ask the OS whether the cable is in, and only fall back to
+        // inferring it from the state enum when no platform can
+        // answer. Both native answers are authoritative; the enum is
+        // a guess that goes wrong on every "plugged in but not
+        // charging" machine.
         let on_ac_power = pmset
             .as_deref()
             .and_then(parse_pmset_on_ac)
+            .or_else(linux_ac_online)
             .unwrap_or_else(|| ac_power_from_state(effective_state));
         let seconds_remaining = match effective_state {
             State::Charging => time_to_full_secs,
@@ -407,11 +410,77 @@ pub(crate) fn parse_pmset_on_ac(text: &str) -> Option<bool> {
     None
 }
 
+/// Linux's equivalent of the `pmset` header: does sysfs say a supply
+/// is feeding the machine? `None` off Linux, or when the tree holds
+/// no line supply to ask.
+///
+/// This matters for the same reason the macOS header does, and rather
+/// more urgently. `starship-battery` cannot parse Linux's
+/// `Not charging` status at all — its `State::FromStr` carries an
+/// explicit `TODO: Support 'not charging' value` and returns an error,
+/// which the sysfs layer turns into `State::Unknown`. So a laptop with
+/// a charge threshold set (ThinkPads stopping at 80 % are the common
+/// case) reports `Unknown` indefinitely while plugged in, and
+/// inferring AC from the enum would call that "on battery": no bolt,
+/// and a time-to-empty estimate, on a machine that is plugged in.
+fn linux_ac_online() -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        ac_online_in(std::path::Path::new("/sys/class/power_supply"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Scan a sysfs `power_supply` tree for a line supply that is online.
+///
+/// Each child directory is one supply, carrying a `type` (`Battery`,
+/// `Mains`, `USB`, `UPS`, …) and, for everything that isn't a battery,
+/// an `online` flag. We treat *any* non-battery supply as line power
+/// rather than matching `Mains` alone: USB-C PD chargers enumerate as
+/// `USB` on current kernels, and a laptop charged over USB-C is on
+/// wall power by any definition its user cares about. This is the same
+/// rule upower applies.
+///
+/// - `Some(true)` — at least one line supply reports `online` = 1.
+/// - `Some(false)` — line supplies exist and all report 0.
+/// - `None` — no line supply in the tree (or it isn't readable), so we
+///   have no opinion and the caller keeps its fallback.
+///
+/// Takes the root as a parameter so tests can build a fake tree; the
+/// production path passes `/sys/class/power_supply`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn ac_online_in(dir: &std::path::Path) -> Option<bool> {
+    let mut verdict = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let supply = entry.path();
+        let Ok(kind) = std::fs::read_to_string(supply.join("type")) else {
+            continue;
+        };
+        if kind.trim().eq_ignore_ascii_case("battery") {
+            continue;
+        }
+        let Ok(online) = std::fs::read_to_string(supply.join("online")) else {
+            continue;
+        };
+        match online.trim() {
+            // One live supply is enough — a machine with two ports
+            // needs only one cable in it.
+            "1" => return Some(true),
+            "0" => verdict = Some(false),
+            _ => {}
+        }
+    }
+    verdict
+}
+
 /// Whether a `State` implies wall power, for platforms where we have
-/// no better signal than the enum. Charging and Full are the only two
-/// states that can only happen with a cable in; `Unknown` is ambiguous
-/// and we resolve it the safe way (see the `Unknown` note on
-/// [`snapshot_from`]).
+/// no better signal than the enum — Windows today. Charging and Full
+/// are the only two states that can only happen with a cable in;
+/// `Unknown` is ambiguous and we resolve it the safe way (see the
+/// `Unknown` note on [`snapshot_from`]).
 fn ac_power_from_state(state: State) -> bool {
     matches!(state, State::Charging | State::Full)
 }
@@ -1173,6 +1242,97 @@ mod tests {
         // state-derived inference rather than guessing "unplugged".
         assert_eq!(parse_pmset_on_ac(""), None);
         assert_eq!(parse_pmset_on_ac("100%; charged; 0:00 remaining"), None);
+    }
+
+    /// Build a fake sysfs `power_supply` tree: one directory per
+    /// supply, each with a `type` and optionally an `online` flag.
+    /// Mirrors the real layout closely enough that the reader can't
+    /// tell the difference.
+    fn fake_power_supply_tree(supplies: &[(&str, &str, Option<&str>)]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("tempdir");
+        for (name, kind, online) in supplies {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(&dir).expect("supply dir");
+            std::fs::write(dir.join("type"), format!("{kind}\n")).expect("type");
+            if let Some(online) = online {
+                std::fs::write(dir.join("online"), format!("{online}\n")).expect("online");
+            }
+        }
+        root
+    }
+
+    #[test]
+    fn ac_online_reads_a_plugged_in_mains_supply() {
+        let tree = fake_power_supply_tree(&[("BAT0", "Battery", None), ("AC", "Mains", Some("1"))]);
+        assert_eq!(ac_online_in(tree.path()), Some(true));
+    }
+
+    #[test]
+    fn ac_online_reads_an_unplugged_mains_supply() {
+        let tree = fake_power_supply_tree(&[("BAT0", "Battery", None), ("AC", "Mains", Some("0"))]);
+        assert_eq!(ac_online_in(tree.path()), Some(false));
+    }
+
+    #[test]
+    fn ac_online_counts_usb_c_chargers_as_line_power() {
+        // USB-C PD chargers enumerate as `USB`, not `Mains`, on
+        // current kernels. Matching `Mains` alone would report a
+        // USB-C-charged laptop as running on battery.
+        let tree = fake_power_supply_tree(&[
+            ("BAT0", "Battery", None),
+            ("ucsi-source-psy-USBC000:001", "USB", Some("1")),
+        ]);
+        assert_eq!(ac_online_in(tree.path()), Some(true));
+    }
+
+    #[test]
+    fn ac_online_takes_any_live_port_on_a_multi_port_machine() {
+        // Two USB-C ports, one cable. The empty port reporting 0
+        // must not outvote the one with power coming in.
+        let tree = fake_power_supply_tree(&[
+            ("BAT0", "Battery", None),
+            ("ucsi-source-psy-USBC000:001", "USB", Some("0")),
+            ("ucsi-source-psy-USBC000:002", "USB", Some("1")),
+        ]);
+        assert_eq!(ac_online_in(tree.path()), Some(true));
+    }
+
+    #[test]
+    fn ac_online_has_no_opinion_without_a_line_supply() {
+        // Battery-only tree, or a tree we can't read: say nothing
+        // rather than "unplugged", so the caller keeps its fallback
+        // instead of acting on a fabricated `false`.
+        let tree = fake_power_supply_tree(&[("BAT0", "Battery", None)]);
+        assert_eq!(ac_online_in(tree.path()), None);
+        assert_eq!(
+            ac_online_in(tree.path().join("nonexistent").as_path()),
+            None
+        );
+    }
+
+    #[test]
+    fn ac_online_skips_supplies_that_do_not_answer() {
+        // A supply directory with no `online` file tells us nothing;
+        // it must not mask the one that does.
+        let tree =
+            fake_power_supply_tree(&[("wireless", "Wireless", None), ("AC", "Mains", Some("1"))]);
+        assert_eq!(ac_online_in(tree.path()), Some(true));
+    }
+
+    #[test]
+    fn snapshot_from_lights_the_bolt_for_a_linux_charge_threshold_hold() {
+        // The Linux bug this closes, end to end. A ThinkPad parked at
+        // its 80 % charge threshold reports `Not charging`, which
+        // `starship-battery` cannot parse and downgrades to
+        // `State::Unknown` — so only the sysfs `online` flag knows the
+        // cable is in.
+        let s = snapshot_from(0.80, State::Unknown, true, None).expect("held charge is real");
+        assert!(s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(80));
+        // And with the old enum-derived inference it would have read
+        // as on-battery, which is exactly the wrong answer.
+        assert!(!ac_power_from_state(State::Unknown));
     }
 
     #[test]

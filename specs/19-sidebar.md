@@ -335,7 +335,11 @@ Bar colour is a three-tier heat map on percent, mirroring the CPU widget's `heat
 | On AC below 100 %, held        | yes  | `on AC · not charging`    |
 | On battery                     | no   | none — the estimate sits inline with the percent, reading `estimating…` until the OS produces one |
 
-The backend owes the frontend an `on_ac_power` that is true in all three plugged-in rows. `starship-battery`'s `State` enum cannot express the third (plugged in, neither charging nor full, which it can only call `Unknown`), so on macOS the flag is read from `pmset -g batt`'s `Now drawing from 'AC Power'` header — the same signal the menu bar lights its own bolt on — and falls back to the state enum elsewhere.
+The backend owes the frontend an `on_ac_power` that is true in all three plugged-in rows. `starship-battery`'s `State` enum cannot express the third — plugged in, neither charging nor full — so the flag is read from the OS directly wherever the OS will say, and only falls back to inferring it from the enum where none will:
+
+- **macOS** — `pmset -g batt`'s `Now drawing from 'AC Power'` header, the same signal the menu bar lights its own bolt on.
+- **Linux** — the `online` flag of any non-battery supply under `/sys/class/power_supply`. Any non-battery type counts, not `Mains` alone: USB-C PD chargers enumerate as `USB` on current kernels, and upower applies the same rule. This is not optional polish there — `starship-battery` cannot parse Linux's `Not charging` status at all (its `State::FromStr` carries a `TODO` for it and errors, which sysfs downgrades to `Unknown`), so a laptop with a charge threshold set reports `Unknown` for as long as it sits at the threshold. Inferring AC from the enum would show no bolt and a time-to-empty estimate on a plugged-in machine.
+- **Windows** — no native signal yet; the state enum still decides, with the same blind spot.
 
 Both surfaces stay for M13.5. Consolidation is a separate conversation, held after the sidebar version has landed and been lived with. Time and IP already have the same overlap — both live in the sidebar and the statusbar today — and the right time to settle "what does the statusbar carry now that the sidebar exists?" is once, across every duplicated signal at the same time, not per-widget in the milestone that first duplicates it.
 
