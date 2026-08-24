@@ -82,13 +82,31 @@ const SYNC: CSSProperties = { color: "var(--fg-dim)" };
 
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
-  justifyContent: "center",
-  height: 32,
+  gap: 1,
+  cursor: "default",
+  lineHeight: 1.1,
+};
+
+const RAIL_GLYPH: CSSProperties = {
   fontSize: 14,
   color: "var(--fg-dim)",
-  cursor: "default",
 };
+
+// Rail counts — `+n ~n` on one line, colour-coded like the expanded
+// card's status row. Same green / amber vocabulary so the reader
+// doesn't have to relearn what each digit means between states.
+const RAIL_COUNTS: CSSProperties = {
+  display: "flex",
+  gap: 3,
+  fontFamily: "var(--font-mono)",
+  fontSize: 9,
+  fontWeight: 600,
+};
+
+const RAIL_STAGED: CSSProperties = { color: "var(--green)" };
+const RAIL_MODIFIED: CSSProperties = { color: "var(--amber)" };
 
 export interface GitBranchWidgetProps {
   visible: boolean;
@@ -150,9 +168,29 @@ export function GitBranchWidget({ visible }: GitBranchWidgetProps): React.ReactE
   const showCounts = counts !== null && hasAny(counts);
 
   if (!visible) {
+    // Rail: `⎇` glyph over `+n ~n` counts when non-zero (§D11).
+    // Untracked (`?n`) doesn't fit the rail's ~40 px content width —
+    // the two most-frequently-consulted counts (staged + modified)
+    // win the room. When the tree is clean the rail shows just the
+    // branch glyph, matching the expanded card's "row disappears on
+    // a clean tree" behaviour.
     return (
       <div data-testid="sidebar-git-branch-rail" style={RAIL_ROOT} title={tooltip}>
-        ⎇
+        <span style={RAIL_GLYPH}>⎇</span>
+        {counts !== null && (counts.staged > 0 || counts.modified > 0) && (
+          <span style={RAIL_COUNTS} data-testid="sidebar-git-branch-rail-counts">
+            {counts.staged > 0 && (
+              <span style={RAIL_STAGED} data-testid="sidebar-git-branch-rail-staged">
+                +{counts.staged}
+              </span>
+            )}
+            {counts.modified > 0 && (
+              <span style={RAIL_MODIFIED} data-testid="sidebar-git-branch-rail-modified">
+                ~{counts.modified}
+              </span>
+            )}
+          </span>
+        )}
       </div>
     );
   }

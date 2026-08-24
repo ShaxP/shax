@@ -43,7 +43,14 @@ import { GitBranchWidget } from "./widgets/GitBranchWidget";
 import { MemoryWidget } from "./widgets/MemoryWidget";
 import { NetworkWidget } from "./widgets/NetworkWidget";
 
-const RAIL_WIDTH = 44;
+// Rail bumped from the M13.1 44 px to 56 px for M13.5.5 (§D11):
+// the mini data cards — sparkline, donut, throughput arrows, battery
+// bar — need more horizontal room than a single glyph did, and §D11
+// caps the growth at 56 so we're not sliding toward "small expanded
+// state." At 56 px with an 8 px gutter, the content area is 40 px —
+// enough for a 32-pixel donut, a 40-column sparkline, or a two-digit
+// number in the biggest mono weight.
+const RAIL_WIDTH = 56;
 const EXPANDED_WIDTH = 280;
 
 const ROOT_BASE: CSSProperties = {

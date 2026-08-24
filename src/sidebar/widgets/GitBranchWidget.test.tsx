@@ -133,8 +133,10 @@ describe("GitBranchWidget / expanded", () => {
   });
 });
 
-describe("GitBranchWidget / rail", () => {
-  it("renders the ⎇ glyph with a branch-name tooltip", () => {
+describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
+  it("renders the ⎇ glyph alone on a clean tree", () => {
+    // No counts to show → rail is a single glyph, matching the
+    // expanded card's "counts row disappears when clean" behaviour.
     render(
       <FocusedPaneProvider value={meta({ branch: "main" })}>
         <GitBranchWidget visible={false} />
@@ -143,6 +145,7 @@ describe("GitBranchWidget / rail", () => {
     const rail = screen.getByTestId("sidebar-git-branch-rail");
     expect(rail.textContent).toBe("⎇");
     expect(rail.getAttribute("title")).toContain("main");
+    expect(screen.queryByTestId("sidebar-git-branch-rail-counts")).not.toBeInTheDocument();
   });
 
   it("stays hidden in the rail when branch is null", () => {

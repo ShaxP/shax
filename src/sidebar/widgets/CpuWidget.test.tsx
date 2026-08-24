@@ -312,14 +312,33 @@ describe("CpuWidget / footer", () => {
   });
 });
 
-describe("CpuWidget / rail", () => {
-  it("renders a two-digit zero-padded percent when visible=false", () => {
+describe("CpuWidget / rail (M13.5.5 remodel)", () => {
+  it("renders a mini sparkline over the percent per §D11", () => {
+    // The M13.1 rail showed a two-digit zero-padded percent; the
+    // M13.5.5 remodel matches the extended card's visual language
+    // at reduced scale — sparkline row on top, percent under it.
     render(
-      <SystemLoadProvider value={load({ cpu_percent: 5 })}>
+      <SystemLoadProvider value={load({ cpu_percent: 5 }, [10, 20, 30])}>
         <CpuWidget visible={false} />
       </SystemLoadProvider>,
     );
-    expect(screen.getByTestId("sidebar-cpu-rail").textContent).toBe("05");
+    expect(screen.getByTestId("sidebar-cpu-rail-sparkline")).toBeInTheDocument();
+    // Bars are rendered from the samples, not zero-padded.
+    expect(screen.getAllByTestId("sidebar-cpu-rail-bar").length).toBeGreaterThan(0);
+    // Percent below the sparkline, still zero-padded for a stable
+    // width (`05` doesn't jump vs `55`).
+    expect(screen.getByTestId("sidebar-cpu-rail-percent").textContent).toBe("05");
+  });
+
+  it("colours the rail percent on the same heat scale as the header", () => {
+    // A red chart above a green rail-percent would be incoherent —
+    // both come from the current reading and must agree.
+    render(
+      <SystemLoadProvider value={load({ cpu_percent: 91 }, [91])}>
+        <CpuWidget visible={false} />
+      </SystemLoadProvider>,
+    );
+    expect(screen.getByTestId("sidebar-cpu-rail-percent").style.color).toBe("var(--red)");
   });
 
   it("stays hidden in the rail when mem_total_bytes is 0", () => {

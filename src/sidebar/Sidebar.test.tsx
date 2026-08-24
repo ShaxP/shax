@@ -25,11 +25,14 @@ import { Sidebar } from "./Sidebar";
 afterEach(cleanup);
 
 describe("Sidebar / render", () => {
-  it("renders the rail (44px) with rail-state widgets when visible=false", () => {
+  it("renders the rail (56px) with rail-state widgets when visible=false", () => {
+    // Width bumped from the M13.1 44 px to 56 px in M13.5.5 (§D11)
+    // so the mini data cards — sparkline, donut, throughput arrows,
+    // battery bar — have room to breathe.
     render(<Sidebar visible={false} onToggle={vi.fn()} />);
     const root = screen.getByTestId("sidebar");
     expect(root.getAttribute("data-visible")).toBe("false");
-    expect(root.style.width).toBe("44px");
+    expect(root.style.width).toBe("56px");
     // Clock renders in its rail form; git branch is null (no repo in
     // this bare Sidebar render — no FocusedPaneProvider ancestor).
     expect(screen.getByTestId("sidebar-clock-rail")).toBeInTheDocument();
@@ -46,10 +49,10 @@ describe("Sidebar / render", () => {
   });
 
   it("uses the wide gutter when expanded and the narrow one on the rail", () => {
-    // Gutter is measured off design/widget-sidebar.png. The rail keeps
-    // 8px because 14px would leave 16px of content at 44px wide and
-    // clip the two-digit glyphs — regressing either direction is a
-    // visual bug the mockup comparison would otherwise catch late.
+    // Gutter is measured off design/sidebar-extended.png. The rail
+    // keeps 8 px — at 56 px wide that leaves 40 px of content, which
+    // fits the sparkline, donut, and battery bar the M13.5.5 remodel
+    // renders. A wider gutter would clip them.
     const { rerender } = render(<Sidebar visible={true} onToggle={vi.fn()} />);
     let slot = screen.getByTestId("sidebar-widgets");
     expect(slot.style.padding).toBe("14px");

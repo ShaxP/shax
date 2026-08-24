@@ -175,13 +175,33 @@ const DECLINED_NOTE: CSSProperties = {
 
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
-  justifyContent: "center",
-  gap: 3,
-  height: 32,
-  fontSize: 14,
-  color: "var(--fg-dim)",
+  gap: 1,
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
   cursor: "default",
+  lineHeight: 1.1,
+};
+
+// Rail throughput lines — up in green, down in accent, matching the
+// expanded card's arrow-colour language. `↑` / `↓` glyphs carry the
+// direction; the number carries the rate. Unit implied by context —
+// dropped on the rail to save horizontal space (§D11).
+const RAIL_UP: CSSProperties = {
+  color: "var(--green)",
+};
+
+const RAIL_DOWN: CSSProperties = {
+  color: "var(--accent)",
+};
+
+// Fallback for the offline / pre-probe state where no interface is
+// active — a single dim glyph rather than a blank line so the reader
+// can still see that a Network row exists.
+const RAIL_GLYPH: CSSProperties = {
+  color: "var(--fg-faint)",
+  fontSize: 14,
 };
 
 const OFFLINE_LABEL: CSSProperties = {
@@ -256,9 +276,26 @@ export function NetworkWidget({ visible }: NetworkWidgetProps): React.ReactEleme
   const tooltip = buildTooltip(active, rate, position, interfaces.length);
 
   if (!visible) {
+    // Rail: `↑` / `↓` throughput on two lines per §D11 and the
+    // mockup. Signal bars and SSID don't fit at the rail width; the
+    // throughput answers the "am I moving bytes right now?" question
+    // a user glances at the sidebar for. Falls back to a dim glyph
+    // when we have no active interface (offline / pre-probe).
+    if (active === null || rate === null) {
+      return (
+        <div data-testid="sidebar-network-rail" style={RAIL_ROOT} title={tooltip}>
+          <span style={RAIL_GLYPH}>{active === null ? "📡" : glyphFor(active.kind)}</span>
+        </div>
+      );
+    }
     return (
       <div data-testid="sidebar-network-rail" style={RAIL_ROOT} title={tooltip}>
-        <span>{active === null ? "📡" : glyphFor(active.kind)}</span>
+        <span style={RAIL_UP} data-testid="sidebar-network-rail-up">
+          ↑{formatRailRate(rate.up_bps)}
+        </span>
+        <span style={RAIL_DOWN} data-testid="sidebar-network-rail-down">
+          ↓{formatRailRate(rate.down_bps)}
+        </span>
       </div>
     );
   }
@@ -522,6 +559,24 @@ export function formatRate(bytesPerSecond: number): string {
   }
   if (value >= 1_000) return `${Math.round(value / 1_000)} KB/s`;
   return `${Math.round(value)} B/s`;
+}
+
+/** Rail throughput — same decimal thresholds as `formatRate` but
+ *  with the unit implied by context (§D11): `1.2` above 1 MB/s,
+ *  `240` above 1 KB/s, bare bytes below. Unit is dropped so the
+ *  two-line stack fits in ~40 px. Same rounding rule so a reader
+ *  glancing between the rail and the expanded card doesn't see the
+ *  digit jump.
+ *
+ *  Exported so tests can pin each threshold. */
+export function formatRailRate(bytesPerSecond: number): string {
+  const value = Math.max(0, bytesPerSecond);
+  if (value >= 1_000_000) {
+    const mb = value / 1_000_000;
+    return mb >= 10 ? `${Math.round(mb)}` : `${mb.toFixed(1)}`;
+  }
+  if (value >= 1_000) return `${Math.round(value / 1_000)}`;
+  return `${Math.round(value)}`;
 }
 
 function buildTooltip(
