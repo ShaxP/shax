@@ -163,56 +163,54 @@ const KNOB_BASE: CSSProperties = {
 // Compact padding (6 px) rather than the extended card's `10px 12px`
 // — the rail's content area is ~40 px wide, so a 12 px horizontal
 // padding would leave nothing for the glyph.
+// Explicit width — a "bit smaller than the rail" square (32 px) so
+// the outline feels like a pinned button rather than a card that
+// happens to be as tall as it is wide. `alignSelf: center` opts out
+// of the sidebar slot's default flex-stretch so the width is
+// respected. `aspectRatio: 1` keeps it a proper square.
 const RAIL_ROOT_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: 6,
+  alignSelf: "center",
+  width: 32,
+  aspectRatio: "1",
+  padding: 4,
   // Long-hand `borderWidth` / `borderStyle` (rather than the
   // `border` shorthand) so each variant can override only the
   // longhands it cares about without React re-emitting the
   // shorthand and stomping the rest.
+  //
+  // 0.5 px in both states — thin, and the two states differ only in
+  // colour (muted grey vs blue accent) so toggling the card doesn't
+  // feel like it also thickens the outline. On the HiDPI displays
+  // Tauri targets this renders as a single physical pixel;
+  // sub-retina rounds up to 1 px (same graceful degradation as the
+  // extended card).
   borderStyle: "solid",
+  borderWidth: 0.5,
   borderRadius: 8,
-  // Rounded-square: aspectRatio: 1 pins the card's height to its
-  // computed width so the outline reads as a proper touch target /
-  // pin shape rather than a wide-and-short strip. Since the sidebar
-  // slot stretches every widget to the rail's ~40 px content area,
-  // aspectRatio delivers a 40 × 40 outline without a magic-number
-  // height that would drift if the rail width ever changes.
-  aspectRatio: "1",
   fontSize: 15,
   cursor: "default",
   boxSizing: "border-box",
 };
 
-// Resting outline is 0.5 px — a single physical pixel on the HiDPI
-// displays Tauri targets. Genuinely half the weight of the extended
-// card's 1 px border, which is what the rail asks for: the card is
-// smaller and denser, so the outline has to be lighter or it drowns
-// the glyph. On non-HiDPI this rounds up to 1 px, which is still
-// correct behaviour (graceful degradation is "the same border as
-// extended," not a broken card).
+// Resting: `--border` outline — the palette's faintest border tier,
+// which is what "faded" reads as on both the light and dark themes.
 const RAIL_ROOT_RESTING: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "transparent",
   borderColor: "var(--border)",
-  borderWidth: 0.5,
 };
 
-// Active outline is even thinner (0.25 px) — the accent hue on the
-// border carries a lot more visual weight than the muted `--border`
-// grey, so matching widths would leave the active card looking
-// heavier than the resting one. Halving the accent border's width
-// balances the two states against each other so toggling the card
-// doesn't feel like it also thickens the outline. On sub-retina
-// displays 0.25 px rounds up to 1 px, same fallback path as the
-// resting border.
+// Active: same 0.5 px width, `--accent` (blue) border. The accent
+// hue plus the `--accent-soft` fill carry the on-state; the width
+// stays fixed so the toggle doesn't jitter and both states read as
+// equally lightweight outlines.
 const RAIL_ROOT_ACTIVE: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "var(--accent-soft)",
   borderColor: "var(--accent)",
-  borderWidth: 0.25,
 };
 
 export interface CaffeinateWidgetProps {

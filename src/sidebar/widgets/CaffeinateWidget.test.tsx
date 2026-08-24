@@ -298,18 +298,18 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail).toHaveAttribute("data-active", "false");
-    // Resting: 0.5 px — a single physical pixel on retina, i.e.
-    // genuinely thinner than the extended card's 1 px outline (per
-    // the rail's denser scale).
+    // Resting: thin `--border` outline. 0.5 px = one physical pixel
+    // on retina, so genuinely faded next to the extended card's
+    // 1 px.
     expect(rail.style.borderWidth).toBe("0.5px");
     expect(rail.style.borderStyle).toBe("solid");
     expect(rail.style.borderColor).toBe("var(--border)");
     expect(rail.style.background).toBe("transparent");
-    // Rounded-square: 8 px corners plus a 1:1 aspect ratio so the
-    // outline reads as a proper pin shape rather than a wide-and-
-    // short strip. Height tracks the sidebar rail's content width
-    // via aspectRatio — no magic-number height that would drift if
-    // the rail width ever changes.
+    // Rounded-square, sized at 32 px so the outline feels like a
+    // pinned button rather than a card. Height tracks the width via
+    // aspectRatio — no magic-number height that would drift if the
+    // rail width ever changes.
+    expect(rail.style.width).toBe("32px");
     expect(rail.style.borderRadius).toBe("8px");
     // jsdom normalises `aspectRatio: "1"` to the canonical "1 / 1"
     // form (which browsers accept identically).
@@ -334,11 +334,11 @@ describe("CaffeinateWidget / rail", () => {
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail.style.background).toBe("var(--accent-soft)");
     expect(rail.style.borderColor).toBe("var(--accent)");
-    // Active border is HALF the resting width (0.25 vs 0.5 px) —
-    // the accent hue carries more visual weight than the muted
-    // `--border` grey, so matching widths would leave the active
-    // card looking heavier than the resting one.
-    expect(rail.style.borderWidth).toBe("0.25px");
+    // Same 0.5 px thinness as the resting state — the accent
+    // colour + soft fill carry the on-state, the width stays fixed
+    // so the toggle is jitter-free and both states read as equally
+    // lightweight outlines.
+    expect(rail.style.borderWidth).toBe("0.5px");
   });
 
   it("is display-only — clicking the rail glyph does not toggle (spec §D1)", () => {
