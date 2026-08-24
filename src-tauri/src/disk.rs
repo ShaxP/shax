@@ -31,9 +31,19 @@
 //! - **Zero total bytes** — the OS is reporting a phantom mount, or
 //!   the mount just failed. Drop.
 //!
-//! The list keeps `Macintosh HD` (the read-only system snapshot) and
-//! `Data` (the user data volume): both are addressable, both are
-//! meaningful, and the mockup pages between them explicitly.
+//! On macOS the `/System/Volumes/Data` volume is also filtered, even
+//! though it's not "system infrastructure" in the same sense as
+//! Preboot / VM / Update. Since macOS 10.15 the root filesystem is
+//! split into two APFS volumes in one volume group — a read-only
+//! `Macintosh HD` at `/` and a read-write `Data` at
+//! `/System/Volumes/Data` — sharing the same container's storage
+//! pool. They report identical free-space numbers and firmlinks make
+//! the split invisible in daily use. Every other macOS storage UI
+//! (About This Mac → Storage, Disk Utility's default view, Activity
+//! Monitor) collapses the pair; the widget agrees. See
+//! [`is_excluded_mount_prefix`] for the specific entry and the note
+//! there for why the M13.5 spec's original "keep both" decision was
+//! reversed.
 //!
 //! Cadence: this is the **slow tier** (30 s in `App.tsx`). Volumes
 //! come and go from user action, not from data change, and even free
@@ -54,9 +64,9 @@ pub struct VolumeInfo {
     /// Falls back to the mount point's basename when the OS doesn't
     /// provide one — never a fabricated placeholder like `Disk 1`.
     pub name: String,
-    /// Absolute mount path (`/`, `/System/Volumes/Data`, `/Volumes/Backup`,
-    /// `C:\` on Windows). Held by the frontend as the pager's selection
-    /// key — same rule the Network pager uses for interface names.
+    /// Absolute mount path (`/`, `/Volumes/Backup`, `C:\` on Windows).
+    /// Held by the frontend as the pager's selection key — same rule
+    /// the Network pager uses for interface names.
     pub mount_point: String,
     /// The volume's filesystem type as the OS reports it (`APFS`,
     /// `exFAT`, `NTFS`, `ext4`). Rendered in the card's bottom line
@@ -209,6 +219,21 @@ pub(crate) fn is_excluded_mount_prefix(mount_point: &str) -> bool {
         "/System/Volumes/iSCPreboot",
         "/System/Volumes/Hardware",
         "/private/var/vm",
+        // macOS `Data` volume — the read-write half of the APFS
+        // volume group whose read-only system half is mounted at `/`.
+        // Both volumes share the same APFS container's storage pool,
+        // so they report identical free-space numbers, and firmlinks
+        // make the split invisible in daily use (`ls /Users` really
+        // reads `/System/Volumes/Data/Users`). Showing both duplicates
+        // the reading without adding information — every other macOS
+        // storage UI (About This Mac → Storage, Disk Utility's
+        // default view, Activity Monitor) surfaces one entry for the
+        // internal drive, corresponding to `/`. Filtering `Data` here
+        // makes the widget agree. The M13.5 spec §D10 originally
+        // called out keeping both explicitly on the strength of the
+        // disk-widget-2.png mockup; live testing showed that decision
+        // did not survive contact with reality.
+        "/System/Volumes/Data",
     ];
     EXCLUDED
         .iter()
@@ -220,11 +245,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_macos_root_and_data_volumes() {
-        // Both are legitimate, both are what the mockup pages
-        // between — the filter must not drop either.
+    fn keeps_macos_root_volume() {
+        // The `/` mount is what a Mac user calls "the disk" — must
+        // stay. See `drops_macos_data_volume_as_apfs_duplicate` for
+        // the sibling that goes.
         assert!(should_include_by_shape("/", "APFS", 1_000_000_000_000));
-        assert!(should_include_by_shape(
+    }
+
+    #[test]
+    fn drops_macos_data_volume_as_apfs_duplicate() {
+        // `/System/Volumes/Data` and `/` are two APFS volumes in one
+        // volume group sharing the same storage pool. They report
+        // identical free-space numbers and firmlinks make the split
+        // invisible in daily use — showing both would surface the
+        // same reading twice under different names. Every other
+        // macOS storage UI collapses the pair; the widget agrees.
+        assert!(!should_include_by_shape(
             "/System/Volumes/Data",
             "APFS",
             1_000_000_000_000
@@ -343,6 +379,9 @@ mod tests {
     #[test]
     fn basename_helper_falls_back_sensibly() {
         assert_eq!(mount_point_basename("/Volumes/Backup"), "Backup");
+        // The helper still handles Data correctly for completeness —
+        // it's the filter above that keeps the pager from showing
+        // it, not the basename derivation.
         assert_eq!(mount_point_basename("/System/Volumes/Data"), "Data");
         assert_eq!(mount_point_basename("/"), "Root FS");
         // Windows drive letters — the last segment IS the drive

@@ -110,7 +110,7 @@ describe("DiskWidget / expanded — pager", () => {
   it("shows `DISK ◀ n ▶` and the current position when there are multiple volumes", () => {
     renderWithVolumes([
       volume({ name: "Macintosh HD", mount_point: "/" }),
-      volume({ name: "Data", mount_point: "/System/Volumes/Data" }),
+      volume({ name: "Scratch", mount_point: "/Volumes/Scratch" }),
       volume({ name: "Backup", mount_point: "/Volumes/Backup" }),
     ]);
     expect(screen.getByTestId("sidebar-disk-pager")).toBeInTheDocument();
@@ -146,22 +146,22 @@ describe("DiskWidget / expanded — pager", () => {
 describe("DiskWidget / selection by mount point (spec §D10)", () => {
   it("stays on the same volume when one EARLIER in the list vanishes", () => {
     // The invariant that keys everything on mount-point selection.
-    // Page to `Data` at position 2; unmount `Macintosh HD` (position
-    // 1). The card must still show `Data`, not slide onto whatever
-    // now sits at position 1.
+    // Page to `Scratch` at position 2; unmount `Macintosh HD`
+    // (position 1). The card must still show `Scratch`, not slide
+    // onto whatever now sits at position 1.
     const before = [
       volume({ name: "Macintosh HD", mount_point: "/" }),
-      volume({ name: "Data", mount_point: "/System/Volumes/Data" }),
+      volume({ name: "Scratch", mount_point: "/Volumes/Scratch" }),
       volume({ name: "Backup", mount_point: "/Volumes/Backup" }),
     ];
     const { rerender } = renderWithVolumes(before);
     fireEvent.click(screen.getByTestId("sidebar-disk-next"));
-    expect(screen.getByTestId("sidebar-disk-name").textContent).toBe("Data");
+    expect(screen.getByTestId("sidebar-disk-name").textContent).toBe("Scratch");
 
     // Now Macintosh HD vanishes (the widget state's mount point is
-    // still `/System/Volumes/Data`, and the list shifts down).
+    // still `/Volumes/Scratch`, and the list shifts down).
     const after = [
-      volume({ name: "Data", mount_point: "/System/Volumes/Data" }),
+      volume({ name: "Scratch", mount_point: "/Volumes/Scratch" }),
       volume({ name: "Backup", mount_point: "/Volumes/Backup" }),
     ];
     rerender(
@@ -169,7 +169,7 @@ describe("DiskWidget / selection by mount point (spec §D10)", () => {
         <DiskWidget visible={true} />
       </DiskProvider>,
     );
-    expect(screen.getByTestId("sidebar-disk-name").textContent).toBe("Data");
+    expect(screen.getByTestId("sidebar-disk-name").textContent).toBe("Scratch");
   });
 
   it("falls back to the primary when the SELECTED volume itself vanishes", () => {

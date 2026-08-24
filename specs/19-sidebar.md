@@ -358,7 +358,9 @@ The card renders one volume at a time with header `DISK ◀ n ▶`, mirroring Ne
 
 Volume enumeration and filtering, per OS:
 
-- **macOS:** `getmntinfo(3)` (or `libc::statfs` walk). Filter out any mount whose flags carry `MNT_SNAPSHOT`, whose filesystem type is `devfs` / `autofs` / `nullfs`, or whose mount point sits under `/System/Volumes/Preboot`, `/System/Volumes/VM`, `/System/Volumes/Update`. Keep `Macintosh HD` (the read-only system snapshot) and `Data` (the user data volume) — both are addressable and meaningful.
+- **macOS:** `getmntinfo(3)` (or `libc::statfs` walk). Filter out any mount whose flags carry `MNT_SNAPSHOT`, whose filesystem type is `devfs` / `autofs` / `nullfs`, or whose mount point sits under `/System/Volumes/Preboot`, `/System/Volumes/VM`, `/System/Volumes/Update`, or `/System/Volumes/Data`. Keep `Macintosh HD` (the read-only system snapshot mounted at `/`) — that's the one entry a Mac user calls "the disk".
+
+  **Amended (M13.5.4).** An earlier version of this bullet kept both `Macintosh HD` and `Data`, on the reasoning that the disk-widget-2.png mockup pages between them. Live testing showed the decision did not survive contact with reality: since macOS 10.15 the root filesystem is split into a read-only `/` and a read-write `/System/Volumes/Data` in one APFS volume group, both sharing the same container's storage pool, so they report identical free-space numbers. Firmlinks make the split invisible in daily use, and every other macOS storage UI (About This Mac → Storage, Disk Utility default view, Activity Monitor) collapses the pair. Two rows reading the same number under different names is duplication, not information; the widget agrees with the platform.
 - **Linux:** `/proc/mounts` + `statvfs`. Filter out `tmpfs`, `sysfs`, `proc`, `cgroup*`, `devpts`, `overlay`, and any mount under `/proc`, `/sys`, `/dev`, `/run` (unless the user has explicitly mounted a real volume there).
 - **Windows:** `GetLogicalDriveStrings` + `GetDiskFreeSpaceEx`. Keep `DRIVE_FIXED` and `DRIVE_REMOVABLE`; exclude `DRIVE_UNKNOWN`, `DRIVE_NO_ROOT_DIR`, and `DRIVE_CDROM` when no media is present.
 
