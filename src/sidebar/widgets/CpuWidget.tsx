@@ -109,20 +109,29 @@ const RAIL_ROOT: CSSProperties = {
 
 // Mini sparkline sits above the percent (§D11) — same bar treatment
 // as the extended CPU card, scaled to the rail's ~40 px content
-// area. Trades bar-width for density: with 40 px and ~1 px per bar
-// + a small gap, the rail carries roughly the same 16–24 recent
-// samples the expanded card shows, just shorter.
+// area. The extended card shows 24 samples (SAMPLES); the rail
+// shows the newest RAIL_SAMPLES of those, so each bar has enough
+// px-width to render as a visible bar rather than a sub-pixel
+// hairline. Bars fill the width without a gap — a 12-bar
+// no-gap sparkline gives ~3.3 px per bar, chunky enough that
+// adjacent bars still read as distinct even at similar heights
+// (the corner-rounding + brightness gradient carry the separation).
+export const RAIL_SAMPLES = 12;
+
 const RAIL_SPARKLINE: CSSProperties = {
   display: "flex",
   alignItems: "flex-end",
-  gap: 1,
+  gap: 0,
   width: 40,
   height: 12,
 };
 
 const RAIL_BAR_BASE: CSSProperties = {
   flex: 1,
-  minWidth: 0,
+  // `minWidth: 1` (not 0) so browsers don't collapse a narrow bar
+  // to zero on sub-pixel rounding. At RAIL_SAMPLES = 12 in a 40 px
+  // track this is never binding, but it defends the invariant.
+  minWidth: 1,
   borderTopLeftRadius: 1,
   borderTopRightRadius: 1,
 };
@@ -168,15 +177,25 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
   if (!ready) return null;
 
   if (!visible) {
-    // Rail: same bar treatment as the extended sparkline, scaled to
-    // the rail's content area. Historical bars in `--fg-faint` with
-    // the recency-gradient opacity; newest bar takes its heat colour.
+    // Rail: newest `RAIL_SAMPLES` slots from the shared history,
+    // same bar treatment as the extended sparkline. Historical
+    // bars render `--fg-faint` with the recency-gradient opacity;
+    // newest takes its heat colour at full opacity.
+    //
+    // Left-pad with empty slots if we don't yet have RAIL_SAMPLES
+    // real samples so the bars grow in from the right rather than
+    // spreading and jumping widths as history builds.
+    const railTail = slots.slice(-RAIL_SAMPLES);
+    const railSlots: Array<number | null> = [
+      ...Array<number | null>(Math.max(0, RAIL_SAMPLES - railTail.length)).fill(null),
+      ...railTail,
+    ];
     return (
       <div data-testid="sidebar-cpu-rail" style={RAIL_ROOT} title={tooltip}>
         <div style={RAIL_SPARKLINE} data-testid="sidebar-cpu-rail-sparkline">
-          {slots.map((sample, index) => {
-            const isNewest = index === slots.length - 1;
-            const maxHistoricalIndex = Math.max(1, slots.length - 2);
+          {railSlots.map((sample, index) => {
+            const isNewest = index === railSlots.length - 1;
+            const maxHistoricalIndex = Math.max(1, railSlots.length - 2);
             const historicalT = Math.min(1, index / maxHistoricalIndex);
             return (
               <div
