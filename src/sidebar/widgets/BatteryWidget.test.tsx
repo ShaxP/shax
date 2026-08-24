@@ -22,6 +22,7 @@ import {
   barColour,
   batteryHeatColour,
   BatteryWidget,
+  ESTIMATING_LABEL,
   formatRemaining,
   powerDetail,
   powerLabel,
@@ -85,9 +86,9 @@ describe("BatteryWidget / expanded", () => {
     expect(screen.getByTestId("sidebar-battery-fill").style.width).toBe("82%");
   });
 
-  it("hides the remaining-time label when the OS didn't estimate one", () => {
-    // Fully-charged-on-AC or an unknown state → no time-remaining.
-    // The widget hides the estimate rather than inventing one.
+  it("hides the inline remaining-time label whenever we're on AC", () => {
+    // On the cable the wording moves under the bar, so the inline
+    // slot is empty regardless of what the OS estimated.
     render(
       <BatteryProvider value={status({ seconds_remaining: null, on_ac_power: true })}>
         <BatteryWidget visible={true} />
@@ -95,6 +96,33 @@ describe("BatteryWidget / expanded", () => {
     );
     expect(screen.queryByTestId("sidebar-battery-remaining")).not.toBeInTheDocument();
     expect(screen.getByTestId("sidebar-battery-percent").textContent).toBe("82%");
+  });
+
+  it("reads `estimating…` on battery while the OS has no figure yet", () => {
+    // Measured on a real unplug: IOKit reports the `65535`-minute
+    // sentinel (`pmset`: `(no estimate)`) for the first polls after
+    // the power source changes, and the backend filters it to null.
+    // Unplugging at 100 % hits this every time. Never invent a
+    // number — but don't render an empty slot either.
+    render(
+      <BatteryProvider value={status({ on_ac_power: false, seconds_remaining: null })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-remaining").textContent).toBe("· estimating…");
+  });
+
+  it("replaces `estimating…` with the real figure once the OS answers", () => {
+    // The recovery half of the same case — 483 minutes is the
+    // reading this machine produced once macOS had recalculated.
+    render(
+      <BatteryProvider value={status({ on_ac_power: false, seconds_remaining: 483 * 60 })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    const label = screen.getByTestId("sidebar-battery-remaining").textContent ?? "";
+    expect(label).toBe("· 8h 03m");
+    expect(label).not.toContain(ESTIMATING_LABEL);
   });
 
   it("hides the percent label if the OS reported a null percent", () => {

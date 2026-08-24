@@ -333,7 +333,7 @@ Bar colour is a three-tier heat map on percent, mirroring the CPU widget's `heat
 | Charging                       | yes  | `charging · 1h 05m to full` (bare `charging` with no OS estimate) |
 | On AC at 100 %                 | yes  | `charged`                 |
 | On AC below 100 %, held        | yes  | `on AC · not charging`    |
-| On battery                     | no   | none — the estimate sits inline with the percent |
+| On battery                     | no   | none — the estimate sits inline with the percent, reading `estimating…` until the OS produces one |
 
 The backend owes the frontend an `on_ac_power` that is true in all three plugged-in rows. `starship-battery`'s `State` enum cannot express the third (plugged in, neither charging nor full, which it can only call `Unknown`), so on macOS the flag is read from `pmset -g batt`'s `Now drawing from 'AC Power'` header — the same signal the menu bar lights its own bolt on — and falls back to the state enum elsewhere.
 
@@ -462,7 +462,11 @@ Scope: two new widgets and one small extension of the existing `system_battery` 
 
 - New `src/sidebar/widgets/CalendarWidget.tsx` — month grid, today highlighted, prev/next chevrons. Pure client render.
 - New `src/sidebar/widgets/BatteryWidget.tsx` — consumes `system_battery` via a new `BatteryContext` (shared with the M12.4b statusbar chip).
-- **`BatteryStatus` gains `seconds_remaining: Option<u64>`** — the mockup's `4h 20m` label needs it and the earlier draft of this slice claimed "no new backend" in error. `starship-battery` already exposes `time_to_full` / `time_to_empty`; we pick the one that matches the current state (`Charging` → time-to-full, `Discharging` → time-to-empty, everything else → `None`). Frontend hides the label rather than inventing one when the OS returns `None`.
+- **`BatteryStatus` gains `seconds_remaining: Option<u64>`** — the mockup's `4h 20m` label needs it and the earlier draft of this slice claimed "no new backend" in error. `starship-battery` already exposes `time_to_full` / `time_to_empty`; we pick the one that matches the current state (`Charging` → time-to-full, `Discharging` → time-to-empty, everything else → `None`). The frontend never invents a figure when the OS returns `None` — on AC it renders nothing, and on battery it renders `estimating…` in the label's slot.
+
+The `None` case is routine, not exceptional. macOS's only source for this number is IOKit's `TimeRemaining`, and after any power-source change it reports the sentinel `65535` minutes (which `pmset` prints as `(no estimate)`) until it recalculates; the backend filters that sentinel rather than rendering `1092h 15m`. Unplugging at 100 % lands in that window every time, so an empty slot there reads as a broken widget rather than as a waiting one.
+
+**Known and accepted: our figure won't match the macOS menu bar.** IOKit's `TimeRemaining` and the estimate `pmset` prints are computed differently — measured on one machine at the same instant, IOKit said 483 min (`8h 03m`, what we render) where `pmset` said `10:22`. Both are real OS readings with different smoothing. We stay on the `starship-battery` reading because it is the cross-platform source and switching macOS alone to a scraped `pmset` field would fork the number by platform for a cosmetic match. Revisit if users read the two side by side and find the gap confusing.
 - Both widgets wired into the sidebar's widget slot in the order pinned above.
 
 **Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present, with `82% · 4h 20m` labels and a percent-coloured bar (green ≥ 20 %, amber < 20 %, red < 10 %, at every power state); silently omitted when no battery. The header bolt and the line under the bar follow the table in D9 — in particular the bolt is lit at 100 % on the cable, where macOS reports `charged` rather than `charging`.

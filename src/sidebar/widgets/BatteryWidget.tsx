@@ -8,6 +8,9 @@
  *   BATTERY               [`82%` · `4h 20m`]
  *   [────────── heat-mapped bar ──────────]
  *
+ * The `4h 20m` reads `estimating…` for the few polls after unplugging
+ * where macOS hasn't computed a figure yet (see `ESTIMATING_LABEL`).
+ *
  * Layout (charging) per `design/battery-charging-expanded.png`:
  *   BATTERY                       [⚡] [`82%`]
  *   [────────── heat-mapped bar ──────────]
@@ -79,6 +82,21 @@ const REMAINING_INLINE: CSSProperties = {
   fontSize: 11,
   color: "var(--fg-faint)",
 };
+
+/** Stands in for the time-remaining figure while the OS has no
+ *  estimate to give.
+ *
+ *  macOS has exactly one source for this number — IOKit's
+ *  `TimeRemaining` — and after a power-source change it reports the
+ *  sentinel `65535` minutes until it has recalculated (`pmset` prints
+ *  that as `(no estimate)`). The backend filters the sentinel rather
+ *  than passing 1092h through, so the widget gets `null` for those
+ *  few polls. Unplugging at 100 % lands in that window every time.
+ *
+ *  Rendering nothing there reads as "this widget lost a feature".
+ *  Naming the wait states the real situation and invents no number,
+ *  and it resolves itself on the next poll once the OS answers. */
+export const ESTIMATING_LABEL = "estimating…";
 
 /** The `charging · 1h 05m to full` line beneath the bar. Faint tier
  *  like the network detail line and the memory swap line — it's
@@ -212,10 +230,15 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
            *  in the sidebar-extended mockup. Every plugged-in state
            *  moves its wording to a dedicated line beneath the bar
            *  (see below) so the `charging · … to full` phrasing has
-           *  room to breathe. */}
-          {!battery.on_ac_power && remainingLabel !== null && (
+           *  room to breathe.
+           *
+           *  The slot holds its place when the OS has no estimate —
+           *  see `ESTIMATING_LABEL`. On battery there is always
+           *  something true to say here, even if it's only that we're
+           *  waiting for the number. */}
+          {!battery.on_ac_power && (
             <span style={REMAINING_INLINE} data-testid="sidebar-battery-remaining">
-              · {remainingLabel}
+              · {remainingLabel ?? ESTIMATING_LABEL}
             </span>
           )}
         </span>
