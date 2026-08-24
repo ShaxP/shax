@@ -872,9 +872,21 @@ export default function App(): React.ReactElement {
   useEffect(() => {
     let cancelled = false;
     // Fire an immediate probe on mount so the chips populate within
-    // milliseconds instead of waiting 30s for the first tick. M13.3
-    // folds the SSID probe into this same 30s interval — same cadence
-    // as the other network / battery signals.
+    // milliseconds instead of waiting for the first tick. The
+    // interval below covers battery + local IP + interface
+    // enumeration; each probe is a cheap system call, so the shared
+    // cadence stays honest under any reasonable value.
+    //
+    // Cadence: 5s (M13.5.3 follow-up, was 30s). The M12.4b statusbar
+    // chip was fine at 30s — a small glanceable percentage that
+    // changes on the per-minute scale — but the sidebar Battery
+    // widget carries plug/unplug as a discrete visual transition
+    // (bolt icon + `charging · N to full` line), which the reader
+    // *watches* for after touching the cable. 30s felt sluggish
+    // there. 5s keeps the CPU cost trivial while dropping the
+    // worst-case plug/unplug latency to ~5s. If even 5s reads as
+    // sluggish we escalate to the 2s system-load sampler or to
+    // event-driven power notifications.
     const poll = (): void => {
       void systemBattery().then((b) => {
         if (!cancelled) setBatteryStatus(b);
@@ -887,7 +899,7 @@ export default function App(): React.ReactElement {
       });
     };
     poll();
-    const handle = window.setInterval(poll, 30_000);
+    const handle = window.setInterval(poll, 5_000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
