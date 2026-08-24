@@ -163,19 +163,17 @@ const KNOB_BASE: CSSProperties = {
 // Compact padding (6 px) rather than the extended card's `10px 12px`
 // — the rail's content area is ~40 px wide, so a 12 px horizontal
 // padding would leave nothing for the glyph.
-// Explicit width AND height — a 32 × 32 rounded square that's a bit
-// smaller than the rail's ~40 px content area. Using both dimensions
-// (rather than width + aspectRatio) so the shape is guaranteed 1:1
-// regardless of any flex or layout quirk the container introduces.
-// `alignSelf: center` opts out of the sidebar slot's default flex
-// stretch so the width is respected instead of overridden.
+// 32 × 32 rounded square (explicit width AND height rather than
+// width + aspectRatio so the shape is guaranteed 1:1 regardless of
+// any flex quirk the container introduces). `alignSelf: center`
+// opts out of the sidebar slot's default flex stretch so the
+// dimensions are respected.
 //
-// Border matches the extended card's outline exactly: 1 px solid
-// `--border`. The user asked for the resting state to feel identical
-// to every other outlined widget in the extended sidebar — 1 px
-// grey — so we simply reuse the same treatment (no rail-specific
-// thinner border, no colour token variant). "Still thin when
-// active" then means "same 1 px", differing only in colour.
+// The border treatment matches every outlined widget in the
+// extended sidebar exactly — 1 px solid `--border` — so the rail's
+// off-state feels consistent with the cards the user sees when the
+// sidebar is open. Active flips only the colour to `--accent`,
+// same 1 px width, so the toggle changes hue rather than weight.
 const RAIL_ROOT_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -184,35 +182,38 @@ const RAIL_ROOT_BASE: CSSProperties = {
   width: 32,
   height: 32,
   padding: 0,
-  // Long-hand `borderWidth` / `borderStyle` so each variant can
-  // override only the longhands it cares about without React
-  // re-emitting the shorthand and stomping the rest.
-  borderStyle: "solid",
-  borderWidth: 1,
   borderRadius: 8,
   fontSize: 15,
   cursor: "default",
   boxSizing: "border-box",
 };
 
-// Resting: transparent fill, `--border` outline — the same border
-// treatment every extended widget carries. On both the light and
-// dark themes this reads as "faded" against the pane.
+// Both variants declare the full `border` SHORTHAND, not longhands.
+// This is load-bearing: the extended card carries `border: "1px
+// solid var(--border)"` (see `CARD` in `styles.ts`), and when the
+// sidebar transitions extended → rail, React sees `border` removed
+// from the previous style object and clears it via
+// `element.style.border = ""`. Per CSSOM that ALSO nukes every
+// border-longhand on the DOM node. If the rail then declared its
+// border via `borderColor` + `borderWidth` + `borderStyle`
+// longhands, React would diff each against the previous prop
+// value; unchanged ones (like `borderColor: "var(--border)"`) get
+// skipped, leaving the DOM at `currentColor` (near-white in dark
+// mode) — which reported as "thick white border, as if activated"
+// on the collapse-after-expand path.
+//
+// Declaring the shorthand on both sides makes React overwrite the
+// full border block on every transition, no longhand skip.
 const RAIL_ROOT_RESTING: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "transparent",
-  borderColor: "var(--border)",
+  border: "1px solid var(--border)",
 };
 
-// Active: same 1 px width, `--accent` (blue) border with the soft
-// accent fill. The outline stays the same weight as the resting
-// state — only the colour flips — so the toggle doesn't feel like
-// it also thickens the card, and the visual weight of the two
-// states is balanced.
 const RAIL_ROOT_ACTIVE: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "var(--accent-soft)",
-  borderColor: "var(--accent)",
+  border: "1px solid var(--accent)",
 };
 
 export interface CaffeinateWidgetProps {
@@ -295,7 +296,19 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
 
   if (!visible) {
     return (
+      // `key="rail"` — load-bearing. The extended card uses the
+      // `border` SHORTHAND (see CARD in styles.ts) with a separate
+      // `borderColor` longhand override; the rail's inline style is
+      // materially different. When React reconciled the two off the
+      // same DOM node during an extended → rail transition, its
+      // style-prop diff left the border in an inconsistent state
+      // (the reported "thick white border, as if activated"). A
+      // distinct `key` here forces React to unmount the extended
+      // div and mount a fresh one in the rail state, guaranteeing
+      // no leftover inline-style state. Same reasoning for
+      // `key="extended"` on the visible branch below.
       <div
+        key="rail"
         data-testid="sidebar-caffeinate-rail"
         data-active={on ? "true" : "false"}
         style={on ? RAIL_ROOT_ACTIVE : RAIL_ROOT_RESTING}
@@ -318,6 +331,11 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
 
   return (
     <div
+      // Paired with `key="rail"` above — see the comment there. The
+      // distinct key on this branch forces a fresh mount on the
+      // rail → extended transition too, so neither direction can
+      // leak inline styles from the other's shorthand form.
+      key="extended"
       data-testid="sidebar-caffeinate"
       data-active={on ? "true" : "false"}
       className={error !== null ? "shax-caffeinate-refusing" : undefined}

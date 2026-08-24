@@ -298,17 +298,16 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail).toHaveAttribute("data-active", "false");
-    // Resting: 1 px `--border` — the exact same treatment every
-    // extended widget carries, so the rail's off-state feels
-    // consistent with the outlined cards the user sees when the
-    // sidebar is open.
-    expect(rail.style.borderWidth).toBe("1px");
-    expect(rail.style.borderStyle).toBe("solid");
-    expect(rail.style.borderColor).toBe("var(--border)");
+    // Resting: full `border` SHORTHAND — 1 px solid `--border`, the
+    // exact same treatment every extended widget carries. Declaring
+    // the shorthand (rather than longhands) is load-bearing across
+    // the extended-to-rail transition; see the comment on
+    // RAIL_ROOT_RESTING in the widget for why.
+    expect(rail.style.border).toBe("1px solid var(--border)");
     expect(rail.style.background).toBe("transparent");
-    // Rounded-square, 32 × 32 — explicit width AND height (rather
-    // than width + aspectRatio) so the shape is guaranteed 1:1 no
-    // matter what the container's flex layout does.
+    // Rounded-square, 32 × 32 — explicit width AND height so the
+    // shape is guaranteed 1:1 no matter what the container's flex
+    // layout does.
     expect(rail.style.width).toBe("32px");
     expect(rail.style.height).toBe("32px");
     expect(rail.style.borderRadius).toBe("8px");
@@ -331,11 +330,50 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail.style.background).toBe("var(--accent-soft)");
-    expect(rail.style.borderColor).toBe("var(--accent)");
-    // Same 1 px as the resting state — the accent colour + soft
-    // fill carry the on-state; matching widths keep the toggle
-    // jitter-free and the two states balanced.
-    expect(rail.style.borderWidth).toBe("1px");
+    // Same shorthand form as the resting state — differs only in
+    // colour. Matching widths keep the toggle jitter-free and both
+    // states balanced.
+    expect(rail.style.border).toBe("1px solid var(--accent)");
+  });
+
+  it("keeps the resting border correct across an extended → rail transition (regression)", () => {
+    // The reported bug: on the extended-then-collapse path, the
+    // rail card rendered with a thick near-white outline "as if
+    // activated." Root cause was React style-prop reconciliation.
+    // The extended card carries the `border` SHORTHAND (see CARD in
+    // styles.ts). If the rail declared its border via longhands
+    // (`borderColor` + `borderWidth` + `borderStyle`), React would
+    // diff `borderColor` against the previous prop value (both
+    // `"var(--border)"`), find them equal, and SKIP setting it —
+    // even though `element.style.border = ""` (React clearing the
+    // removed shorthand) had just nuked the DOM border-color to
+    // currentColor. Result: `1 px solid currentColor` where
+    // currentColor is the inherited `--fg` (near-white in dark
+    // mode).
+    //
+    // The fix is to declare the rail border as the SHORTHAND too,
+    // so React overwrites the whole border block on the transition
+    // — no longhand skip possible. This test pins that path.
+    const { rerender } = render(
+      <ClockProvider value={new Date(2026, 0, 1, 12, 0, 0)}>
+        <CaffeinateWidget visible={true} />
+      </ClockProvider>,
+    );
+    rerender(
+      <ClockProvider value={new Date(2026, 0, 1, 12, 0, 0)}>
+        <CaffeinateWidget visible={false} />
+      </ClockProvider>,
+    );
+    // After the transition, the rail's inline style must still
+    // include the `border` declaration with `var(--border)` — NOT
+    // currentColor / empty. jsdom exposes shorthand reconstruction
+    // inconsistently after a rerender (the `.style.border` reader
+    // returns empty even though the DOM has the declaration), so we
+    // assert against the raw `style` attribute string to check what
+    // was actually written to the node.
+    const rail = screen.getByTestId("sidebar-caffeinate-rail");
+    const styleAttr = rail.getAttribute("style") ?? "";
+    expect(styleAttr).toContain("border: 1px solid var(--border)");
   });
 
   it("is display-only — clicking the rail glyph does not toggle (spec §D1)", () => {
