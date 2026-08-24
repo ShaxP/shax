@@ -163,50 +163,52 @@ const KNOB_BASE: CSSProperties = {
 // Compact padding (6 px) rather than the extended card's `10px 12px`
 // — the rail's content area is ~40 px wide, so a 12 px horizontal
 // padding would leave nothing for the glyph.
-// Explicit width — a "bit smaller than the rail" square (32 px) so
-// the outline feels like a pinned button rather than a card that
-// happens to be as tall as it is wide. `alignSelf: center` opts out
-// of the sidebar slot's default flex-stretch so the width is
-// respected. `aspectRatio: 1` keeps it a proper square.
+// Explicit width AND height — a 32 × 32 rounded square that's a bit
+// smaller than the rail's ~40 px content area. Using both dimensions
+// (rather than width + aspectRatio) so the shape is guaranteed 1:1
+// regardless of any flex or layout quirk the container introduces.
+// `alignSelf: center` opts out of the sidebar slot's default flex
+// stretch so the width is respected instead of overridden.
+//
+// Border matches the extended card's outline exactly: 1 px solid
+// `--border`. The user asked for the resting state to feel identical
+// to every other outlined widget in the extended sidebar — 1 px
+// grey — so we simply reuse the same treatment (no rail-specific
+// thinner border, no colour token variant). "Still thin when
+// active" then means "same 1 px", differing only in colour.
 const RAIL_ROOT_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   alignSelf: "center",
   width: 32,
-  aspectRatio: "1",
-  padding: 4,
-  // Long-hand `borderWidth` / `borderStyle` (rather than the
-  // `border` shorthand) so each variant can override only the
-  // longhands it cares about without React re-emitting the
-  // shorthand and stomping the rest.
-  //
-  // 0.5 px in both states — thin, and the two states differ only in
-  // colour (muted grey vs blue accent) so toggling the card doesn't
-  // feel like it also thickens the outline. On the HiDPI displays
-  // Tauri targets this renders as a single physical pixel;
-  // sub-retina rounds up to 1 px (same graceful degradation as the
-  // extended card).
+  height: 32,
+  padding: 0,
+  // Long-hand `borderWidth` / `borderStyle` so each variant can
+  // override only the longhands it cares about without React
+  // re-emitting the shorthand and stomping the rest.
   borderStyle: "solid",
-  borderWidth: 0.5,
+  borderWidth: 1,
   borderRadius: 8,
   fontSize: 15,
   cursor: "default",
   boxSizing: "border-box",
 };
 
-// Resting: `--border` outline — the palette's faintest border tier,
-// which is what "faded" reads as on both the light and dark themes.
+// Resting: transparent fill, `--border` outline — the same border
+// treatment every extended widget carries. On both the light and
+// dark themes this reads as "faded" against the pane.
 const RAIL_ROOT_RESTING: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "transparent",
   borderColor: "var(--border)",
 };
 
-// Active: same 0.5 px width, `--accent` (blue) border. The accent
-// hue plus the `--accent-soft` fill carry the on-state; the width
-// stays fixed so the toggle doesn't jitter and both states read as
-// equally lightweight outlines.
+// Active: same 1 px width, `--accent` (blue) border with the soft
+// accent fill. The outline stays the same weight as the resting
+// state — only the colour flips — so the toggle doesn't feel like
+// it also thickens the card, and the visual weight of the two
+// states is balanced.
 const RAIL_ROOT_ACTIVE: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "var(--accent-soft)",

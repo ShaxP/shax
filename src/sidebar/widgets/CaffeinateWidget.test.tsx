@@ -298,22 +298,20 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail).toHaveAttribute("data-active", "false");
-    // Resting: thin `--border` outline. 0.5 px = one physical pixel
-    // on retina, so genuinely faded next to the extended card's
-    // 1 px.
-    expect(rail.style.borderWidth).toBe("0.5px");
+    // Resting: 1 px `--border` — the exact same treatment every
+    // extended widget carries, so the rail's off-state feels
+    // consistent with the outlined cards the user sees when the
+    // sidebar is open.
+    expect(rail.style.borderWidth).toBe("1px");
     expect(rail.style.borderStyle).toBe("solid");
     expect(rail.style.borderColor).toBe("var(--border)");
     expect(rail.style.background).toBe("transparent");
-    // Rounded-square, sized at 32 px so the outline feels like a
-    // pinned button rather than a card. Height tracks the width via
-    // aspectRatio — no magic-number height that would drift if the
-    // rail width ever changes.
+    // Rounded-square, 32 × 32 — explicit width AND height (rather
+    // than width + aspectRatio) so the shape is guaranteed 1:1 no
+    // matter what the container's flex layout does.
     expect(rail.style.width).toBe("32px");
+    expect(rail.style.height).toBe("32px");
     expect(rail.style.borderRadius).toBe("8px");
-    // jsdom normalises `aspectRatio: "1"` to the canonical "1 / 1"
-    // form (which browsers accept identically).
-    expect(rail.style.aspectRatio).toBe("1 / 1");
   });
 
   it("flips the rail card to the accent border + soft fill when active", async () => {
@@ -334,11 +332,10 @@ describe("CaffeinateWidget / rail", () => {
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail.style.background).toBe("var(--accent-soft)");
     expect(rail.style.borderColor).toBe("var(--accent)");
-    // Same 0.5 px thinness as the resting state — the accent
-    // colour + soft fill carry the on-state, the width stays fixed
-    // so the toggle is jitter-free and both states read as equally
-    // lightweight outlines.
-    expect(rail.style.borderWidth).toBe("0.5px");
+    // Same 1 px as the resting state — the accent colour + soft
+    // fill carry the on-state; matching widths keep the toggle
+    // jitter-free and the two states balanced.
+    expect(rail.style.borderWidth).toBe("1px");
   });
 
   it("is display-only — clicking the rail glyph does not toggle (spec §D1)", () => {
