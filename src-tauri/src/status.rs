@@ -148,27 +148,23 @@ pub fn system_battery() -> BatteryStatus {
         // `State::Full` at displayed 100 % while the OS is still
         // adding energy behind the scenes — a laptop that rounded up
         // to 100 % but hasn't quite reached true full. macOS shows
-        // the charging bolt in the menu bar in that state; without
-        // this normalisation, our widget would honestly say
-        // `charging = false` while the OS's own status bar says the
-        // opposite. `time_to_full` from starship-battery is the
-        // signal: if the OS still estimates any time to full, we're
-        // charging by any user's definition.
+        // the charging bolt in the menu bar in that state.
+        //
+        // The first cut of this used `starship-battery.time_to_full`
+        // as the signal, but empirically that field is `None` on
+        // macOS in the topping-off case (starship-battery's macOS
+        // backend doesn't surface IOKit's `AvgTimeToFull` there), so
+        // the escape hatch never fired. We now fall back to `pmset
+        // -g batt` on macOS — the same source the menu bar reads —
+        // whose "charging" / "charged" / "discharging" keyword is
+        // authoritative. If `pmset` fails (unlikely; it ships with
+        // every macOS) we fall through to the starship-battery
+        // reading. Other platforms are unaffected.
         let time_to_full_secs = battery.time_to_full().map(|d| d.value.round() as u64);
         let time_to_empty_secs = battery.time_to_empty().map(|d| d.value.round() as u64);
-        // Temporary diagnostic (remove once the bolt-at-100 % thread
-        // is closed): dumps what starship-battery is actually
-        // returning so we can see whether `time_to_full` is None in
-        // the topping-off case, which is the only case that would
-        // let the escape hatch fire.
-        tracing::info!(
-            "battery probe: state={:?} ratio={:.3} time_to_full_s={:?} time_to_empty_s={:?}",
-            battery.state(),
-            ratio,
-            time_to_full_secs,
-            time_to_empty_secs,
-        );
-        let effective_state = effective_charging_state(battery.state(), time_to_full_secs);
+        let pmset_hint = macos_pmset_state();
+        let effective_state =
+            effective_charging_state(battery.state(), time_to_full_secs, pmset_hint);
         let seconds_remaining = match effective_state {
             State::Charging => time_to_full_secs,
             State::Discharging => time_to_empty_secs,
@@ -183,24 +179,120 @@ pub fn system_battery() -> BatteryStatus {
     BatteryStatus::absent()
 }
 
-/// Normalise `State::Full` to `State::Charging` when the OS is still
-/// estimating a time-to-full — the "topping off at displayed 100 %"
-/// case that macOS shows the charging bolt for even though
-/// `starship-battery` returns `State::Full`.
+/// What macOS's `pmset -g batt` says the battery is doing, when we
+/// can get an answer. Non-macOS platforms return `None` and the
+/// caller falls through to the starship-battery reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PmsetHint {
+    Charging,
+    Charged,
+    Discharging,
+}
+
+/// Normalise the raw `starship-battery` state using two signals that
+/// each fire in cases the base state misses:
+///
+/// 1. `time_to_full_secs > 0` while state is `Full` — some Linux
+///    setups surface `AvgTimeToFull` even at displayed 100 %.
+/// 2. macOS `pmset` hint — starship-battery on macOS reports
+///    `State::Full` at displayed 100 % even when IOKit says
+///    `IsCharging=true`; the menu bar reads the same signal `pmset`
+///    exposes as the `charging` / `charged` keyword. When we can get
+///    a `pmset` reading, it wins.
 ///
 /// Split out so the normalisation is directly unit-testable without
-/// having to mock a `starship-battery` iterator, and so callers can
-/// see the rule at a glance rather than inline in the loop above.
-pub(crate) fn effective_charging_state(raw: State, time_to_full_secs: Option<u64>) -> State {
-    // A `time_to_full` of exactly 0 seconds is honestly "done, no
-    // more energy to add" — we treat that as `Full` too, matching
-    // what a user sees when the menu-bar bolt has just gone away.
+/// having to mock a `starship-battery` iterator or spawn `pmset`.
+pub(crate) fn effective_charging_state(
+    raw: State,
+    time_to_full_secs: Option<u64>,
+    pmset_hint: Option<PmsetHint>,
+) -> State {
+    // pmset takes precedence — it's what macOS's own menu bar
+    // reads. On non-macOS this is always `None` and we fall through.
+    match pmset_hint {
+        Some(PmsetHint::Charging) => return State::Charging,
+        Some(PmsetHint::Discharging) => return State::Discharging,
+        Some(PmsetHint::Charged) => {
+            // "Charged" means at 100 % with the port connected and
+            // no more energy flowing in — the plug-alone state in
+            // the menu bar. Match `State::Full`.
+            if matches!(raw, State::Charging | State::Full) {
+                return State::Full;
+            }
+        }
+        None => {}
+    }
+    // Fallback: time-to-full > 0 while `Full` also means topping
+    // off, per the first cut of this fix. Kept because it costs
+    // nothing on macOS (where pmset already answered) and covers
+    // Linux / Windows machines whose backends surface the estimate.
     let still_topping_off = time_to_full_secs.is_some_and(|s| s > 0);
     if matches!(raw, State::Full) && still_topping_off {
         State::Charging
     } else {
         raw
     }
+}
+
+/// Ask `pmset -g batt` what macOS thinks the battery is doing right
+/// now. `None` on non-macOS, on subprocess failure, or when the
+/// output doesn't mention any of the three keywords we look for.
+///
+/// The command is stable across macOS versions (ships with the OS)
+/// and its output is small; parsing is a substring search on the
+/// short line describing the internal battery. See
+/// [`parse_pmset_state`] for the parser.
+fn macos_pmset_state() -> Option<PmsetHint> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/bin/pmset")
+            .arg("-g")
+            .arg("batt")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = std::str::from_utf8(&output.stdout).ok()?;
+        parse_pmset_state(text)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Parse `pmset -g batt` output for the "charging" / "charged" /
+/// "discharging" keyword. Output looks like (tab between id and
+/// percent replaced with spaces here to keep clippy happy):
+///
+/// ```text
+/// Now drawing from 'AC Power'
+///  -InternalBattery-0 (id=1234567)  100%; charging; 0:12 remaining present: true
+/// ```
+///
+/// The keyword sits between the percent and the time-remaining field,
+/// bounded by semicolons. Exported so tests can pin the three
+/// branches against captured strings without shelling out.
+pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
+    // Search the whole text rather than pinning to a specific line —
+    // pmset's output layout has varied over macOS versions, but the
+    // keyword itself is stable and always appears in the battery
+    // stanza. Priority order: `discharging` first (more specific than
+    // `charging`, avoids the `-discharging` substring dodge), then
+    // `charged` (also more specific than `charging`), then
+    // `charging`.
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("discharging") {
+        return Some(PmsetHint::Discharging);
+    }
+    if lower.contains("charged") {
+        return Some(PmsetHint::Charged);
+    }
+    if lower.contains("charging") {
+        return Some(PmsetHint::Charging);
+    }
+    None
 }
 
 /// Turn a raw (state-of-charge ratio, `starship-battery` state)
@@ -769,59 +861,132 @@ mod tests {
     }
 
     #[test]
-    fn effective_charging_state_normalises_topping_off_full_to_charging() {
-        // The bug this fixed: macOS reports `State::Full` at displayed
-        // 100 % while the OS is still adding energy behind the scenes,
-        // and the menu-bar bolt is visible. Without normalisation, our
-        // widget honestly said `charging = false` while macOS said the
-        // opposite.
+    fn effective_charging_state_pmset_charging_wins_over_starship_full() {
+        // The bug this fixed: macOS `State::Full` at displayed 100 %
+        // while the menu bar shows the bolt because IOKit says
+        // `IsCharging=true`. `pmset` sees that too and hands us
+        // `Charging`; we take that over the starship-battery reading.
         assert_eq!(
-            effective_charging_state(State::Full, Some(120)),
+            effective_charging_state(State::Full, None, Some(PmsetHint::Charging)),
             State::Charging
         );
+        // Also wins over `Discharging` in the wildly unlikely case
+        // starship-battery lies the other way. pmset is authority.
         assert_eq!(
-            effective_charging_state(State::Full, Some(1)),
+            effective_charging_state(State::Discharging, None, Some(PmsetHint::Charging)),
             State::Charging
         );
     }
 
     #[test]
-    fn effective_charging_state_leaves_true_full_alone() {
-        // A `Full` with no time-to-full estimate is honestly full —
-        // no more energy to add. Leave the state as-is so the widget
-        // reads "on AC, at rest" rather than a fake "charging" halo.
-        assert_eq!(effective_charging_state(State::Full, None), State::Full);
-        // Zero-second time-to-full is treated as "just finished,
-        // done" — matches what a user sees when the menu-bar bolt has
-        // just gone away.
-        assert_eq!(effective_charging_state(State::Full, Some(0)), State::Full);
+    fn effective_charging_state_pmset_charged_maps_to_full() {
+        // `charged` in pmset output means at 100 % on AC with no
+        // energy flowing in — the plug-alone state in the menu bar.
+        // Regardless of what starship-battery says, we call that Full.
+        assert_eq!(
+            effective_charging_state(State::Charging, Some(120), Some(PmsetHint::Charged)),
+            State::Full
+        );
+        assert_eq!(
+            effective_charging_state(State::Full, None, Some(PmsetHint::Charged)),
+            State::Full
+        );
     }
 
     #[test]
-    fn effective_charging_state_is_a_no_op_for_non_full_states() {
-        // Charging stays charging (with or without an estimate),
-        // discharging stays discharging, unknown stays unknown.
+    fn effective_charging_state_pmset_discharging_wins() {
         assert_eq!(
-            effective_charging_state(State::Charging, Some(120)),
+            effective_charging_state(State::Full, Some(120), Some(PmsetHint::Discharging)),
+            State::Discharging
+        );
+    }
+
+    #[test]
+    fn effective_charging_state_falls_back_to_time_estimate_without_pmset() {
+        // Non-macOS platforms (and any macOS where pmset failed) get
+        // None from the hint and fall through to the time-to-full
+        // signal — the first cut of this fix, kept as a backstop.
+        assert_eq!(
+            effective_charging_state(State::Full, Some(120), None),
             State::Charging
         );
         assert_eq!(
-            effective_charging_state(State::Charging, None),
+            effective_charging_state(State::Full, None, None),
+            State::Full
+        );
+        assert_eq!(
+            effective_charging_state(State::Full, Some(0), None),
+            State::Full
+        );
+    }
+
+    #[test]
+    fn effective_charging_state_is_a_no_op_for_non_full_when_no_hints_apply() {
+        // Charging stays charging, discharging stays discharging,
+        // unknown stays unknown — as long as pmset isn't overruling.
+        assert_eq!(
+            effective_charging_state(State::Charging, Some(120), None),
             State::Charging
         );
         assert_eq!(
-            effective_charging_state(State::Discharging, Some(9_999)),
+            effective_charging_state(State::Discharging, None, None),
             State::Discharging
         );
         assert_eq!(
-            effective_charging_state(State::Discharging, None),
-            State::Discharging
-        );
-        assert_eq!(
-            effective_charging_state(State::Unknown, Some(120)),
+            effective_charging_state(State::Unknown, Some(120), None),
             State::Unknown
         );
-        assert_eq!(effective_charging_state(State::Empty, None), State::Empty);
+        assert_eq!(
+            effective_charging_state(State::Empty, None, None),
+            State::Empty
+        );
+    }
+
+    #[test]
+    fn parse_pmset_reads_charging_charged_and_discharging_keywords() {
+        // Real captured strings from macOS 26. The keyword between
+        // `%;` and `; N:NN` is the field we key on.
+        let charging =
+            " -InternalBattery-0 (id=1234567)\t80%; charging; 0:35 remaining present: true";
+        let charged =
+            " -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true";
+        let discharging =
+            " -InternalBattery-0 (id=1234567)\t72%; discharging; 4:20 remaining present: true";
+        assert_eq!(parse_pmset_state(charging), Some(PmsetHint::Charging));
+        assert_eq!(parse_pmset_state(charged), Some(PmsetHint::Charged));
+        assert_eq!(parse_pmset_state(discharging), Some(PmsetHint::Discharging));
+    }
+
+    #[test]
+    fn parse_pmset_handles_multi_line_output_with_header() {
+        // pmset -g batt prints a `Now drawing from ...` header before
+        // the battery stanza; the parser has to reach past that.
+        let text = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t100%; charging; 0:12 remaining present: true\n";
+        assert_eq!(parse_pmset_state(text), Some(PmsetHint::Charging));
+    }
+
+    #[test]
+    fn parse_pmset_prefers_specific_keywords_over_the_generic_charging() {
+        // `discharging` contains the substring `charging`; the
+        // priority order in the parser makes sure we don't mislabel
+        // a discharging battery as charging.
+        assert_eq!(
+            parse_pmset_state("72%; discharging; 4:20 remaining"),
+            Some(PmsetHint::Discharging)
+        );
+        // Same for `charged`, which shouldn't collide with anything
+        // but is priority-ordered above `charging` for safety.
+        assert_eq!(
+            parse_pmset_state("100%; charged; 0:00 remaining"),
+            Some(PmsetHint::Charged)
+        );
+    }
+
+    #[test]
+    fn parse_pmset_returns_none_when_no_keyword_present() {
+        assert_eq!(parse_pmset_state(""), None);
+        assert_eq!(parse_pmset_state("Now drawing from 'AC Power'"), None);
+        assert_eq!(parse_pmset_state("some other unrelated output"), None);
     }
 
     #[test]
