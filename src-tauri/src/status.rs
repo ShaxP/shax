@@ -155,10 +155,23 @@ pub fn system_battery() -> BatteryStatus {
         // signal: if the OS still estimates any time to full, we're
         // charging by any user's definition.
         let time_to_full_secs = battery.time_to_full().map(|d| d.value.round() as u64);
+        let time_to_empty_secs = battery.time_to_empty().map(|d| d.value.round() as u64);
+        // Temporary diagnostic (remove once the bolt-at-100 % thread
+        // is closed): dumps what starship-battery is actually
+        // returning so we can see whether `time_to_full` is None in
+        // the topping-off case, which is the only case that would
+        // let the escape hatch fire.
+        tracing::info!(
+            "battery probe: state={:?} ratio={:.3} time_to_full_s={:?} time_to_empty_s={:?}",
+            battery.state(),
+            ratio,
+            time_to_full_secs,
+            time_to_empty_secs,
+        );
         let effective_state = effective_charging_state(battery.state(), time_to_full_secs);
         let seconds_remaining = match effective_state {
             State::Charging => time_to_full_secs,
-            State::Discharging => battery.time_to_empty().map(|d| d.value.round() as u64),
+            State::Discharging => time_to_empty_secs,
             _ => None,
         };
         if let Some(status) = snapshot_from(ratio, effective_state, seconds_remaining) {
