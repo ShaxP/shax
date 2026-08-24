@@ -33,6 +33,7 @@
  */
 
 import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import "./Sidebar.css";
 import { BatteryWidget } from "./widgets/BatteryWidget";
 import { CaffeinateWidget } from "./widgets/CaffeinateWidget";
 import { CalendarWidget } from "./widgets/CalendarWidget";
@@ -101,6 +102,11 @@ const TOGGLE_BUTTON_BASE: CSSProperties = {
 // side gutters. Rail-only per §D11 amendment — expanded uses each
 // widget's card border to separate. `flexShrink: 0` keeps the rule
 // from being squeezed to zero-height if the sidebar overflow-scrolls.
+//
+// The `sidebar-rail-divider` className carries the dedup rules that
+// hide adjacent / leading / trailing dividers when a widget between
+// them returns null (Battery on no-battery hosts, GitBranch outside
+// a repo, and so on). See `Sidebar.css` for the rules and rationale.
 const RAIL_DIVIDER: CSSProperties = {
   height: 1,
   background: "var(--border)",
@@ -234,6 +240,7 @@ function renderWidgets(visible: boolean): React.ReactElement[] {
       rendered.push(
         <div
           key={`divider-${key}`}
+          className="sidebar-rail-divider"
           style={RAIL_DIVIDER}
           data-testid="sidebar-rail-divider"
           aria-hidden="true"

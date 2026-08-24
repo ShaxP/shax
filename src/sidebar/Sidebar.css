@@ -1,0 +1,41 @@
+/**
+ * Sidebar rail divider dedup rules (M13.5.5 §D11 amendment).
+ *
+ * The Sidebar always emits N-1 dividers between its N widget slots
+ * in the collapsed rail, but several widgets return `null` when they
+ * have no data — Battery on a desktop with no battery, GitBranch
+ * outside a repo, CPU / Memory before the sysinfo probe returns,
+ * Disk before enumeration completes. React elides a null-returning
+ * component from the DOM entirely, so the dividers around that
+ * position become DOM-adjacent siblings. Left alone that renders as
+ * two rules with an 8 px gap between them — worse than the single
+ * rule we were painting before.
+ *
+ * A JS-side fix would either couple the Sidebar to every widget's
+ * data source (walk the Contexts to predict null) or refactor each
+ * widget to emit its own divider (which then needs a "first visible"
+ * signal Sidebar can't know without the same coupling). Three CSS
+ * rules on the divider class cover every degenerate case:
+ *
+ *   - `+` (adjacent-sibling): two dividers back-to-back → hide the
+ *     second. Fires when a widget in the middle of the stack
+ *     returns null.
+ *   - `:first-child`: the first DOM child of the widget slot is a
+ *     divider. Fires when the top widget (Clock, in practice) returns
+ *     null — future-proofing more than a current bug, since Clock is
+ *     always present, but the rule pays for itself the moment we
+ *     reorder or add an optional widget at the top.
+ *   - `:last-child`: mirror of the above for the trailing widget.
+ *     Caffeinate can return null on hosts where the assertion API
+ *     isn't reachable, so this one is load-bearing today.
+ *
+ * The dedup is unnecessary in the expanded state (each card owns
+ * its own border), so the class is only used in the rail — no
+ * expanded-state escape hatch needed.
+ */
+
+.sidebar-rail-divider + .sidebar-rail-divider,
+.sidebar-rail-divider:first-child,
+.sidebar-rail-divider:last-child {
+  display: none;
+}

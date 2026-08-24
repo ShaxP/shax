@@ -83,7 +83,31 @@ describe("Sidebar / render", () => {
       expect(div.style.background).toBe("var(--border)");
       expect(div.style.height).toBe("1px");
       expect(div).toHaveAttribute("aria-hidden", "true");
+      // The `sidebar-rail-divider` class carries the CSS dedup
+      // rules that hide adjacent / leading / trailing dividers when
+      // a neighbouring widget returns null. Without it the rules in
+      // Sidebar.css have nothing to bind to.
+      expect(div).toHaveClass("sidebar-rail-divider");
     }
+  });
+
+  it("keeps emitting dividers around widgets that return null (CSS hides the strays)", () => {
+    // Bare render → no BatteryProvider, no FocusedPaneProvider, so
+    // BatteryWidget and GitBranchWidget both return null. Sidebar
+    // does NOT try to know that in JS; it always emits N-1 dividers
+    // between N widget slots, and Sidebar.css hides the ones that
+    // end up adjacent, leading, or trailing. This assertion pins
+    // the DOM invariant that makes those rules load-bearing: when
+    // a widget elides, the dividers on either side become
+    // DOM-adjacent siblings.
+    render(<Sidebar visible={false} onToggle={vi.fn()} />);
+    const slot = screen.getByTestId("sidebar-widgets");
+    // BatteryWidget default-context returns null → the divider
+    // before it and the divider before GitBranch become adjacent.
+    // At minimum one such pair exists; the exact count depends on
+    // how many other widgets return null in the bare render.
+    const adjacentPairs = slot.querySelectorAll(".sidebar-rail-divider + .sidebar-rail-divider");
+    expect(adjacentPairs.length).toBeGreaterThan(0);
   });
 
   it("does not render rail dividers when expanded", () => {

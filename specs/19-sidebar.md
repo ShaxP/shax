@@ -399,6 +399,8 @@ Rail width may grow modestly from the M13.1 44px to accommodate two-digit figure
 
 **Amendment (M13.5.5, post-visual review):** rail widgets are separated by a 1px `--border` rule between each pair — no rule above the first widget or below the last, since the outer sidebar border and the toggle chrome already own those edges. The mini-cards are dense enough that the flex-gap alone reads as a run-on column; the divider gives each row a clear top/bottom edge so the eye scans the rail as a stack. Expanded state doesn't need this — each extended card owns its own border. Reference: `design/sidebar-collapsed.png`.
 
+**Null-returning widgets and the divider (M13.5.5 amendment cont.):** several widgets return `null` when they have no data — Battery on a desktop with no battery, GitBranch outside a repo, Disk before enumeration completes. The Sidebar keeps emitting the surrounding dividers rather than trying to know each widget's null-condition in JS (which would couple Sidebar to every widget's Context). Instead, `Sidebar.css` carries three CSS rules that hide adjacent, leading, and trailing dividers — the visual dedup falls out of the DOM structure that a null-returning widget leaves behind. Any future widget that can return `null` gets this behaviour for free with no wiring change.
+
 ### D12 — No "local metrics only" footer on the sidebar
 
 The mockup carried a `● local metrics only` footer chip at the bottom of the expanded sidebar. Not shipped, on the reasoning that:
