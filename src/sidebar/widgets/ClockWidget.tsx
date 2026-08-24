@@ -97,18 +97,20 @@ const RAIL_ROOT: CSSProperties = {
 };
 
 // Two-line HH / MM stack per `design/sidebar-collapsed.png` and §D11.
-// The hour reads as the primary line — bold, at foreground brightness
-// — and the minutes sit under it in a dimmer weight so the eye lands
-// on the hour first (which is how a glance at a clock actually works).
+// Same size on both lines — the eye lands on the hour via the
+// weight + colour contrast alone: hour is bold at `--fg`, minutes
+// are normal weight at `--fg-dim`. Matching the size keeps the
+// two-line block feeling like one reading rather than a headline
+// + subline, which is how a glance at a clock actually works.
 const RAIL_HH: CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 700,
   color: "var(--fg)",
 };
 
 const RAIL_MM: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 500,
+  fontSize: 14,
+  fontWeight: 400,
   color: "var(--fg-dim)",
 };
 
