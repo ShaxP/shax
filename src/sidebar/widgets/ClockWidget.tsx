@@ -99,7 +99,9 @@ const RAIL_ROOT: CSSProperties = {
 // Two-line HH / MM stack per `design/sidebar-collapsed.png` and §D11.
 // Same size on both lines — the eye lands on the hour via the
 // weight + colour contrast alone: hour is bold at `--fg`, minutes
-// are normal weight at `--fg-dim`. Matching the size keeps the
+// drop all the way to `--fg-faint` (the mockup renders them almost
+// as ambient background — noticeably fainter than `--fg-dim` labels
+// like "AUG" on the calendar rail). Matching the size keeps the
 // two-line block feeling like one reading rather than a headline
 // + subline, which is how a glance at a clock actually works.
 const RAIL_HH: CSSProperties = {
@@ -111,7 +113,7 @@ const RAIL_HH: CSSProperties = {
 const RAIL_MM: CSSProperties = {
   fontSize: 14,
   fontWeight: 400,
-  color: "var(--fg-dim)",
+  color: "var(--fg-faint)",
 };
 
 export interface ClockWidgetProps {
