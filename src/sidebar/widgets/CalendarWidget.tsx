@@ -116,7 +116,13 @@ const RAIL_MONTH: CSSProperties = {
 const RAIL_DAY: CSSProperties = {
   width: 20,
   height: 20,
-  borderRadius: "50%",
+  // Rounded square per `design/sidebar-collapsed.png` — matches the
+  // shape the expanded card's DAY_TODAY carries (borderRadius: 4).
+  // A circle at this cell size clips two-digit days visually against
+  // the curved edge; a rounded square sits square around one or two
+  // digits at the same weight and keeps the treatment consistent
+  // between the two states of the widget.
+  borderRadius: 4,
   background: "var(--accent)",
   color: "var(--fg)",
   display: "flex",
