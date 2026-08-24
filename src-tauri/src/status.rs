@@ -1278,9 +1278,17 @@ mod tests {
         // USB-C PD chargers enumerate as `USB`, not `Mains`, on
         // current kernels. Matching `Mains` alone would report a
         // USB-C-charged laptop as running on battery.
+        //
+        // Real kernel supply names use `:` (e.g.
+        // `ucsi-source-psy-USBC000:001`); we use `.` in the test
+        // because `:` is a reserved character in Windows filenames
+        // and CI's Windows runner refuses to create a directory
+        // with one. The directory name is incidental to the
+        // parser's job — it reads `type` and `online` inside — so
+        // any non-Battery placeholder covers the branch.
         let tree = fake_power_supply_tree(&[
             ("BAT0", "Battery", None),
-            ("ucsi-source-psy-USBC000:001", "USB", Some("1")),
+            ("ucsi-source-psy-USBC000.001", "USB", Some("1")),
         ]);
         assert_eq!(ac_online_in(tree.path()), Some(true));
     }
@@ -1288,11 +1296,13 @@ mod tests {
     #[test]
     fn ac_online_takes_any_live_port_on_a_multi_port_machine() {
         // Two USB-C ports, one cable. The empty port reporting 0
-        // must not outvote the one with power coming in.
+        // must not outvote the one with power coming in. See the
+        // note on the previous test for why we use `.` instead of
+        // the kernel's real `:` in the supply-name segment.
         let tree = fake_power_supply_tree(&[
             ("BAT0", "Battery", None),
-            ("ucsi-source-psy-USBC000:001", "USB", Some("0")),
-            ("ucsi-source-psy-USBC000:002", "USB", Some("1")),
+            ("ucsi-source-psy-USBC000.001", "USB", Some("0")),
+            ("ucsi-source-psy-USBC000.002", "USB", Some("1")),
         ]);
         assert_eq!(ac_online_in(tree.path()), Some(true));
     }
