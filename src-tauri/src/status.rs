@@ -182,7 +182,16 @@ pub fn system_battery() -> BatteryStatus {
 /// What macOS's `pmset -g batt` says the battery is doing, when we
 /// can get an answer. Non-macOS platforms return `None` and the
 /// caller falls through to the starship-battery reading.
+///
+/// The variants are only constructed inside `macos_pmset_state`,
+/// which is `#[cfg(target_os = "macos")]`. Off macOS the type still
+/// exists (it's in `effective_charging_state`'s signature — a
+/// cross-platform sig with a platform-specific input) but nothing
+/// constructs the variants, so we allow dead-code there. Tests
+/// exercise the parser on every platform and keep the whole thing
+/// honestly covered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum PmsetHint {
     Charging,
     Charged,
@@ -308,6 +317,7 @@ fn macos_pmset_state() -> Option<PmsetHint> {
 /// The keyword sits between the percent and the time-remaining field,
 /// bounded by semicolons. Exported so tests can pin the three
 /// branches against captured strings without shelling out.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     // Search the whole text rather than pinning to a specific line —
     // pmset's output layout has varied over macOS versions, but the
