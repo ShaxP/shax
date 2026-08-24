@@ -326,8 +326,9 @@ describe("CpuWidget / rail (M13.5.5 remodel)", () => {
     // Bars are rendered from the samples, not zero-padded.
     expect(screen.getAllByTestId("sidebar-cpu-rail-bar").length).toBeGreaterThan(0);
     // Percent below the sparkline, still zero-padded for a stable
-    // width (`05` doesn't jump vs `55`).
-    expect(screen.getByTestId("sidebar-cpu-rail-percent").textContent).toBe("05");
+    // width (`05%` doesn't jump vs `55%`); the `%` sign is part of
+    // the reading so the rail label reads as a percent, not a count.
+    expect(screen.getByTestId("sidebar-cpu-rail-percent").textContent).toBe("05%");
   });
 
   it("colours the rail percent on the same heat scale as the header", () => {

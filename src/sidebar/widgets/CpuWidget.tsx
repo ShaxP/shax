@@ -218,7 +218,7 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
           style={{ ...RAIL_PERCENT, color: heatColour(load.cpu_percent) }}
           data-testid="sidebar-cpu-rail-percent"
         >
-          {Math.round(load.cpu_percent).toString().padStart(2, "0")}
+          {`${Math.round(load.cpu_percent).toString().padStart(2, "0")}%`}
         </span>
       </div>
     );
