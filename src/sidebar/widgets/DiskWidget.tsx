@@ -129,22 +129,28 @@ const RAIL_ROOT: CSSProperties = {
   cursor: "default",
 };
 
-// Mini usage bar + free-space label, matching the Battery rail's
-// visual language (22×6 track). The two bar-carrying rail widgets
-// read as siblings this way. The bar is heat-mapped by percent
-// used with the same thresholds as the expanded card, so a full
-// disk shouts red in either state.
+// Mini usage bar + free-space label. The bar is heat-mapped by
+// percent used with the same thresholds as the expanded card, so a
+// full disk shouts red in either state.
+//
+// Deliberately thinner (4 px) than Battery's rail bar (6 px):
+// battery's bar carries a metaphor — a "fuel gauge" the eye maps
+// straight to the physical battery — and reads better as a chunky
+// pill. Disk's bar is a plain usage indicator, and at the rail's
+// density a chunky bar started to compete with the free-space
+// figure below it for the eye. 4 px keeps the fill legible without
+// dominating the label.
 const RAIL_BAR_TRACK: CSSProperties = {
   width: 22,
-  height: 6,
-  borderRadius: 3,
+  height: 4,
+  borderRadius: 2,
   background: "var(--pane2)",
   overflow: "hidden",
 };
 
 const RAIL_BAR_FILL_BASE: CSSProperties = {
   height: "100%",
-  borderRadius: 3,
+  borderRadius: 2,
 };
 
 export interface DiskWidgetProps {
