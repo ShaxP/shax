@@ -58,18 +58,27 @@ use sysinfo::{MemoryRefreshKind, Networks, RefreshKind, System};
 /// - `percent` — how full is it? `None` when the OS couldn't compute
 ///   a percentage (rare — usually means the battery firmware is
 ///   reporting garbage). Range is 0..=100.
-/// - `on_ac_power` — is the machine currently drawing from wall
-///   power? True for both "actively charging" and "on AC, battery
-///   full" (macOS reports `IsCharging=false, FullyCharged=true` in
-///   the latter case). False for a laptop on battery — including a
-///   fully-charged laptop that was just unplugged. The frontend uses
-///   this as the primary discriminator between the plug icon and the
-///   battery-fill icon.
+/// - `on_ac_power` — is the machine currently plugged in? True for all
+///   three plugged-in states: actively charging, "charged" at 100 %
+///   (macOS reports `IsCharging=false, FullyCharged=true`), and
+///   charging held below 100 % by macOS's optimised-charging schedule
+///   (`IsCharging=false, FullyCharged=false`, which `starship-battery`
+///   can only call `State::Unknown`). False for a laptop on battery —
+///   including a fully-charged laptop that was just unplugged. This is
+///   the "is the bolt / plug lit?" flag: the statusbar picks the plug
+///   icon over the battery-fill icon on it, and the sidebar widget
+///   shows its charging bolt on it (see the M13.5.3 note below).
 /// - `charging` — is the battery actively being *charged* right now?
 ///   True only when energy is flowing into the cell. False when on
-///   battery, false when fully charged on AC. The frontend uses this
-///   only for the tooltip distinction between "Charging (X%)" and
-///   "AC power (X%)".
+///   battery, false when fully charged on AC, false when charging is
+///   held. This drives the *wording* — "Charging" vs "Charged" vs "On
+///   AC power" — and the `… to full` estimate, never the icon.
+///
+/// **Do not gate a plugged-in indicator on `charging` (M13.5.3).** It
+/// is the narrower flag, and macOS clears it the moment the battery
+/// reaches full or the charge schedule pauses — so a bolt keyed on it
+/// vanishes at exactly 100 % while the cable is still in, which is
+/// what the menu bar (keyed on external power) never does.
 ///
 /// We deliberately keep the two flags separate rather than collapsing
 /// into a three-state enum: it lets the frontend derive both the icon
@@ -162,15 +171,24 @@ pub fn system_battery() -> BatteryStatus {
         // reading. Other platforms are unaffected.
         let time_to_full_secs = sanitise_time_estimate(battery.time_to_full().map(|d| d.value));
         let time_to_empty_secs = sanitise_time_estimate(battery.time_to_empty().map(|d| d.value));
-        let pmset_hint = macos_pmset_state();
+        let pmset = macos_pmset_output();
+        let pmset_hint = pmset.as_deref().and_then(parse_pmset_state);
         let effective_state =
             effective_charging_state(battery.state(), time_to_full_secs, pmset_hint);
+        // `pmset`'s "Now drawing from …" header answers "is the cable
+        // in?" directly. The state enum can only infer it, and infers
+        // wrong whenever macOS is plugged in but not charging.
+        let on_ac_power = pmset
+            .as_deref()
+            .and_then(parse_pmset_on_ac)
+            .unwrap_or_else(|| ac_power_from_state(effective_state));
         let seconds_remaining = match effective_state {
             State::Charging => time_to_full_secs,
             State::Discharging => time_to_empty_secs,
             _ => None,
         };
-        if let Some(status) = snapshot_from(ratio, effective_state, seconds_remaining) {
+        if let Some(status) = snapshot_from(ratio, effective_state, on_ac_power, seconds_remaining)
+        {
             return status;
         }
     }
@@ -196,6 +214,11 @@ pub(crate) enum PmsetHint {
     Charging,
     Charged,
     Discharging,
+    /// `AC attached; not charging` — plugged in, below 100 %, with
+    /// macOS holding the charge (optimised battery charging, or a
+    /// thermal / firmware hold). Energy is flowing neither in nor
+    /// out of the cell.
+    NotCharging,
 }
 
 /// Normalise the raw `starship-battery` state using two signals that
@@ -229,6 +252,12 @@ pub(crate) fn effective_charging_state(
                 return State::Full;
             }
         }
+        // Plugged in with the charge held: not charging, but not
+        // discharging either, and emphatically not `Full` — it can
+        // sit at 80 %. `Unknown` is the honest answer, and with
+        // `on_ac_power` now read from pmset's header rather than
+        // inferred from this enum, it no longer implies "on battery".
+        Some(PmsetHint::NotCharging) => return State::Unknown,
         None => {}
     }
     // Fallback: time-to-full > 0 while `Full` also means topping
@@ -277,15 +306,18 @@ pub(crate) fn sanitise_time_estimate(secs: Option<f32>) -> Option<u64> {
     Some(rounded)
 }
 
-/// Ask `pmset -g batt` what macOS thinks the battery is doing right
-/// now. `None` on non-macOS, on subprocess failure, or when the
-/// output doesn't mention any of the three keywords we look for.
+/// Capture `pmset -g batt` output. `None` on non-macOS or on
+/// subprocess failure, in which case both pmset-derived signals fall
+/// back to the `starship-battery` reading.
 ///
-/// The command is stable across macOS versions (ships with the OS)
-/// and its output is small; parsing is a substring search on the
-/// short line describing the internal battery. See
-/// [`parse_pmset_state`] for the parser.
-fn macos_pmset_state() -> Option<PmsetHint> {
+/// One spawn feeds both parsers ([`parse_pmset_state`] for what the
+/// battery is doing, [`parse_pmset_on_ac`] for whether the cable is
+/// in) — the poll runs every 5s, so spawning twice would double a
+/// cost we already pay reluctantly.
+///
+/// The command is stable across macOS versions (it ships with the OS)
+/// and its output is two short lines.
+fn macos_pmset_output() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let output = std::process::Command::new("/usr/bin/pmset")
@@ -296,8 +328,7 @@ fn macos_pmset_state() -> Option<PmsetHint> {
         if !output.status.success() {
             return None;
         }
-        let text = std::str::from_utf8(&output.stdout).ok()?;
-        parse_pmset_state(text)
+        String::from_utf8(output.stdout).ok()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -305,9 +336,9 @@ fn macos_pmset_state() -> Option<PmsetHint> {
     }
 }
 
-/// Parse `pmset -g batt` output for the "charging" / "charged" /
-/// "discharging" keyword. Output looks like (tab between id and
-/// percent replaced with spaces here to keep clippy happy):
+/// Parse `pmset -g batt` output for the state keyword. Output looks
+/// like (tab between id and percent replaced with spaces here to keep
+/// clippy happy):
 ///
 /// ```text
 /// Now drawing from 'AC Power'
@@ -315,16 +346,19 @@ fn macos_pmset_state() -> Option<PmsetHint> {
 /// ```
 ///
 /// The keyword sits between the percent and the time-remaining field,
-/// bounded by semicolons. Exported so tests can pin the three
-/// branches against captured strings without shelling out.
+/// bounded by semicolons. Exported so tests can pin every branch
+/// against captured strings without shelling out.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     // Search the whole text rather than pinning to a specific line —
     // pmset's output layout has varied over macOS versions, but the
-    // keyword itself is stable and always appears in the battery
-    // stanza. Priority order matters because the shorter keywords
-    // are substrings of longer / different ones:
-    //   - `discharging` first (contains `charging` as a substring)
+    // keywords themselves are stable and always appear in the battery
+    // stanza. Priority order matters because the shorter keywords are
+    // substrings of the longer ones:
+    //   - `not charging` first, or the `charging` arm below would
+    //     claim the held-charge line (`80%; AC attached; not
+    //     charging`) and light the bolt as if energy were flowing in
+    //   - `discharging` next (contains `charging` as a substring)
     //   - `charged` before `charging` (specificity)
     //   - `finishing charge` before `charging` (the near-100 %
     //     topping-off keyword — also contains `charging` if you
@@ -332,6 +366,9 @@ pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     //     documents the state rather than relying on that)
     //   - `charging` last, as the general case
     let lower = text.to_ascii_lowercase();
+    if lower.contains("not charging") {
+        return Some(PmsetHint::NotCharging);
+    }
     if lower.contains("discharging") {
         return Some(PmsetHint::Discharging);
     }
@@ -344,32 +381,72 @@ pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     None
 }
 
+/// Parse `pmset -g batt`'s header line for whether the machine is
+/// plugged in:
+///
+/// ```text
+/// Now drawing from 'AC Power'        → Some(true)
+/// Now drawing from 'Battery Power'   → Some(false)
+/// ```
+///
+/// This is the signal macOS's own menu bar lights its bolt on, and
+/// the one signal `starship-battery`'s `State` enum cannot express:
+/// plugged in but neither charging nor full collapses to
+/// `State::Unknown`, indistinguishable from a genuinely unknown
+/// reading. `None` when neither phrase is present, leaving the caller
+/// on its state-derived fallback.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn parse_pmset_on_ac(text: &str) -> Option<bool> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("'ac power'") {
+        return Some(true);
+    }
+    if lower.contains("'battery power'") {
+        return Some(false);
+    }
+    None
+}
+
+/// Whether a `State` implies wall power, for platforms where we have
+/// no better signal than the enum. Charging and Full are the only two
+/// states that can only happen with a cable in; `Unknown` is ambiguous
+/// and we resolve it the safe way (see the `Unknown` note on
+/// [`snapshot_from`]).
+fn ac_power_from_state(state: State) -> bool {
+    matches!(state, State::Charging | State::Full)
+}
+
 /// Turn a raw (state-of-charge ratio, `starship-battery` state)
 /// reading into a [`BatteryStatus`], or [`None`] if the entry looks
 /// phantom.
 ///
 /// **State mapping.** The `State` enum reports what the OS thinks the
-/// battery is doing right now. We collapse it into two orthogonal
-/// booleans:
+/// battery is doing right now; `charging` is read off it alone.
+/// `on_ac_power` is passed in separately by the caller, because the
+/// enum cannot express it (see [`parse_pmset_on_ac`]) — the column
+/// below is only what [`ac_power_from_state`] infers when no better
+/// signal is available.
 ///
-/// | `State`       | `on_ac_power` | `charging` | Real-world case                          |
-/// | ------------- | ------------- | ---------- | ---------------------------------------- |
-/// | `Charging`    | `true`        | `true`     | Plugged in, drawing energy into battery. |
-/// | `Full`        | `true`        | `false`    | Plugged in, battery at true 100%, at rest.|
-/// | `Discharging` | `false`       | `false`    | On battery, energy flowing out.          |
+/// | `State`       | `on_ac_power`* | `charging` | Real-world case                           |
+/// | ------------- | -------------- | ---------- | ----------------------------------------- |
+/// | `Charging`    | `true`         | `true`     | Plugged in, drawing energy into battery.  |
+/// | `Full`        | `true`         | `false`    | Plugged in, battery at true 100%, at rest.|
+/// | `Discharging` | `false`        | `false`    | On battery, energy flowing out.           |
+/// | `Empty`       | `false`        | `false`    | On battery, 0%.                           |
+/// | `Unknown`     | `false`        | `false`    | Defensive default — assume on battery.    |
 ///
 /// Note: `State::Full` reaches this function only when the caller
 /// has already ruled out the topping-off case (see
 /// [`effective_charging_state`]), so a `Full` here is genuinely a
 /// battery at rest on AC.
-/// | `Empty`       | `false`       | `false`    | On battery, 0%.                          |
-/// | `Unknown`     | `false`       | `false`    | Defensive default — assume on battery.   |
 ///
 /// The `Unknown` default matters: an unplugged laptop at 100% that
 /// momentarily reports `Unknown` should not flash the plug icon. The
 /// worst case of getting this wrong is a plugged-in laptop briefly
 /// showing the battery icon, which is a self-correcting visual glitch
-/// versus a stationary lie about power state.
+/// versus a stationary lie about power state. On macOS the pmset
+/// header answers the question outright, so the default only bites
+/// on platforms without one.
 ///
 /// **Phantom-entry filter.** On Apple Silicon Mac desktops (Mac Mini,
 /// Mac Studio) the `IOPMPowerSource` service enumerates entries even
@@ -387,6 +464,7 @@ pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
 fn snapshot_from(
     ratio: f32,
     state: State,
+    on_ac_power: bool,
     seconds_remaining: Option<u64>,
 ) -> Option<BatteryStatus> {
     if !ratio.is_finite() {
@@ -396,7 +474,6 @@ fn snapshot_from(
     // `state_of_charge()` is nominally 0.0..=1.0; noisy firmware can
     // report slightly outside that range, so clamp before scaling.
     let percent = (ratio.clamp(0.0, 1.0) * 100.0).round() as u8;
-    let on_ac_power = matches!(state, State::Charging | State::Full);
     let charging = matches!(state, State::Charging);
     Some(BatteryStatus {
         present: true,
@@ -861,15 +938,15 @@ mod tests {
         // non-finite state-of-charge. `snapshot_from` must reject it
         // so the caller can try the next entry (or fall through to
         // `absent()` and render the desktop plug-alone chip).
-        assert!(snapshot_from(f32::NAN, State::Discharging, None).is_none());
-        assert!(snapshot_from(f32::INFINITY, State::Full, None).is_none());
-        assert!(snapshot_from(f32::NEG_INFINITY, State::Charging, None).is_none());
+        assert!(snapshot_from(f32::NAN, State::Discharging, false, None).is_none());
+        assert!(snapshot_from(f32::INFINITY, State::Full, true, None).is_none());
+        assert!(snapshot_from(f32::NEG_INFINITY, State::Charging, true, None).is_none());
     }
 
     #[test]
     fn snapshot_from_maps_state_charging_to_both_flags_true() {
         // Actively drawing energy into the battery.
-        let s = snapshot_from(0.45, State::Charging, Some(1_800)).expect("charging is real");
+        let s = snapshot_from(0.45, State::Charging, true, Some(1_800)).expect("charging is real");
         assert!(s.on_ac_power);
         assert!(s.charging);
         assert_eq!(s.percent, Some(45));
@@ -880,7 +957,7 @@ mod tests {
     fn snapshot_from_maps_state_full_to_on_ac_but_not_charging() {
         // Plugged-in laptop at 100%. macOS reports IsCharging=false
         // in this case — the OS-level distinction we're preserving.
-        let s = snapshot_from(1.00, State::Full, None).expect("full is real");
+        let s = snapshot_from(1.00, State::Full, true, None).expect("full is real");
         assert!(s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(100));
@@ -894,7 +971,8 @@ mod tests {
         // Unplugged laptop consuming battery. Note: even at 100%
         // (unplugged full-charge laptop), Discharging still resolves
         // to on-battery — this is the MBP bug the mapping fixes.
-        let s = snapshot_from(1.00, State::Discharging, Some(14_400)).expect("discharging is real");
+        let s = snapshot_from(1.00, State::Discharging, false, Some(14_400))
+            .expect("discharging is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(100));
@@ -903,7 +981,7 @@ mod tests {
 
     #[test]
     fn snapshot_from_maps_state_empty_to_neither_flag() {
-        let s = snapshot_from(0.00, State::Empty, None).expect("empty is real");
+        let s = snapshot_from(0.00, State::Empty, false, None).expect("empty is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(0));
@@ -1048,6 +1126,91 @@ mod tests {
     }
 
     #[test]
+    fn parse_pmset_reads_held_charge_as_not_charging() {
+        // Real captured string from a Mac with optimised battery
+        // charging holding at 80 %. `not charging` contains the
+        // substring `charging`, so without its own arm first this
+        // line reads as "actively charging" and lights the bolt as
+        // if energy were flowing in.
+        let text = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t80%; AC attached; not charging present: true\n";
+        assert_eq!(parse_pmset_state(text), Some(PmsetHint::NotCharging));
+    }
+
+    #[test]
+    fn effective_charging_state_pmset_not_charging_is_neither_direction() {
+        // Held charge: not charging, not discharging, and not Full
+        // (it can sit at 80 %). `charging` must come out false.
+        assert_eq!(
+            effective_charging_state(State::Unknown, None, Some(PmsetHint::NotCharging)),
+            State::Unknown
+        );
+        // pmset stays the authority even if starship-battery still
+        // reports a stale `Charging`.
+        assert_eq!(
+            effective_charging_state(State::Charging, Some(120), Some(PmsetHint::NotCharging)),
+            State::Unknown
+        );
+    }
+
+    #[test]
+    fn parse_pmset_on_ac_reads_the_drawing_from_header() {
+        // The signal the `State` enum cannot carry: plugged in but
+        // neither charging nor full. This header is what macOS's own
+        // menu bar lights its bolt on.
+        assert_eq!(
+            parse_pmset_on_ac("Now drawing from 'AC Power'\n -InternalBattery-0\t80%; AC attached; not charging present: true"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_pmset_on_ac("Now drawing from 'Battery Power'\n -InternalBattery-0\t72%; discharging; 4:20 remaining present: true"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn parse_pmset_on_ac_returns_none_without_the_header() {
+        // No header, no claim — the caller falls back to the
+        // state-derived inference rather than guessing "unplugged".
+        assert_eq!(parse_pmset_on_ac(""), None);
+        assert_eq!(parse_pmset_on_ac("100%; charged; 0:00 remaining"), None);
+    }
+
+    #[test]
+    fn ac_power_from_state_infers_the_cable_only_where_the_enum_can() {
+        // The non-macOS fallback. `Unknown` deliberately reads as
+        // "on battery" — see the `snapshot_from` doc note.
+        assert!(ac_power_from_state(State::Charging));
+        assert!(ac_power_from_state(State::Full));
+        assert!(!ac_power_from_state(State::Discharging));
+        assert!(!ac_power_from_state(State::Empty));
+        assert!(!ac_power_from_state(State::Unknown));
+    }
+
+    #[test]
+    fn snapshot_from_takes_on_ac_from_the_caller_not_the_state() {
+        // The held-charge case end to end: macOS says plugged in,
+        // `starship-battery` can only say `Unknown`. The snapshot has
+        // to report on-AC (so the bolt lights) without reporting
+        // charging (so the wording stays honest).
+        let s = snapshot_from(0.80, State::Unknown, true, None).expect("held charge is real");
+        assert!(s.on_ac_power);
+        assert!(!s.charging);
+        assert_eq!(s.percent, Some(80));
+        assert_eq!(s.seconds_remaining, None);
+    }
+
+    #[test]
+    fn snapshot_from_reports_full_on_ac_as_on_ac_but_not_charging() {
+        // The reported M13.5.3 bug's backend half: at 100 % on the
+        // cable, macOS reports `charged` / `IsCharging=false`. That
+        // is correct and stays — `on_ac_power` is what carries the
+        // plugged-in fact, and it must be true here.
+        let s = snapshot_from(1.00, State::Full, true, None).expect("charged is real");
+        assert!(s.on_ac_power);
+        assert!(!s.charging);
+    }
+
+    #[test]
     fn sanitise_time_estimate_passes_normal_readings_through() {
         // Real values: 12 minutes to full, 4 h 20 m remaining, 1 s.
         assert_eq!(sanitise_time_estimate(Some(720.0)), Some(720));
@@ -1088,9 +1251,16 @@ mod tests {
 
     #[test]
     fn snapshot_from_maps_state_unknown_to_neither_flag_defensively() {
-        // Ambiguous OS state: default to "on battery" so we never
-        // silently misreport an unplugged laptop as AC power.
-        let s = snapshot_from(0.55, State::Unknown, None).expect("unknown is real");
+        // Ambiguous OS state with no better AC signal (the non-macOS
+        // fallback path): default to "on battery" so we never silently
+        // misreport an unplugged laptop as AC power.
+        let s = snapshot_from(
+            0.55,
+            State::Unknown,
+            ac_power_from_state(State::Unknown),
+            None,
+        )
+        .expect("unknown is real");
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(55));
@@ -1101,9 +1271,9 @@ mod tests {
         // Noisy firmware occasionally reports slightly outside
         // 0.0..=1.0 — we clamp rather than reject, because the
         // battery is still real.
-        let over = snapshot_from(1.03, State::Discharging, None).expect("clamped");
+        let over = snapshot_from(1.03, State::Discharging, false, None).expect("clamped");
         assert_eq!(over.percent, Some(100));
-        let under = snapshot_from(-0.02, State::Discharging, None).expect("clamped");
+        let under = snapshot_from(-0.02, State::Discharging, false, None).expect("clamped");
         assert_eq!(under.percent, Some(0));
     }
 

@@ -13,6 +13,17 @@
  *   [────────── heat-mapped bar ──────────]
  *   charging · 1h 05m to full
  *
+ * **The bolt tracks `on_ac_power`, not `charging`.** The bolt answers
+ * "is the cable in?", the same question macOS's menu-bar bolt answers,
+ * and the line under the bar answers "and is energy actually flowing?"
+ * Gating the bolt on `charging` was the M13.5.3 bug where a laptop
+ * plugged in at 100 % showed no bolt: macOS reports `charged`, not
+ * `charging`, the instant the battery fills (and reports neither while
+ * optimised charging holds at 80 %), so the icon vanished exactly when
+ * the cable was still in. `charging` remains the flag for the wording,
+ * where the distinction is real and stated in words rather than
+ * inferred from a missing glyph.
+ *
  * Bar colour uses a three-tier heat map inverted from the CPU widget
  * (low is bad for battery, high is bad for CPU):
  *   - **< 10 %** → red. Alarm — plug in now.
@@ -162,12 +173,12 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
          *  wrapper renders even when not charging so the percent's
          *  vertical position doesn't jump between states. */}
         <div style={RAIL_PERCENT_ROW}>
-          {battery.charging && (
+          {battery.on_ac_power && (
             <BoltGlyph
               size={9}
               colour="var(--green)"
               testid="sidebar-battery-rail-charging"
-              title="Charging"
+              title={powerLabel(battery)}
             />
           )}
           <span style={RAIL_PERCENT} data-testid="sidebar-battery-rail-percent">
@@ -189,8 +200,8 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
       <div style={CARD_HEADER}>
         <span style={CARD_LABEL}>Battery</span>
         <span style={HEADER_RIGHT}>
-          {battery.charging && (
-            <ChargingBadge testid="sidebar-battery-charging-badge" title="Charging" />
+          {battery.on_ac_power && (
+            <ChargingBadge testid="sidebar-battery-charging-badge" title={powerLabel(battery)} />
           )}
           {percent !== null && (
             <span style={PERCENT_VALUE} data-testid="sidebar-battery-percent">
@@ -198,10 +209,11 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
             </span>
           )}
           {/* Discharging shows the time inline with the percent, as
-           *  in the sidebar-extended mockup. Charging moves it to a
-           *  dedicated line beneath the bar (see below) so the
-           *  `charging · … to full` phrasing has room to breathe. */}
-          {!battery.charging && remainingLabel !== null && (
+           *  in the sidebar-extended mockup. Every plugged-in state
+           *  moves its wording to a dedicated line beneath the bar
+           *  (see below) so the `charging · … to full` phrasing has
+           *  room to breathe. */}
+          {!battery.on_ac_power && remainingLabel !== null && (
             <span style={REMAINING_INLINE} data-testid="sidebar-battery-remaining">
               · {remainingLabel}
             </span>
@@ -211,9 +223,9 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
       <div style={BAR_TRACK} data-testid="sidebar-battery-track">
         <div style={fillStyle} data-testid="sidebar-battery-fill" />
       </div>
-      {battery.charging && (
+      {battery.on_ac_power && (
         <span style={CHARGING_LINE} data-testid="sidebar-battery-charging-line">
-          charging{remainingLabel !== null ? ` · ${remainingLabel} to full` : ""}
+          {powerDetail(battery, remainingLabel)}
         </span>
       )}
     </div>
@@ -286,6 +298,38 @@ function BoltGlyph({
   );
 }
 
+/** What the bolt means right now, for its `title` / `aria-label`. The
+ *  bolt itself is one glyph across every plugged-in state (the cable
+ *  is in, full stop); the label is where the three states separate. */
+export function powerLabel(battery: { on_ac_power: boolean; charging: boolean }): string {
+  if (battery.charging) return "Charging";
+  return battery.on_ac_power ? "On AC power" : "On battery";
+}
+
+/** The faint line under the bar, shown whenever we're on AC.
+ *
+ *  Three plugged-in states, three phrasings — this line is what keeps
+ *  the always-on bolt honest, so "plugged in and filling" never reads
+ *  the same as "plugged in and idle":
+ *    - charging          → `charging · 1h 05m to full` (estimate when
+ *                          the OS gives us one, bare `charging` when
+ *                          it doesn't)
+ *    - on AC at 100 %    → `charged`
+ *    - on AC below 100 % → `on AC · not charging` (macOS holding the
+ *                          charge; the cell is neither filling nor
+ *                          draining)
+ *
+ *  Exported so tests can pin each phrasing without a render. */
+export function powerDetail(
+  battery: { on_ac_power: boolean; charging: boolean; percent: number | null },
+  remainingLabel: string | null,
+): string {
+  if (battery.charging) {
+    return remainingLabel !== null ? `charging · ${remainingLabel} to full` : "charging";
+  }
+  return battery.percent !== null && battery.percent >= 100 ? "charged" : "on AC · not charging";
+}
+
 /** Colour rules from the widget header. Exported so a test can pin
  *  each branch without going through a render.
  *
@@ -339,7 +383,9 @@ function buildTooltip(battery: {
   const state = battery.charging
     ? "Charging"
     : battery.on_ac_power
-      ? "On AC power (at rest)"
+      ? battery.percent !== null && battery.percent >= 100
+        ? "Charged"
+        : "On AC power (not charging)"
       : "On battery";
   parts.push(state);
   if (battery.percent !== null) parts.push(`${battery.percent}%`);

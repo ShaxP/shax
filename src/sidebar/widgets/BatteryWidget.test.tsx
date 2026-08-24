@@ -8,6 +8,7 @@
  *   - the `4h 20m` remaining-time formatter and its "null → hidden"
  *     honesty rule
  *   - both expanded and rail states render the same colour/percent
+ *   - the bolt tracks the cable, not `charging` (the M13.5.3 bug)
  *   - the tooltip disambiguates the four states
  */
 
@@ -17,7 +18,14 @@ import "@testing-library/jest-dom";
 
 import { BatteryProvider } from "../../lib/BatteryContext";
 import type { BatteryStatus } from "../../lib/ipc";
-import { barColour, batteryHeatColour, BatteryWidget, formatRemaining } from "./BatteryWidget";
+import {
+  barColour,
+  batteryHeatColour,
+  BatteryWidget,
+  formatRemaining,
+  powerDetail,
+  powerLabel,
+} from "./BatteryWidget";
 
 afterEach(cleanup);
 
@@ -30,6 +38,14 @@ function status(overrides: Partial<BatteryStatus> = {}): BatteryStatus {
     seconds_remaining: 4 * 3600 + 20 * 60,
     ...overrides,
   };
+}
+
+/** A plugged-in snapshot. `charging` never arrives without
+ *  `on_ac_power` on the wire — the backend derives them from one
+ *  reading — so charging fixtures set both, or they'd be testing a
+ *  state the probe cannot produce. */
+function onAc(overrides: Partial<BatteryStatus> = {}): BatteryStatus {
+  return status({ on_ac_power: true, ...overrides });
 }
 
 describe("BatteryWidget / hidden", () => {
@@ -175,7 +191,7 @@ describe("BatteryWidget / rail", () => {
 
   it("shows a lightning-bolt glyph to the LEFT of the percent when charging", () => {
     render(
-      <BatteryProvider value={status({ charging: true })}>
+      <BatteryProvider value={onAc({ charging: true })}>
         <BatteryWidget visible={false} />
       </BatteryProvider>,
     );
@@ -194,13 +210,23 @@ describe("BatteryWidget / rail", () => {
     expect(children.indexOf(bolt)).toBeLessThan(children.indexOf(percent));
   });
 
-  it("hides the charging glyph in the rail when not charging", () => {
+  it("hides the bolt in the rail when running on battery", () => {
     render(
-      <BatteryProvider value={status({ charging: false })}>
+      <BatteryProvider value={status({ on_ac_power: false, charging: false })}>
         <BatteryWidget visible={false} />
       </BatteryProvider>,
     );
     expect(screen.queryByTestId("sidebar-battery-rail-charging")).not.toBeInTheDocument();
+  });
+
+  it("keeps the bolt in the rail at 100 % on the cable", () => {
+    // The collapsed half of the reported bug — same cause, same fix.
+    render(
+      <BatteryProvider value={onAc({ charging: false, percent: 100, seconds_remaining: null })}>
+        <BatteryWidget visible={false} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-rail-charging")).toBeInTheDocument();
   });
 });
 
@@ -210,16 +236,16 @@ describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
 
   it("shows the charging badge in the header when charging", () => {
     render(
-      <BatteryProvider value={status({ charging: true })}>
+      <BatteryProvider value={onAc({ charging: true })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
     expect(screen.getByTestId("sidebar-battery-charging-badge")).toBeInTheDocument();
   });
 
-  it("does not render the charging badge when not charging", () => {
+  it("does not render the charging badge when running on battery", () => {
     render(
-      <BatteryProvider value={status({ charging: false })}>
+      <BatteryProvider value={status({ on_ac_power: false, charging: false })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
@@ -228,7 +254,7 @@ describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
 
   it("moves the time estimate under the bar as `charging · N to full`", () => {
     render(
-      <BatteryProvider value={status({ charging: true, seconds_remaining: 3600 + 5 * 60 })}>
+      <BatteryProvider value={onAc({ charging: true, seconds_remaining: 3600 + 5 * 60 })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
@@ -243,7 +269,7 @@ describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
     // Charging is real state even without an ETA — hide the estimate
     // suffix but not the line itself.
     render(
-      <BatteryProvider value={status({ charging: true, seconds_remaining: null })}>
+      <BatteryProvider value={onAc({ charging: true, seconds_remaining: null })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
@@ -252,7 +278,7 @@ describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
 
   it("hides the charging line entirely when discharging", () => {
     render(
-      <BatteryProvider value={status({ charging: false })}>
+      <BatteryProvider value={status({ on_ac_power: false, charging: false })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
@@ -268,12 +294,65 @@ describe("BatteryWidget / charging visuals (M13.5.3 follow-up)", () => {
     // "actively charging" signal. Triple-encoding it on the bar too
     // would be waste of ink.
     render(
-      <BatteryProvider value={status({ charging: true, percent: 82 })}>
+      <BatteryProvider value={onAc({ charging: true, percent: 82 })}>
         <BatteryWidget visible={true} />
       </BatteryProvider>,
     );
     expect(screen.getByTestId("sidebar-battery-fill").style.background).toBe("var(--green)");
     expect(screen.getByTestId("sidebar-battery-fill").style.background).not.toContain("--accent");
+  });
+});
+
+describe("BatteryWidget / plugged in but not charging (M13.5.3 bug)", () => {
+  // The reported bug: plugged in at 100 %, no bolt. macOS reports
+  // `charged` (`IsCharging=false`) the moment the battery fills, so a
+  // bolt gated on `charging` disappears at exactly the percentage
+  // where the cable is most obviously still in. The bolt tracks
+  // `on_ac_power` instead; the line under the bar carries which of
+  // the three plugged-in states we're actually in.
+
+  it("shows the bolt at 100 % on the cable, where macOS reports `charged`", () => {
+    render(
+      <BatteryProvider value={onAc({ charging: false, percent: 100, seconds_remaining: null })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-charging-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-battery-charging-line").textContent).toBe("charged");
+  });
+
+  it("shows the bolt while macOS holds the charge below 100 %", () => {
+    // Optimised battery charging parks at 80 %: on AC, not charging,
+    // not full. The cable is in, so the bolt is lit — and the line
+    // says why the number isn't moving.
+    render(
+      <BatteryProvider value={onAc({ charging: false, percent: 80, seconds_remaining: null })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    expect(screen.getByTestId("sidebar-battery-charging-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-battery-charging-line").textContent).toBe(
+      "on AC · not charging",
+    );
+  });
+
+  it("the bolt's label distinguishes the states it does not distinguish visually", () => {
+    // One glyph, three states — so the accessible name and tooltip
+    // are what keep "filling" from reading identical to "idle".
+    expect(powerLabel({ on_ac_power: true, charging: true })).toBe("Charging");
+    expect(powerLabel({ on_ac_power: true, charging: false })).toBe("On AC power");
+    expect(powerLabel({ on_ac_power: false, charging: false })).toBe("On battery");
+  });
+
+  it("powerDetail phrases each plugged-in state", () => {
+    expect(powerDetail({ on_ac_power: true, charging: true, percent: 45 }, "1h 05m")).toBe(
+      "charging · 1h 05m to full",
+    );
+    expect(powerDetail({ on_ac_power: true, charging: true, percent: 45 }, null)).toBe("charging");
+    expect(powerDetail({ on_ac_power: true, charging: false, percent: 100 }, null)).toBe("charged");
+    expect(powerDetail({ on_ac_power: true, charging: false, percent: 80 }, null)).toBe(
+      "on AC · not charging",
+    );
   });
 });
 
@@ -291,6 +370,20 @@ describe("BatteryWidget / tooltip", () => {
     expect(tooltip).toContain("45%");
     expect(tooltip).toContain("1h 00m");
     expect(tooltip).toContain("to full");
+  });
+
+  it("says Charged rather than Charging at 100 % on the cable", () => {
+    // The bolt is the same glyph in both states, so the tooltip is
+    // where the difference has to be stated outright.
+    render(
+      <BatteryProvider value={onAc({ charging: false, percent: 100, seconds_remaining: null })}>
+        <BatteryWidget visible={true} />
+      </BatteryProvider>,
+    );
+    const tooltip = screen.getByTestId("sidebar-battery").getAttribute("title") ?? "";
+    expect(tooltip).toContain("Charged");
+    expect(tooltip).not.toContain("Charging");
+    expect(tooltip).toContain("100%");
   });
 
   it("names the state, percent, and remaining time when discharging", () => {

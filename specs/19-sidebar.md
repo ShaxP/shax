@@ -324,7 +324,18 @@ Navigation is client-only — no probes, no persistence. Prev/next chevrons walk
 
 The statusbar carries a battery chip today (M12.4b). The sidebar's Battery card is richer: `82% · 4h 20m` labels with a full-width horizontal bar underneath.
 
-Bar colour is a three-tier heat map on percent, mirroring the CPU widget's `heatColour` shape but inverted (low is bad for battery, high is bad for CPU): green ≥ 20 %, amber < 20 %, red < 10 %. When charging, the bar's colour is unchanged — a battery-outline-with-bolt icon in the header carries "actively charging", and a `charging · 1h 05m to full` line under the bar carries the outcome (per `design/battery-charging-expanded.png`). Triple-encoding "charging" on the bar colour too would be waste of ink; the bar stays on its one job (how much charge is in there). Rail state gains a small lightning-bolt glyph next to the mini bar when charging.
+Bar colour is a three-tier heat map on percent, mirroring the CPU widget's `heatColour` shape but inverted (low is bad for battery, high is bad for CPU): green ≥ 20 %, amber < 20 %, red < 10 %. When plugged in, the bar's colour is unchanged — a battery-outline-with-bolt icon in the header carries "the cable is in", and a line under the bar carries what the cable is doing (per `design/battery-charging-expanded.png`). Triple-encoding power state on the bar colour too would be waste of ink; the bar stays on its one job (how much charge is in there). Rail state gains a small lightning-bolt glyph next to the mini bar on the same rule.
+
+**The bolt tracks `on_ac_power`, not `charging`.** These are different questions and only the first one is what a bolt is read as. macOS reports `charging` for the window where energy is flowing into the cell and drops it the instant the battery fills (`charged`) or the optimised-charging schedule parks it (`AC attached; not charging`) — so a bolt gated on `charging` vanishes at exactly 100 % on the cable, which is the M13.5.3 bug and is not what the menu bar does. `charging` still decides the *wording*, where the distinction is stated in words rather than inferred from a missing glyph:
+
+| State                          | Bolt | Line under the bar        |
+| ------------------------------ | ---- | ------------------------- |
+| Charging                       | yes  | `charging · 1h 05m to full` (bare `charging` with no OS estimate) |
+| On AC at 100 %                 | yes  | `charged`                 |
+| On AC below 100 %, held        | yes  | `on AC · not charging`    |
+| On battery                     | no   | none — the estimate sits inline with the percent |
+
+The backend owes the frontend an `on_ac_power` that is true in all three plugged-in rows. `starship-battery`'s `State` enum cannot express the third (plugged in, neither charging nor full, which it can only call `Unknown`), so on macOS the flag is read from `pmset -g batt`'s `Now drawing from 'AC Power'` header — the same signal the menu bar lights its own bolt on — and falls back to the state enum elsewhere.
 
 Both surfaces stay for M13.5. Consolidation is a separate conversation, held after the sidebar version has landed and been lived with. Time and IP already have the same overlap — both live in the sidebar and the statusbar today — and the right time to settle "what does the statusbar carry now that the sidebar exists?" is once, across every duplicated signal at the same time, not per-widget in the milestone that first duplicates it.
 
@@ -454,7 +465,7 @@ Scope: two new widgets and one small extension of the existing `system_battery` 
 - **`BatteryStatus` gains `seconds_remaining: Option<u64>`** — the mockup's `4h 20m` label needs it and the earlier draft of this slice claimed "no new backend" in error. `starship-battery` already exposes `time_to_full` / `time_to_empty`; we pick the one that matches the current state (`Charging` → time-to-full, `Discharging` → time-to-empty, everything else → `None`). Frontend hides the label rather than inventing one when the OS returns `None`.
 - Both widgets wired into the sidebar's widget slot in the order pinned above.
 
-**Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present, with `82% · 4h 20m` labels and a state-coloured bar (green when discharging comfortably, amber when < 20 %, blue when charging, dim when fully-charged-on-AC); silently omitted when no battery.
+**Exit:** Calendar renders the current month with today accented; navigating other months does not lose the "today" reference on return. Battery card renders when a battery is present, with `82% · 4h 20m` labels and a percent-coloured bar (green ≥ 20 %, amber < 20 %, red < 10 %, at every power state); silently omitted when no battery. The header bolt and the line under the bar follow the table in D9 — in particular the bolt is lit at 100 % on the cable, where macOS reports `charged` rather than `charging`.
 
 ### M13.5.4 — Disk widget + volume pager
 
