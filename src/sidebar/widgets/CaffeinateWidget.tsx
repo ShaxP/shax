@@ -152,13 +152,46 @@ const KNOB_BASE: CSSProperties = {
   transition: "left 120ms ease-out",
 };
 
-const RAIL_ROOT: CSSProperties = {
+// Rail card carries the same border-colour + background contract as
+// the extended card — off is transparent with a thin `--border`
+// outline; on is `--accent-soft` filled with an `--accent` border.
+// Without the outline the resting rail glyph read as loose furniture
+// rather than a control the user could operate by expanding; with it
+// the two states of the widget stay visually consistent between the
+// two states of the sidebar.
+//
+// Compact padding (6 px) rather than the extended card's `10px 12px`
+// — the rail's content area is ~40 px wide, so a 12 px horizontal
+// padding would leave nothing for the glyph.
+const RAIL_ROOT_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  height: 32,
+  padding: 6,
+  // Long-hand `borderWidth` / `borderStyle` (rather than the
+  // `border` shorthand) so the variant maps below can override
+  // just `borderColor` without React re-emitting the shorthand
+  // and stomping the width — keeps the on/off toggle jitter-free
+  // and the layout stable to the pixel.
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderRadius: 8,
   fontSize: 15,
   cursor: "default",
+  minHeight: 32,
+  boxSizing: "border-box",
+};
+
+const RAIL_ROOT_RESTING: CSSProperties = {
+  ...RAIL_ROOT_BASE,
+  background: "transparent",
+  borderColor: "var(--border)",
+};
+
+const RAIL_ROOT_ACTIVE: CSSProperties = {
+  ...RAIL_ROOT_BASE,
+  background: "var(--accent-soft)",
+  borderColor: "var(--accent)",
 };
 
 export interface CaffeinateWidgetProps {
@@ -241,7 +274,12 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
 
   if (!visible) {
     return (
-      <div data-testid="sidebar-caffeinate-rail" style={RAIL_ROOT} title={tooltip}>
+      <div
+        data-testid="sidebar-caffeinate-rail"
+        data-active={on ? "true" : "false"}
+        style={on ? RAIL_ROOT_ACTIVE : RAIL_ROOT_RESTING}
+        title={tooltip}
+      >
         <span style={{ filter: on ? "none" : "grayscale(1)" }}>☕</span>
       </div>
     );

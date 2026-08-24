@@ -287,6 +287,47 @@ describe("CaffeinateWidget / rail", () => {
     expect(screen.queryByTestId("sidebar-caffeinate")).not.toBeInTheDocument();
   });
 
+  it("wears the same border + background contract as the extended card", () => {
+    // Off-state: thin `--border` outline, transparent fill — matches
+    // CARD_RESTING in the extended state. The border is what pins the
+    // rail glyph as a control rather than loose furniture.
+    render(
+      <ClockProvider value={new Date(2026, 0, 1, 12, 0, 0)}>
+        <CaffeinateWidget visible={false} />
+      </ClockProvider>,
+    );
+    const rail = screen.getByTestId("sidebar-caffeinate-rail");
+    expect(rail).toHaveAttribute("data-active", "false");
+    // `border-width` / `border-style` reflect the shorthand set on
+    // RAIL_ROOT_BASE; `border-color` lives on its own longhand so
+    // the on-state variant can flip it without disturbing the width
+    // (jitter-free toggle).
+    expect(rail.style.borderWidth).toBe("1px");
+    expect(rail.style.borderStyle).toBe("solid");
+    expect(rail.style.borderColor).toBe("var(--border)");
+    expect(rail.style.background).toBe("transparent");
+  });
+
+  it("flips the rail card to the accent border + soft fill when active", async () => {
+    // On-state must match the extended CARD_ACTIVE — `--accent-soft`
+    // background with an `--accent` border — so the two sidebar
+    // states of the widget stay visually consistent.
+    keepAwakeStateMock.mockResolvedValueOnce({ held: true, since_ms: null });
+    render(
+      <ClockProvider value={new Date(2026, 0, 1, 12, 0, 0)}>
+        <CaffeinateWidget visible={false} />
+      </ClockProvider>,
+    );
+    // Wait for the initial adoption to land — `data-active` flips
+    // from "false" to "true" once the backend state resolves.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-caffeinate-rail")).toHaveAttribute("data-active", "true"),
+    );
+    const rail = screen.getByTestId("sidebar-caffeinate-rail");
+    expect(rail.style.background).toBe("var(--accent-soft)");
+    expect(rail.style.borderColor).toBe("var(--accent)");
+  });
+
   it("is display-only — clicking the rail glyph does not toggle (spec §D1)", () => {
     render(
       <ClockProvider value={new Date(2026, 0, 1, 12, 0, 0)}>
