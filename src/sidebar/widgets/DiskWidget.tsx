@@ -97,7 +97,12 @@ const MOUNT_LINE: CSSProperties = {
 const BAR_TRACK: CSSProperties = {
   height: 6,
   borderRadius: 3,
-  background: "var(--pane2)",
+  // `--border-strong`, not `--pane2`. The track represents the
+  // free portion of the disk visually — the unfilled rail *is* the
+  // reading "how much room is left" — so it needs to be clearly
+  // visible against the pane in both themes. `--pane2` sits right
+  // against the pane background and washes out.
+  background: "var(--border-strong)",
   overflow: "hidden",
   marginTop: 2,
 };
@@ -144,7 +149,10 @@ const RAIL_BAR_TRACK: CSSProperties = {
   width: 22,
   height: 4,
   borderRadius: 2,
-  background: "var(--pane2)",
+  // Matches BAR_TRACK's palette choice — the track carries the
+  // free-space reading and needs to be clearly visible against the
+  // pane in both themes.
+  background: "var(--border-strong)",
   overflow: "hidden",
 };
 

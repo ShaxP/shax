@@ -217,13 +217,17 @@ function MemoryDonut({
   return (
     <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} data-testid={svgTestid}>
-        {/* Track ring — always full circumference, dimmed. */}
+        {/* Track ring — always full circumference. `--border-strong`,
+            not `--pane2`, so the unfilled portion (the free-memory
+            fraction the user reads at a glance) is clearly visible
+            against the pane in both light and dark mode. `--pane2`
+            sits right against the pane background and washed out. */}
         <circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="var(--pane2)"
+          stroke="var(--border-strong)"
           strokeWidth={stroke}
         />
         {/* Filled arc — rotated -90° so the arc starts at 12
