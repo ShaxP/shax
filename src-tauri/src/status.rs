@@ -160,8 +160,8 @@ pub fn system_battery() -> BatteryStatus {
         // authoritative. If `pmset` fails (unlikely; it ships with
         // every macOS) we fall through to the starship-battery
         // reading. Other platforms are unaffected.
-        let time_to_full_secs = battery.time_to_full().map(|d| d.value.round() as u64);
-        let time_to_empty_secs = battery.time_to_empty().map(|d| d.value.round() as u64);
+        let time_to_full_secs = sanitise_time_estimate(battery.time_to_full().map(|d| d.value));
+        let time_to_empty_secs = sanitise_time_estimate(battery.time_to_empty().map(|d| d.value));
         let pmset_hint = macos_pmset_state();
         let effective_state =
             effective_charging_state(battery.state(), time_to_full_secs, pmset_hint);
@@ -234,6 +234,40 @@ pub(crate) fn effective_charging_state(
     }
 }
 
+/// Anything the OS reports beyond this many seconds is treated as
+/// "no estimate available." IOKit emits `0xFFFF` minutes (~45 days,
+/// 1092h 15m — exactly what a user reported seeing rendered as
+/// `1092h 15m to full`) as its sentinel for "can't calculate right
+/// now"; `pmset` parses that as `(no estimate)`. `starship-battery`
+/// passes the sentinel through raw, so we filter here.
+///
+/// The 24-hour ceiling is generous: even a badly-degraded battery
+/// charging at 5W USB-C never claims longer than that legitimately.
+const MAX_PLAUSIBLE_TIME_SECS: u64 = 24 * 60 * 60;
+
+/// Convert a raw seconds reading (as `starship-battery` hands back
+/// via `Time::value`) to whole seconds, filtering out:
+///   - `None` inputs
+///   - non-finite or negative readings (firmware oddities)
+///   - exact zero (frontend hides the label rather than showing `0m`)
+///   - anything above `MAX_PLAUSIBLE_TIME_SECS` (the IOKit "no
+///     estimate" sentinel and its cousins)
+///
+/// Pure on `Option<f32>` so tests don't need to construct the crate's
+/// `Time` unit — the caller does the trivial `.map(|d| d.value)`
+/// before handing the seconds in.
+pub(crate) fn sanitise_time_estimate(secs: Option<f32>) -> Option<u64> {
+    let secs = secs?;
+    if !secs.is_finite() || secs < 0.0 {
+        return None;
+    }
+    let rounded = secs.round() as u64;
+    if rounded == 0 || rounded > MAX_PLAUSIBLE_TIME_SECS {
+        return None;
+    }
+    Some(rounded)
+}
+
 /// Ask `pmset -g batt` what macOS thinks the battery is doing right
 /// now. `None` on non-macOS, on subprocess failure, or when the
 /// output doesn't mention any of the three keywords we look for.
@@ -278,10 +312,15 @@ pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     // Search the whole text rather than pinning to a specific line —
     // pmset's output layout has varied over macOS versions, but the
     // keyword itself is stable and always appears in the battery
-    // stanza. Priority order: `discharging` first (more specific than
-    // `charging`, avoids the `-discharging` substring dodge), then
-    // `charged` (also more specific than `charging`), then
-    // `charging`.
+    // stanza. Priority order matters because the shorter keywords
+    // are substrings of longer / different ones:
+    //   - `discharging` first (contains `charging` as a substring)
+    //   - `charged` before `charging` (specificity)
+    //   - `finishing charge` before `charging` (the near-100 %
+    //     topping-off keyword — also contains `charging` if you
+    //     squint at `finishing charge`, but the explicit match here
+    //     documents the state rather than relying on that)
+    //   - `charging` last, as the general case
     let lower = text.to_ascii_lowercase();
     if lower.contains("discharging") {
         return Some(PmsetHint::Discharging);
@@ -289,7 +328,7 @@ pub(crate) fn parse_pmset_state(text: &str) -> Option<PmsetHint> {
     if lower.contains("charged") {
         return Some(PmsetHint::Charged);
     }
-    if lower.contains("charging") {
+    if lower.contains("finishing charge") || lower.contains("charging") {
         return Some(PmsetHint::Charging);
     }
     None
@@ -987,6 +1026,54 @@ mod tests {
         assert_eq!(parse_pmset_state(""), None);
         assert_eq!(parse_pmset_state("Now drawing from 'AC Power'"), None);
         assert_eq!(parse_pmset_state("some other unrelated output"), None);
+    }
+
+    #[test]
+    fn parse_pmset_reads_finishing_charge_as_charging() {
+        // Real captured string from macOS 26 at 99 %, plugged in.
+        // Bolt icon shows in the menu bar; widget should agree.
+        let text =
+            " -InternalBattery-0 (id=38666339)  99%; finishing charge; (no estimate) present: true";
+        assert_eq!(parse_pmset_state(text), Some(PmsetHint::Charging));
+    }
+
+    #[test]
+    fn sanitise_time_estimate_passes_normal_readings_through() {
+        // Real values: 12 minutes to full, 4 h 20 m remaining, 1 s.
+        assert_eq!(sanitise_time_estimate(Some(720.0)), Some(720));
+        assert_eq!(sanitise_time_estimate(Some(15_600.0)), Some(15_600));
+        assert_eq!(sanitise_time_estimate(Some(1.0)), Some(1));
+    }
+
+    #[test]
+    fn sanitise_time_estimate_filters_the_iokit_no_estimate_sentinel() {
+        // The exact bug this fixed: IOKit emits `0xFFFF` minutes
+        // (65 535 min = 3 932 100 s ≈ 45 days) as "no estimate",
+        // starship-battery passes it through raw, and the frontend
+        // rendered it as `1092h 15m to full`. Anything above 24 h
+        // is out.
+        let sentinel_secs = (0xFFFF_u64 * 60) as f32;
+        assert_eq!(sanitise_time_estimate(Some(sentinel_secs)), None);
+        // Exact 24 h passes, one second above doesn't.
+        assert_eq!(sanitise_time_estimate(Some(86_400.0)), Some(86_400));
+        assert_eq!(sanitise_time_estimate(Some(86_401.0)), None);
+    }
+
+    #[test]
+    fn sanitise_time_estimate_returns_none_for_zero_negatives_and_nan() {
+        // Zero: frontend hides the `Nh NNm` label anyway; making it
+        // None here means fewer things to reason about downstream.
+        assert_eq!(sanitise_time_estimate(Some(0.0)), None);
+        // Negatives shouldn't happen but firmware is what it is.
+        assert_eq!(sanitise_time_estimate(Some(-1.0)), None);
+        // NaN / infinities from bad divisions get filtered too.
+        assert_eq!(sanitise_time_estimate(Some(f32::NAN)), None);
+        assert_eq!(sanitise_time_estimate(Some(f32::INFINITY)), None);
+    }
+
+    #[test]
+    fn sanitise_time_estimate_passes_none_through() {
+        assert_eq!(sanitise_time_estimate(None), None);
     }
 
     #[test]
