@@ -72,6 +72,29 @@ describe("Sidebar / render", () => {
     expect(screen.getByTestId("sidebar-network").style.background).toBe("transparent");
   });
 
+  it("interleaves 1px --border dividers between rail widgets (§D11 amendment)", () => {
+    // Nine widgets → eight dividers between them; the outer sidebar
+    // border and the toggle chrome own the top / bottom edges, so no
+    // rule above the first widget or below the last.
+    render(<Sidebar visible={false} onToggle={vi.fn()} />);
+    const dividers = screen.getAllByTestId("sidebar-rail-divider");
+    expect(dividers).toHaveLength(8);
+    for (const div of dividers) {
+      expect(div.style.background).toBe("var(--border)");
+      expect(div.style.height).toBe("1px");
+      expect(div).toHaveAttribute("aria-hidden", "true");
+    }
+  });
+
+  it("does not render rail dividers when expanded", () => {
+    // Expanded state relies on each card's own border for separation,
+    // so the divider rule is rail-only. Guarding both directions of
+    // the interleave keeps a future misplaced ternary from silently
+    // painting rules over the extended cards.
+    render(<Sidebar visible={true} onToggle={vi.fn()} />);
+    expect(screen.queryAllByTestId("sidebar-rail-divider")).toHaveLength(0);
+  });
+
   it("labels the toggle button by current state (aria-label + title)", () => {
     const { rerender } = render(<Sidebar visible={false} onToggle={vi.fn()} />);
     let toggle = screen.getByTestId("sidebar-toggle");

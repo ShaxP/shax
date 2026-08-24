@@ -397,6 +397,8 @@ Rail width may grow modestly from the M13.1 44px to accommodate two-digit figure
 
 **Rejected alternative:** a "third state" that is dense-cards-with-full-labels between the current rail and the expanded state. Three states of a binary preference — same reason D2 rejected a "fully hidden" state. Two states is enough; density substitution inside the collapsed state is not a third state.
 
+**Amendment (M13.5.5, post-visual review):** rail widgets are separated by a 1px `--border` rule between each pair — no rule above the first widget or below the last, since the outer sidebar border and the toggle chrome already own those edges. The mini-cards are dense enough that the flex-gap alone reads as a run-on column; the divider gives each row a clear top/bottom edge so the eye scans the rail as a stack. Expanded state doesn't need this — each extended card owns its own border. Reference: `design/sidebar-collapsed.png`.
+
 ### D12 — No "local metrics only" footer on the sidebar
 
 The mockup carried a `● local metrics only` footer chip at the bottom of the expanded sidebar. Not shipped, on the reasoning that:

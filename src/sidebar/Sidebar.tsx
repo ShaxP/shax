@@ -32,7 +32,7 @@
  * wrong when the user is mid-conversation.
  */
 
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { BatteryWidget } from "./widgets/BatteryWidget";
 import { CaffeinateWidget } from "./widgets/CaffeinateWidget";
 import { CalendarWidget } from "./widgets/CalendarWidget";
@@ -95,6 +95,16 @@ const TOGGLE_BUTTON_BASE: CSSProperties = {
   color: "var(--fg-dim)",
   cursor: "pointer",
   padding: 0,
+};
+
+// 1px rule at `--border`, spans the content column between the rail's
+// side gutters. Rail-only per §D11 amendment — expanded uses each
+// widget's card border to separate. `flexShrink: 0` keeps the rule
+// from being squeezed to zero-height if the sidebar overflow-scrolls.
+const RAIL_DIVIDER: CSSProperties = {
+  height: 1,
+  background: "var(--border)",
+  flexShrink: 0,
 };
 
 export interface SidebarProps {
@@ -164,18 +174,16 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
         {/* Widget order is the M13.5 target per §D5 / D8 / D9 —
          *  Calendar sits under Clock, Network above CPU/Memory,
          *  Battery under Memory, Repo and Caffeinate at the tail.
-         *  Disk (M13.5.4) will slot between Memory and Battery
-         *  when it lands. Fixed for M13.5; drag-to-reorder is
-         *  Phase 2. */}
-        <ClockWidget visible={visible} />
-        <CalendarWidget visible={visible} />
-        <NetworkWidget visible={visible} />
-        <CpuWidget visible={visible} />
-        <MemoryWidget visible={visible} />
-        <DiskWidget visible={visible} />
-        <BatteryWidget visible={visible} />
-        <GitBranchWidget visible={visible} />
-        <CaffeinateWidget visible={visible} />
+         *  Fixed for M13.5; drag-to-reorder is Phase 2.
+         *
+         *  In the collapsed rail (§D11 amendment) each widget is
+         *  followed by a 1px rule at `--border` — the mini-cards
+         *  are dense enough that the flex-gap alone doesn't read
+         *  as "one card per widget", and a divider gives each row
+         *  a clear top/bottom edge so the eye scans the rail as a
+         *  stack, not a run-on column. Expanded state doesn't need
+         *  this — each card owns its own border. */}
+        {renderWidgets(visible)}
       </div>
       <button
         type="button"
@@ -190,6 +198,51 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
       </button>
     </aside>
   );
+}
+
+/** The widget stack. In expanded state each widget renders back-to-back
+ *  and gap-separated; in the rail we interleave a 1px `--border` divider
+ *  between them per §D11 amendment. The rule sits between rows, not
+ *  above the first or below the last — the outer sidebar border and
+ *  the toggle chrome handle those edges.
+ *
+ *  Split out from `Sidebar` so the interleave logic reads as a single
+ *  intent and the render tree stays declarative. */
+function renderWidgets(visible: boolean): React.ReactElement[] {
+  const widgets: Array<[string, React.ReactElement]> = [
+    ["clock", <ClockWidget visible={visible} />],
+    ["calendar", <CalendarWidget visible={visible} />],
+    ["network", <NetworkWidget visible={visible} />],
+    ["cpu", <CpuWidget visible={visible} />],
+    ["memory", <MemoryWidget visible={visible} />],
+    ["disk", <DiskWidget visible={visible} />],
+    ["battery", <BatteryWidget visible={visible} />],
+    ["git", <GitBranchWidget visible={visible} />],
+    ["caffeinate", <CaffeinateWidget visible={visible} />],
+  ];
+
+  // Fragment (not a wrapping <span> / <div>) so each widget's own
+  // root element becomes the direct flex child of `widgetSlot` —
+  // its intrinsic block layout survives the interleave.
+  if (visible) {
+    return widgets.map(([key, node]) => <Fragment key={key}>{node}</Fragment>);
+  }
+
+  const rendered: React.ReactElement[] = [];
+  widgets.forEach(([key, node], index) => {
+    if (index > 0) {
+      rendered.push(
+        <div
+          key={`divider-${key}`}
+          style={RAIL_DIVIDER}
+          data-testid="sidebar-rail-divider"
+          aria-hidden="true"
+        />,
+      );
+    }
+    rendered.push(<Fragment key={key}>{node}</Fragment>);
+  });
+  return rendered;
 }
 
 /** Chevron pointing left (collapse) or right (expand). Inline SVG
