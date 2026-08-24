@@ -144,23 +144,50 @@ pub fn system_battery() -> BatteryStatus {
             continue;
         };
         let ratio = battery.state_of_charge().value;
-        // starship-battery returns time-to-full while charging and
-        // time-to-empty while discharging as separate accessors; we
-        // pick the one that matches the current state and convert to
-        // whole seconds. Neither exists for `Full` / `Unknown`, and
-        // we honestly hand back `None` in those cases.
-        let seconds_remaining = match battery.state() {
-            State::Charging => battery.time_to_full().map(|d| d.value.round() as u64),
+        // Topping-off escape hatch (M13.5.3): some machines report
+        // `State::Full` at displayed 100 % while the OS is still
+        // adding energy behind the scenes — a laptop that rounded up
+        // to 100 % but hasn't quite reached true full. macOS shows
+        // the charging bolt in the menu bar in that state; without
+        // this normalisation, our widget would honestly say
+        // `charging = false` while the OS's own status bar says the
+        // opposite. `time_to_full` from starship-battery is the
+        // signal: if the OS still estimates any time to full, we're
+        // charging by any user's definition.
+        let time_to_full_secs = battery.time_to_full().map(|d| d.value.round() as u64);
+        let effective_state = effective_charging_state(battery.state(), time_to_full_secs);
+        let seconds_remaining = match effective_state {
+            State::Charging => time_to_full_secs,
             State::Discharging => battery.time_to_empty().map(|d| d.value.round() as u64),
             _ => None,
         };
-        if let Some(status) = snapshot_from(ratio, battery.state(), seconds_remaining) {
+        if let Some(status) = snapshot_from(ratio, effective_state, seconds_remaining) {
             return status;
         }
     }
     // No batteries in the iterator — desktop machine, or the OS
     // reported an empty set.
     BatteryStatus::absent()
+}
+
+/// Normalise `State::Full` to `State::Charging` when the OS is still
+/// estimating a time-to-full — the "topping off at displayed 100 %"
+/// case that macOS shows the charging bolt for even though
+/// `starship-battery` returns `State::Full`.
+///
+/// Split out so the normalisation is directly unit-testable without
+/// having to mock a `starship-battery` iterator, and so callers can
+/// see the rule at a glance rather than inline in the loop above.
+pub(crate) fn effective_charging_state(raw: State, time_to_full_secs: Option<u64>) -> State {
+    // A `time_to_full` of exactly 0 seconds is honestly "done, no
+    // more energy to add" — we treat that as `Full` too, matching
+    // what a user sees when the menu-bar bolt has just gone away.
+    let still_topping_off = time_to_full_secs.is_some_and(|s| s > 0);
+    if matches!(raw, State::Full) && still_topping_off {
+        State::Charging
+    } else {
+        raw
+    }
 }
 
 /// Turn a raw (state-of-charge ratio, `starship-battery` state)
@@ -174,8 +201,13 @@ pub fn system_battery() -> BatteryStatus {
 /// | `State`       | `on_ac_power` | `charging` | Real-world case                          |
 /// | ------------- | ------------- | ---------- | ---------------------------------------- |
 /// | `Charging`    | `true`        | `true`     | Plugged in, drawing energy into battery. |
-/// | `Full`        | `true`        | `false`    | Plugged in, battery at 100%, not drawing.|
+/// | `Full`        | `true`        | `false`    | Plugged in, battery at true 100%, at rest.|
 /// | `Discharging` | `false`       | `false`    | On battery, energy flowing out.          |
+///
+/// Note: `State::Full` reaches this function only when the caller
+/// has already ruled out the topping-off case (see
+/// [`effective_charging_state`]), so a `Full` here is genuinely a
+/// battery at rest on AC.
 /// | `Empty`       | `false`       | `false`    | On battery, 0%.                          |
 /// | `Unknown`     | `false`       | `false`    | Defensive default — assume on battery.   |
 ///
@@ -721,6 +753,62 @@ mod tests {
         assert!(!s.on_ac_power);
         assert!(!s.charging);
         assert_eq!(s.percent, Some(0));
+    }
+
+    #[test]
+    fn effective_charging_state_normalises_topping_off_full_to_charging() {
+        // The bug this fixed: macOS reports `State::Full` at displayed
+        // 100 % while the OS is still adding energy behind the scenes,
+        // and the menu-bar bolt is visible. Without normalisation, our
+        // widget honestly said `charging = false` while macOS said the
+        // opposite.
+        assert_eq!(
+            effective_charging_state(State::Full, Some(120)),
+            State::Charging
+        );
+        assert_eq!(
+            effective_charging_state(State::Full, Some(1)),
+            State::Charging
+        );
+    }
+
+    #[test]
+    fn effective_charging_state_leaves_true_full_alone() {
+        // A `Full` with no time-to-full estimate is honestly full —
+        // no more energy to add. Leave the state as-is so the widget
+        // reads "on AC, at rest" rather than a fake "charging" halo.
+        assert_eq!(effective_charging_state(State::Full, None), State::Full);
+        // Zero-second time-to-full is treated as "just finished,
+        // done" — matches what a user sees when the menu-bar bolt has
+        // just gone away.
+        assert_eq!(effective_charging_state(State::Full, Some(0)), State::Full);
+    }
+
+    #[test]
+    fn effective_charging_state_is_a_no_op_for_non_full_states() {
+        // Charging stays charging (with or without an estimate),
+        // discharging stays discharging, unknown stays unknown.
+        assert_eq!(
+            effective_charging_state(State::Charging, Some(120)),
+            State::Charging
+        );
+        assert_eq!(
+            effective_charging_state(State::Charging, None),
+            State::Charging
+        );
+        assert_eq!(
+            effective_charging_state(State::Discharging, Some(9_999)),
+            State::Discharging
+        );
+        assert_eq!(
+            effective_charging_state(State::Discharging, None),
+            State::Discharging
+        );
+        assert_eq!(
+            effective_charging_state(State::Unknown, Some(120)),
+            State::Unknown
+        );
+        assert_eq!(effective_charging_state(State::Empty, None), State::Empty);
     }
 
     #[test]
