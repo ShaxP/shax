@@ -1083,6 +1083,39 @@ export async function netInterfaces(): Promise<NetInterface[]> {
   return invoke<NetInterface[]>("net_interfaces");
 }
 
+/** One mounted volume the sidebar Disk widget cares about (M13.5.4,
+ *  spec §19 D10). Enumeration + filtering happen in
+ *  `src-tauri/src/disk.rs`; system volumes (Preboot / VM / Update on
+ *  macOS, tmpfs / sysfs / proc / cgroup etc. on Linux) are dropped
+ *  before we get here. */
+export interface VolumeInfo {
+  /** Human-readable label (`Macintosh HD`, `Data`, `Backup T7`).
+   *  Falls back to the mount point's basename when the OS doesn't
+   *  provide one — never a fabricated placeholder. */
+  name: string;
+  /** Absolute mount path (`/`, `/System/Volumes/Data`,
+   *  `/Volumes/Backup`, `C:\`). Held by the widget as the pager's
+   *  selection key so a volume unmounting doesn't slide the card
+   *  onto a neighbour. */
+  mount_point: string;
+  /** Filesystem type as the OS reports it (`APFS`, `exFAT`, `NTFS`,
+   *  `ext4`). Rendered in the card's bottom-line so the reader can
+   *  tell at a glance which volume they're paging through. */
+  filesystem: string;
+  total_bytes: number;
+  used_bytes: number;
+}
+
+/** Every mounted volume the widget cares about, in the OS's own
+ *  enumeration order. Slow tier (30s) — volumes come and go from
+ *  user action, and forking `statvfs` every 2 seconds for every
+ *  disk would be a waste of syscalls. */
+export async function diskVolumes(): Promise<VolumeInfo[]> {
+  if (!isTauriContext()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<VolumeInfo[]>("disk_volumes");
+}
+
 /** Medium + SSID + access state for the primary interface. */
 export async function wifiInfo(): Promise<WifiInfo> {
   if (!isTauriContext()) return WIFI_UNKNOWN;

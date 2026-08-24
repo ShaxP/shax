@@ -164,6 +164,11 @@ vi.mock("./lib/ipc", () => ({
   // M13 refinement: one probe for name + medium + access. The
   // unknown/no-permission shape keeps the widget in a benign state.
   netInterfaces: (): Promise<unknown[]> => Promise.resolve([]),
+  // M13.5.4: disk volumes for the sidebar Disk widget. Empty in
+  // tests — the widget hides itself when the list is empty, which
+  // is the exact non-interference we want for tests focused on
+  // other surfaces.
+  diskVolumes: (): Promise<unknown[]> => Promise.resolve([]),
   wifiRequestSsidAccess: (): Promise<unknown> =>
     Promise.resolve({ medium: "unknown", ssid: null, ssid_access: "not_required" }),
   // M13.4 caffeinate. Both resolve "not held" so the widget renders
