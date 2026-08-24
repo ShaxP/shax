@@ -1,5 +1,6 @@
 mod agent;
 mod blocks;
+mod disk;
 mod ipc;
 mod menu;
 mod mux;
@@ -376,6 +377,7 @@ pub fn run() {
             wifi::wifi_info,
             wifi::wifi_request_ssid_access,
             netif::net_interfaces,
+            disk::disk_volumes,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

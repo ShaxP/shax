@@ -38,6 +38,7 @@ import { CaffeinateWidget } from "./widgets/CaffeinateWidget";
 import { CalendarWidget } from "./widgets/CalendarWidget";
 import { ClockWidget } from "./widgets/ClockWidget";
 import { CpuWidget } from "./widgets/CpuWidget";
+import { DiskWidget } from "./widgets/DiskWidget";
 import { GitBranchWidget } from "./widgets/GitBranchWidget";
 import { MemoryWidget } from "./widgets/MemoryWidget";
 import { NetworkWidget } from "./widgets/NetworkWidget";
@@ -164,6 +165,7 @@ export function Sidebar({ visible, onToggle }: SidebarProps): React.ReactElement
         <NetworkWidget visible={visible} />
         <CpuWidget visible={visible} />
         <MemoryWidget visible={visible} />
+        <DiskWidget visible={visible} />
         <BatteryWidget visible={visible} />
         <GitBranchWidget visible={visible} />
         <CaffeinateWidget visible={visible} />
