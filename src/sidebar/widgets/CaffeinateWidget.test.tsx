@@ -298,11 +298,14 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail).toHaveAttribute("data-active", "false");
-    // `border-width` / `border-style` reflect the shorthand set on
+    // `border-width` / `border-style` reflect the longhands set on
     // RAIL_ROOT_BASE; `border-color` lives on its own longhand so
     // the on-state variant can flip it without disturbing the width
     // (jitter-free toggle).
-    expect(rail.style.borderWidth).toBe("1px");
+    // 0.5 px — a single physical pixel on retina, i.e. genuinely
+    // thinner than the extended card's 1 px outline (per the rail's
+    // denser scale).
+    expect(rail.style.borderWidth).toBe("0.5px");
     expect(rail.style.borderStyle).toBe("solid");
     expect(rail.style.borderColor).toBe("var(--border)");
     expect(rail.style.background).toBe("transparent");

@@ -173,7 +173,16 @@ const RAIL_ROOT_BASE: CSSProperties = {
   // just `borderColor` without React re-emitting the shorthand
   // and stomping the width — keeps the on/off toggle jitter-free
   // and the layout stable to the pixel.
-  borderWidth: 1,
+  //
+  // 0.5 px, not 1 px. On the HiDPI (retina) displays Tauri targets
+  // this renders as a single physical pixel — genuinely half the
+  // weight of the extended card's 1 px border, which is what the
+  // rail asks for: the card is smaller and denser, so the outline
+  // has to be lighter or it drowns the glyph. On non-HiDPI it
+  // rounds to 1 px, which is still correct behaviour — the
+  // graceful degradation is "the same border as extended," not a
+  // broken card.
+  borderWidth: 0.5,
   borderStyle: "solid",
   borderRadius: 8,
   fontSize: 15,
