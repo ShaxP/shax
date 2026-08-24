@@ -110,18 +110,17 @@ const RAIL_ROOT: CSSProperties = {
 // Mini sparkline sits above the percent (§D11) — same bar treatment
 // as the extended CPU card, scaled to the rail's ~40 px content
 // area. The extended card shows 24 samples (SAMPLES); the rail
-// shows the newest RAIL_SAMPLES of those, so each bar has enough
-// px-width to render as a visible bar rather than a sub-pixel
-// hairline. Bars fill the width without a gap — a 12-bar
-// no-gap sparkline gives ~3.3 px per bar, chunky enough that
-// adjacent bars still read as distinct even at similar heights
-// (the corner-rounding + brightness gradient carry the separation).
-export const RAIL_SAMPLES = 12;
+// shows the newest RAIL_SAMPLES per the design brief. Six bars in
+// a 40 px track leaves ~5.8 px per bar with a 1 px gap — wide
+// enough that a 1 px inter-bar gap reads as real separation
+// rather than eating into a hairline, which is why the gap comes
+// back at this density (versus the earlier 12-bar no-gap tune).
+export const RAIL_SAMPLES = 6;
 
 const RAIL_SPARKLINE: CSSProperties = {
   display: "flex",
   alignItems: "flex-end",
-  gap: 0,
+  gap: 1,
   width: 40,
   height: 12,
 };
