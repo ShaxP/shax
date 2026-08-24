@@ -129,6 +129,24 @@ const RAIL_ROOT: CSSProperties = {
   cursor: "default",
 };
 
+// Mini usage bar + free-space label, matching the Battery rail's
+// visual language (22×6 track). The two bar-carrying rail widgets
+// read as siblings this way. The bar is heat-mapped by percent
+// used with the same thresholds as the expanded card, so a full
+// disk shouts red in either state.
+const RAIL_BAR_TRACK: CSSProperties = {
+  width: 22,
+  height: 6,
+  borderRadius: 3,
+  background: "var(--pane2)",
+  overflow: "hidden",
+};
+
+const RAIL_BAR_FILL_BASE: CSSProperties = {
+  height: "100%",
+  borderRadius: 3,
+};
+
 export interface DiskWidgetProps {
   visible: boolean;
 }
@@ -164,13 +182,28 @@ export function DiskWidget({ visible }: DiskWidgetProps): React.ReactElement | n
   };
 
   if (!visible) {
-    // Rail (provisional). Show the primary volume's free-GB figure —
-    // the M13.5.5 rail remodel will finalise this against the
-    // sidebar-collapsed mockup; for now a compact numeric read.
+    // Rail: mini usage bar over the free-space figure. The bar
+    // pattern matches Battery's rail (22×6 track); the label under
+    // it keeps the reading users open the widget for — "how much
+    // room is left" — rather than the percent the bar already
+    // shows. Uses the primary (first) volume so the rail is stable
+    // across paging changes made in the expanded card.
     const primary = volumes[0] ?? active;
+    const railPercent =
+      primary.total_bytes === 0 ? 0 : (primary.used_bytes / primary.total_bytes) * 100;
+    const railFillStyle: CSSProperties = {
+      ...RAIL_BAR_FILL_BASE,
+      width: `${Math.max(0, Math.min(100, railPercent))}%`,
+      background: usageColour(railPercent),
+    };
     return (
       <div data-testid="sidebar-disk-rail" style={RAIL_ROOT} title={tooltip}>
-        {formatFree(primary.total_bytes - primary.used_bytes, /*compactRail*/ true)}
+        <div style={RAIL_BAR_TRACK} data-testid="sidebar-disk-rail-track">
+          <div style={railFillStyle} data-testid="sidebar-disk-rail-fill" />
+        </div>
+        <span data-testid="sidebar-disk-rail-free">
+          {formatFree(primary.total_bytes - primary.used_bytes, /*compactRail*/ true)}
+        </span>
       </div>
     );
   }
