@@ -173,9 +173,10 @@ describe("MemoryWidget / rail (M13.5.5 remodel)", () => {
       </SystemLoadProvider>,
     );
     expect(screen.getByTestId("sidebar-memory-rail-donut")).toBeInTheDocument();
-    // Percent inside the ring — no `%` glyph (shape reads as a
-    // percentage on its own) and no zero-padding.
-    expect(screen.getByTestId("sidebar-memory-rail-percent").textContent).toBe("6");
+    // Percent inside the ring — includes the `%` glyph so the label
+    // is self-describing, and no zero-padding (the ring shape carries
+    // any width variance the eye needs to disambiguate `6%` vs `60%`).
+    expect(screen.getByTestId("sidebar-memory-rail-percent").textContent).toBe("6%");
   });
 });
 

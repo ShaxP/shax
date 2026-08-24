@@ -128,17 +128,20 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
 
   if (!visible) {
     // Rail: miniature donut with the % inside, matching the extended
-    // card's visual language at reduced scale (§D11). Percent label
-    // trims the `%` glyph — space is at a premium and the shape
-    // reads as a percentage on its own.
+    // card's visual language at reduced scale (§D11). Label carries
+    // the `%` glyph so the reading is self-describing — the donut
+    // shape is suggestive, but the label under CPU's rail is a bare
+    // percent + sign now too, and matching the pair keeps the rail
+    // consistent. At 8 px the three-character label (`41%`, `100%`)
+    // still fits comfortably inside the 32 px ring at 3 px stroke.
     return (
       <div data-testid="sidebar-memory-rail" style={RAIL_ROOT} title={tooltip}>
         <MemoryDonut
           percent={percent}
-          label={Math.round(percent).toString()}
+          label={`${Math.round(percent)}%`}
           size={32}
           stroke={3}
-          labelSize={10}
+          labelSize={8}
           svgTestid="sidebar-memory-rail-donut"
           labelTestid="sidebar-memory-rail-percent"
         />
