@@ -298,17 +298,17 @@ describe("CaffeinateWidget / rail", () => {
     );
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail).toHaveAttribute("data-active", "false");
-    // `border-width` / `border-style` reflect the longhands set on
-    // RAIL_ROOT_BASE; `border-color` lives on its own longhand so
-    // the on-state variant can flip it without disturbing the width
-    // (jitter-free toggle).
-    // 0.5 px — a single physical pixel on retina, i.e. genuinely
-    // thinner than the extended card's 1 px outline (per the rail's
-    // denser scale).
+    // Resting: 0.5 px — a single physical pixel on retina, i.e.
+    // genuinely thinner than the extended card's 1 px outline (per
+    // the rail's denser scale).
     expect(rail.style.borderWidth).toBe("0.5px");
     expect(rail.style.borderStyle).toBe("solid");
     expect(rail.style.borderColor).toBe("var(--border)");
     expect(rail.style.background).toBe("transparent");
+    // Square corners in the rail — the outline reads as a rule
+    // more than a card at this density; a radius adds visual weight
+    // without a signal.
+    expect(rail.style.borderRadius).toBe("0px");
   });
 
   it("flips the rail card to the accent border + soft fill when active", async () => {
@@ -329,6 +329,11 @@ describe("CaffeinateWidget / rail", () => {
     const rail = screen.getByTestId("sidebar-caffeinate-rail");
     expect(rail.style.background).toBe("var(--accent-soft)");
     expect(rail.style.borderColor).toBe("var(--accent)");
+    // Active border is HALF the resting width (0.25 vs 0.5 px) —
+    // the accent hue carries more visual weight than the muted
+    // `--border` grey, so matching widths would leave the active
+    // card looking heavier than the resting one.
+    expect(rail.style.borderWidth).toBe("0.25px");
   });
 
   it("is display-only — clicking the rail glyph does not toggle (spec §D1)", () => {

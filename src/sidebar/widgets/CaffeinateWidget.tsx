@@ -169,38 +169,48 @@ const RAIL_ROOT_BASE: CSSProperties = {
   justifyContent: "center",
   padding: 6,
   // Long-hand `borderWidth` / `borderStyle` (rather than the
-  // `border` shorthand) so the variant maps below can override
-  // just `borderColor` without React re-emitting the shorthand
-  // and stomping the width — keeps the on/off toggle jitter-free
-  // and the layout stable to the pixel.
-  //
-  // 0.5 px, not 1 px. On the HiDPI (retina) displays Tauri targets
-  // this renders as a single physical pixel — genuinely half the
-  // weight of the extended card's 1 px border, which is what the
-  // rail asks for: the card is smaller and denser, so the outline
-  // has to be lighter or it drowns the glyph. On non-HiDPI it
-  // rounds to 1 px, which is still correct behaviour — the
-  // graceful degradation is "the same border as extended," not a
-  // broken card.
-  borderWidth: 0.5,
+  // `border` shorthand) so each variant can override only the
+  // longhands it cares about without React re-emitting the
+  // shorthand and stomping the rest.
   borderStyle: "solid",
-  borderRadius: 8,
+  // Square corners in the collapsed rail. The extended card
+  // carries a 10 px radius that reads as "a card"; the rail
+  // outline is denser and closer to a rule than a card, so
+  // rounded corners just added weight without a signal.
+  borderRadius: 0,
   fontSize: 15,
   cursor: "default",
   minHeight: 32,
   boxSizing: "border-box",
 };
 
+// Resting outline is 0.5 px — a single physical pixel on the HiDPI
+// displays Tauri targets. Genuinely half the weight of the extended
+// card's 1 px border, which is what the rail asks for: the card is
+// smaller and denser, so the outline has to be lighter or it drowns
+// the glyph. On non-HiDPI this rounds up to 1 px, which is still
+// correct behaviour (graceful degradation is "the same border as
+// extended," not a broken card).
 const RAIL_ROOT_RESTING: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "transparent",
   borderColor: "var(--border)",
+  borderWidth: 0.5,
 };
 
+// Active outline is even thinner (0.25 px) — the accent hue on the
+// border carries a lot more visual weight than the muted `--border`
+// grey, so matching widths would leave the active card looking
+// heavier than the resting one. Halving the accent border's width
+// balances the two states against each other so toggling the card
+// doesn't feel like it also thickens the outline. On sub-retina
+// displays 0.25 px rounds up to 1 px, same fallback path as the
+// resting border.
 const RAIL_ROOT_ACTIVE: CSSProperties = {
   ...RAIL_ROOT_BASE,
   background: "var(--accent-soft)",
   borderColor: "var(--accent)",
+  borderWidth: 0.25,
 };
 
 export interface CaffeinateWidgetProps {
