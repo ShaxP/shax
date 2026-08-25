@@ -145,7 +145,7 @@ describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
     const rail = screen.getByTestId("sidebar-git-branch-rail");
     expect(rail.textContent).toBe("⎇");
     expect(rail.getAttribute("title")).toContain("main");
-    expect(screen.queryByTestId("sidebar-git-branch-rail-counts")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch-rail-stack")).not.toBeInTheDocument();
   });
 
   it("stays hidden in the rail when branch is null", () => {
@@ -157,12 +157,11 @@ describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
     expect(screen.queryByTestId("sidebar-git-branch-rail")).not.toBeInTheDocument();
   });
 
-  it("surfaces every available signal in the rail: +staged ~modified ?untracked ↑ahead ↓behind", async () => {
+  it("surfaces every available signal in the rail: +staged ~modified ?untracked ↑ahead ↓behind, each on its own line", async () => {
     // The rail carries every non-zero signal the widget knows about,
-    // split across two conceptually-distinct rows: working-tree
-    // counts (staged / modified / untracked) and upstream sync
-    // (ahead / behind). Each renders only when its value is > 0 —
-    // zeros are elided the same way the expanded card elides them.
+    // stacked vertically — one column of values under the ⎇ glyph.
+    // Working-tree signals sit above sync signals so the stack
+    // matches the expanded card's reading order.
     porcelainMock.mockResolvedValue(MOCKUP_STATE);
     render(
       <FocusedPaneProvider value={meta({ ahead: 4, behind: 1 })}>
@@ -176,10 +175,17 @@ describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
     expect(screen.getByTestId("sidebar-git-branch-rail-untracked")).toHaveTextContent("?1");
     expect(screen.getByTestId("sidebar-git-branch-rail-ahead")).toHaveTextContent("↑4");
     expect(screen.getByTestId("sidebar-git-branch-rail-behind")).toHaveTextContent("↓1");
-    // Two rows keep working-tree and sync counts conceptually
-    // separate — different concerns, different tests.
-    expect(screen.getByTestId("sidebar-git-branch-rail-counts")).toBeInTheDocument();
-    expect(screen.getByTestId("sidebar-git-branch-rail-sync")).toBeInTheDocument();
+    // Values live in a single vertical stack — one flex column
+    // rather than the earlier two-row layout — so each value stands
+    // alone at legible width on the ~40 px rail.
+    const stack = screen.getByTestId("sidebar-git-branch-rail-stack");
+    expect(stack).toBeInTheDocument();
+    expect(stack.style.flexDirection).toBe("column");
+    // Working-tree signals precede sync signals in reading order.
+    const children = Array.from(stack.children);
+    const staged = screen.getByTestId("sidebar-git-branch-rail-staged");
+    const behind = screen.getByTestId("sidebar-git-branch-rail-behind");
+    expect(children.indexOf(staged)).toBeLessThan(children.indexOf(behind));
   });
 
   it("elides zeros in the rail — only shows the signals that have content", async () => {
