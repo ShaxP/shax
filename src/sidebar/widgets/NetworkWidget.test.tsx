@@ -23,7 +23,14 @@ vi.mock("../../lib/ipc", () => ({
 import { NetworkProvider } from "../../lib/NetworkContext";
 import { SystemLoadProvider } from "../../lib/SystemLoadContext";
 import type { InterfaceRate, NetInterface, SystemLoadSeries, WifiDetail } from "../../lib/ipc";
-import { detailFor, formatRate, headlineFor, identityFor, NetworkWidget } from "./NetworkWidget";
+import {
+  detailFor,
+  formatRailRate,
+  formatRate,
+  headlineFor,
+  identityFor,
+  NetworkWidget,
+} from "./NetworkWidget";
 
 afterEach(cleanup);
 
@@ -485,10 +492,52 @@ describe("NetworkWidget / rate formatting", () => {
   });
 });
 
-describe("NetworkWidget / rail", () => {
-  it("shows a glyph and no card", () => {
+describe("NetworkWidget / rail (M13.5.5 remodel)", () => {
+  it("falls back to a dim glyph when there's no rate to display", () => {
+    // Pre-probe or offline — no rate to show — the rail keeps a
+    // faint kind-glyph so the reader still sees Network exists.
     renderWidget([wifi()], [], false);
     expect(screen.getByTestId("sidebar-network-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-network-rail-up")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-network-rail-down")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sidebar-network")).not.toBeInTheDocument();
+  });
+
+  it("shows `↑` / `↓` throughput on two lines when rates are available (§D11)", () => {
+    // The M13.1 rail showed one glyph; §D11 replaces it with the two
+    // throughput lines — the reader glances at "am I moving bytes?"
+    // more often than "which kind of network?" the glyph answered.
+    renderWidget(
+      [wifi({ name: "en0" })],
+      [{ name: "en0", up_bps: 1_200_000, down_bps: 240_000 }],
+      false,
+    );
+    expect(screen.getByTestId("sidebar-network-rail-up").textContent).toBe("↑1.2");
+    expect(screen.getByTestId("sidebar-network-rail-down").textContent).toBe("↓240");
+  });
+
+  it("colour-codes up in green and down in accent, matching the expanded card", () => {
+    renderWidget(
+      [wifi({ name: "en0" })],
+      [{ name: "en0", up_bps: 1_200_000, down_bps: 240_000 }],
+      false,
+    );
+    expect(screen.getByTestId("sidebar-network-rail-up").style.color).toBe("var(--green)");
+    expect(screen.getByTestId("sidebar-network-rail-down").style.color).toBe("var(--accent)");
+  });
+});
+
+describe("NetworkWidget / formatRailRate helper", () => {
+  it.each([
+    [0, "0"],
+    [999, "999"],
+    [1_000, "1"],
+    [240_000, "240"],
+    [1_200_000, "1.2"],
+    [12_000_000, "12"],
+  ])("%s B/s → `%s` (unit implied)", (bytes, expected) => {
+    // Same rounding rule as `formatRate` so the rail digit doesn't
+    // jump vs the expanded card. Unit is dropped for the rail (§D11).
+    expect(formatRailRate(bytes)).toBe(expected);
   });
 });

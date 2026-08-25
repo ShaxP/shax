@@ -152,13 +152,68 @@ const KNOB_BASE: CSSProperties = {
   transition: "left 120ms ease-out",
 };
 
-const RAIL_ROOT: CSSProperties = {
+// Rail card carries the same border-colour + background contract as
+// the extended card — off is transparent with a thin `--border`
+// outline; on is `--accent-soft` filled with an `--accent` border.
+// Without the outline the resting rail glyph read as loose furniture
+// rather than a control the user could operate by expanding; with it
+// the two states of the widget stay visually consistent between the
+// two states of the sidebar.
+//
+// Compact padding (6 px) rather than the extended card's `10px 12px`
+// — the rail's content area is ~40 px wide, so a 12 px horizontal
+// padding would leave nothing for the glyph.
+// 32 × 32 rounded square (explicit width AND height rather than
+// width + aspectRatio so the shape is guaranteed 1:1 regardless of
+// any flex quirk the container introduces). `alignSelf: center`
+// opts out of the sidebar slot's default flex stretch so the
+// dimensions are respected.
+//
+// The border treatment matches every outlined widget in the
+// extended sidebar exactly — 1 px solid `--border` — so the rail's
+// off-state feels consistent with the cards the user sees when the
+// sidebar is open. Active flips only the colour to `--accent`,
+// same 1 px width, so the toggle changes hue rather than weight.
+const RAIL_ROOT_BASE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  alignSelf: "center",
+  width: 32,
   height: 32,
+  padding: 0,
+  borderRadius: 8,
   fontSize: 15,
   cursor: "default",
+  boxSizing: "border-box",
+};
+
+// Both variants declare the full `border` SHORTHAND, not longhands.
+// This is load-bearing: the extended card carries `border: "1px
+// solid var(--border)"` (see `CARD` in `styles.ts`), and when the
+// sidebar transitions extended → rail, React sees `border` removed
+// from the previous style object and clears it via
+// `element.style.border = ""`. Per CSSOM that ALSO nukes every
+// border-longhand on the DOM node. If the rail then declared its
+// border via `borderColor` + `borderWidth` + `borderStyle`
+// longhands, React would diff each against the previous prop
+// value; unchanged ones (like `borderColor: "var(--border)"`) get
+// skipped, leaving the DOM at `currentColor` (near-white in dark
+// mode) — which reported as "thick white border, as if activated"
+// on the collapse-after-expand path.
+//
+// Declaring the shorthand on both sides makes React overwrite the
+// full border block on every transition, no longhand skip.
+const RAIL_ROOT_RESTING: CSSProperties = {
+  ...RAIL_ROOT_BASE,
+  background: "transparent",
+  border: "1px solid var(--border)",
+};
+
+const RAIL_ROOT_ACTIVE: CSSProperties = {
+  ...RAIL_ROOT_BASE,
+  background: "var(--accent-soft)",
+  border: "1px solid var(--accent)",
 };
 
 export interface CaffeinateWidgetProps {
@@ -241,7 +296,24 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
 
   if (!visible) {
     return (
-      <div data-testid="sidebar-caffeinate-rail" style={RAIL_ROOT} title={tooltip}>
+      // `key="rail"` — load-bearing. The extended card uses the
+      // `border` SHORTHAND (see CARD in styles.ts) with a separate
+      // `borderColor` longhand override; the rail's inline style is
+      // materially different. When React reconciled the two off the
+      // same DOM node during an extended → rail transition, its
+      // style-prop diff left the border in an inconsistent state
+      // (the reported "thick white border, as if activated"). A
+      // distinct `key` here forces React to unmount the extended
+      // div and mount a fresh one in the rail state, guaranteeing
+      // no leftover inline-style state. Same reasoning for
+      // `key="extended"` on the visible branch below.
+      <div
+        key="rail"
+        data-testid="sidebar-caffeinate-rail"
+        data-active={on ? "true" : "false"}
+        style={on ? RAIL_ROOT_ACTIVE : RAIL_ROOT_RESTING}
+        title={tooltip}
+      >
         <span style={{ filter: on ? "none" : "grayscale(1)" }}>☕</span>
       </div>
     );
@@ -259,6 +331,11 @@ export function CaffeinateWidget({ visible }: CaffeinateWidgetProps): React.Reac
 
   return (
     <div
+      // Paired with `key="rail"` above — see the comment there. The
+      // distinct key on this branch forces a fresh mount on the
+      // rail → extended transition too, so neither direction can
+      // leak inline styles from the other's shorthand form.
+      key="extended"
       data-testid="sidebar-caffeinate"
       data-active={on ? "true" : "false"}
       className={error !== null ? "shax-caffeinate-refusing" : undefined}

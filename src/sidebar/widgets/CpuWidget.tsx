@@ -101,14 +101,52 @@ const FOOTER: CSSProperties = {
 
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
-  justifyContent: "center",
-  height: 32,
+  gap: 2,
+  cursor: "default",
+};
+
+// Mini sparkline sits above the percent (§D11) — same bar treatment
+// as the extended CPU card, scaled to the rail's ~40 px content
+// area. The extended card shows 24 samples (SAMPLES); the rail
+// shows the newest RAIL_SAMPLES per the design brief. Six bars in
+// a 40 px track leaves ~5.8 px per bar with a 1 px gap — wide
+// enough that a 1 px inter-bar gap reads as real separation
+// rather than eating into a hairline, which is why the gap comes
+// back at this density (versus the earlier 12-bar no-gap tune).
+export const RAIL_SAMPLES = 6;
+
+const RAIL_SPARKLINE: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-end",
+  gap: 1,
+  width: 40,
+  // Doubled from the initial 12 px: at 12 px a 100 % reading was a
+  // stub that read as a bar rather than a spike, and a full-scale
+  // reading is exactly what the eye wants the rail to shout about.
+  // 24 px still leaves plenty of vertical room for the percent
+  // label underneath before the card starts pushing on its
+  // neighbours (the widget slot is scrollable).
+  height: 24,
+};
+
+const RAIL_BAR_BASE: CSSProperties = {
+  flex: 1,
+  // `minWidth: 1` (not 0) so browsers don't collapse a narrow bar
+  // to zero on sub-pixel rounding. At RAIL_SAMPLES = 6 in a 40 px
+  // track (~5.8 px per bar) this is never binding, but it defends
+  // the invariant against future tuning.
+  minWidth: 1,
+  borderTopLeftRadius: 1,
+  borderTopRightRadius: 1,
+};
+
+const RAIL_PERCENT: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 11,
+  fontSize: 10,
   fontWeight: 600,
   color: "var(--fg-dim)",
-  cursor: "default",
 };
 
 export interface CpuWidgetProps {
@@ -145,9 +183,43 @@ export function CpuWidget({ visible }: CpuWidgetProps): React.ReactElement | nul
   if (!ready) return null;
 
   if (!visible) {
+    // Rail: newest `RAIL_SAMPLES` slots from the shared history,
+    // same bar treatment as the extended sparkline. Historical
+    // bars render `--fg-faint` with the recency-gradient opacity;
+    // newest takes its heat colour at full opacity.
+    //
+    // Left-pad with empty slots if we don't yet have RAIL_SAMPLES
+    // real samples so the bars grow in from the right rather than
+    // spreading and jumping widths as history builds.
+    const railTail = slots.slice(-RAIL_SAMPLES);
+    const railSlots: Array<number | null> = [
+      ...Array<number | null>(Math.max(0, RAIL_SAMPLES - railTail.length)).fill(null),
+      ...railTail,
+    ];
     return (
       <div data-testid="sidebar-cpu-rail" style={RAIL_ROOT} title={tooltip}>
-        {Math.round(load.cpu_percent).toString().padStart(2, "0")}
+        <div style={RAIL_SPARKLINE} data-testid="sidebar-cpu-rail-sparkline">
+          {railSlots.map((sample, index) => {
+            const isNewest = index === railSlots.length - 1;
+            const maxHistoricalIndex = Math.max(1, railSlots.length - 2);
+            const historicalT = Math.min(1, index / maxHistoricalIndex);
+            return (
+              <div
+                key={index}
+                data-testid={
+                  sample === null ? "sidebar-cpu-rail-bar-empty" : "sidebar-cpu-rail-bar"
+                }
+                style={railBarStyle(sample, isNewest, historicalT)}
+              />
+            );
+          })}
+        </div>
+        <span
+          style={{ ...RAIL_PERCENT, color: heatColour(load.cpu_percent) }}
+          data-testid="sidebar-cpu-rail-percent"
+        >
+          {`${Math.round(load.cpu_percent).toString().padStart(2, "0")}%`}
+        </span>
       </div>
     );
   }
@@ -222,21 +294,49 @@ const HISTORICAL_MAX_OPACITY = 0.9;
  *  the header percent, and recency is carried by the gradient
  *  brightness alone. Spec §19 D5 item 2 is amended for the change. */
 function barStyle(sample: number | null, isNewest: boolean, historicalT: number): CSSProperties {
-  if (sample === null) return BAR_BASE;
+  return sharedBarStyle(BAR_BASE, sample, isNewest, historicalT, MIN_BAR_PX);
+}
+
+/** Rail-state bar. Same rules as `barStyle` but uses the smaller
+ *  `RAIL_BAR_BASE` and a 1-pixel minimum height — the rail's
+ *  sparkline is short, so a 3 px idle floor would eat half the
+ *  chart. */
+function railBarStyle(
+  sample: number | null,
+  isNewest: boolean,
+  historicalT: number,
+): CSSProperties {
+  return sharedBarStyle(RAIL_BAR_BASE, sample, isNewest, historicalT, 1);
+}
+
+/** The shared rule used by both extended and rail sparkline bars.
+ *  Null → empty slot; newest → heat colour at full opacity; older
+ *  → monochrome `--fg-faint` with a left-to-right opacity gradient.
+ *  Split out so the two callers agree on the treatment and a tuning
+ *  change to the recency gradient moves both in lockstep. */
+function sharedBarStyle(
+  base: CSSProperties,
+  sample: number | null,
+  isNewest: boolean,
+  historicalT: number,
+  minHeightPx: number,
+): CSSProperties {
+  if (sample === null) return base;
+  const height = `${Math.max(0, Math.min(100, sample))}%`;
   if (isNewest) {
     return {
-      ...BAR_BASE,
-      height: `${Math.max(0, Math.min(100, sample))}%`,
-      minHeight: MIN_BAR_PX,
+      ...base,
+      height,
+      minHeight: minHeightPx,
       background: heatColour(sample),
     };
   }
   const opacity =
     HISTORICAL_MIN_OPACITY + (HISTORICAL_MAX_OPACITY - HISTORICAL_MIN_OPACITY) * historicalT;
   return {
-    ...BAR_BASE,
-    height: `${Math.max(0, Math.min(100, sample))}%`,
-    minHeight: MIN_BAR_PX,
+    ...base,
+    height,
+    minHeight: minHeightPx,
     background: "var(--fg-faint)",
     opacity,
   };

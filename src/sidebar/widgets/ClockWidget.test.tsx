@@ -112,15 +112,20 @@ describe("ClockWidget / shortTimezone helper", () => {
 });
 
 describe("ClockWidget / rail", () => {
-  it("renders two-digit hour with tooltip when visible=false", () => {
+  it("stacks HH over MM in the rail per M13.5.5 §D11", () => {
+    // M13.1 rail showed just the hour glyph; the M13.5.5 remodel
+    // stacks both halves so the eye reads a compact time on a
+    // glance without expanding the sidebar.
     render(
       <ClockProvider value={at(9, 4)}>
         <ClockWidget visible={false} />
       </ClockProvider>,
     );
-    const rail = screen.getByTestId("sidebar-clock-rail");
-    expect(rail.textContent).toBe("09");
-    expect(rail.getAttribute("title")).toContain("09:04");
+    expect(screen.getByTestId("sidebar-clock-rail-hour").textContent).toBe("09");
+    expect(screen.getByTestId("sidebar-clock-rail-minute").textContent).toBe("04");
+    // Full time still lives in the tooltip so the reader can
+    // confirm a glance-read.
+    expect(screen.getByTestId("sidebar-clock-rail").getAttribute("title")).toContain("09:04");
   });
 
   it("does not render the expanded card when visible=false", () => {

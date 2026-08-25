@@ -206,7 +206,7 @@ describe("BatteryWidget / formatRemaining helper", () => {
 });
 
 describe("BatteryWidget / rail", () => {
-  it("renders a mini bar + percent when collapsed", () => {
+  it("renders a battery-icon outline (with terminal nub) + percent when collapsed", () => {
     render(
       <BatteryProvider value={status()}>
         <BatteryWidget visible={false} />
@@ -215,6 +215,19 @@ describe("BatteryWidget / rail", () => {
     expect(screen.getByTestId("sidebar-battery-rail")).toBeInTheDocument();
     expect(screen.getByTestId("sidebar-battery-rail-percent").textContent).toBe("82");
     expect(screen.getByTestId("sidebar-battery-rail-fill").style.width).toBe("82%");
+    // The outline carries a border (the battery body) rather than a
+    // bare `--pane2` fill — pinning it here catches a regression back
+    // to the plain progress-bar the M13.5.5 remodel replaced. Per
+    // `design/sidebar-collapsed.png`, the rail battery reads as a
+    // real battery icon. Reading the raw `style` attribute avoids
+    // jsdom's inconsistent `border` shorthand → longhand reflection.
+    const track = screen.getByTestId("sidebar-battery-rail-track");
+    const styleAttr = track.getAttribute("style") ?? "";
+    expect(styleAttr).toContain("border: 1px solid var(--fg-dim)");
+    // Terminal nub is a positioned pseudo-nub div inside the track,
+    // aria-hidden because it's decorative — no independent testid,
+    // so we assert on the DOM count of children (fill + terminal).
+    expect(track.children).toHaveLength(2);
   });
 
   it("shows a lightning-bolt glyph to the LEFT of the percent when charging", () => {

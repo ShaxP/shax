@@ -87,14 +87,33 @@ const DATE_LINE: CSSProperties = {
 
 const RAIL_ROOT: CSSProperties = {
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  height: 36,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--fg-dim)",
   cursor: "default",
+  lineHeight: 1,
+  gap: 1,
+};
+
+// Two-line HH / MM stack per `design/sidebar-collapsed.png` and §D11.
+// Same size on both lines — the eye lands on the hour via the
+// weight + colour contrast alone: hour is bold at `--fg`, minutes
+// drop all the way to `--fg-faint` (the mockup renders them almost
+// as ambient background — noticeably fainter than `--fg-dim` labels
+// like "AUG" on the calendar rail). Matching the size keeps the
+// two-line block feeling like one reading rather than a headline
+// + subline, which is how a glance at a clock actually works.
+const RAIL_HH: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: "var(--fg)",
+};
+
+const RAIL_MM: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 400,
+  color: "var(--fg-faint)",
 };
 
 export interface ClockWidgetProps {
@@ -149,12 +168,16 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
       }),
     [now],
   );
-  // Rail-state label hoisted above the conditional return so hook
-  // order stays stable regardless of which branch renders.
-  const hourOnly = useMemo(
+  // Rail-state labels hoisted above the conditional return so hook
+  // order stays stable regardless of which branch renders. Split into
+  // hour and minute components — `hourMinute` is the display string
+  // for the expanded card, but the rail wants each half in a
+  // different style so the eye lands on the hour.
+  const railHour = useMemo(
     () => now.toLocaleTimeString([], { hour: "2-digit", hour12: false }).replace(/[^\d]/g, ""),
     [now],
   );
+  const railMinute = useMemo(() => hourMinute.slice(-2), [hourMinute]);
   // Timezone abbreviation from the OS, via Intl — no probe. Changes at
   // most twice a year (DST), so a re-derive per second render is
   // wasted; memoise on `now`'s Date reference and let React skip.
@@ -163,7 +186,12 @@ export function ClockWidget({ visible }: ClockWidgetProps): React.ReactElement {
   if (!visible) {
     return (
       <div data-testid="sidebar-clock-rail" style={RAIL_ROOT} title={fullTooltip}>
-        {hourOnly}
+        <span style={RAIL_HH} data-testid="sidebar-clock-rail-hour">
+          {railHour}
+        </span>
+        <span style={RAIL_MM} data-testid="sidebar-clock-rail-minute">
+          {railMinute}
+        </span>
       </div>
     );
   }

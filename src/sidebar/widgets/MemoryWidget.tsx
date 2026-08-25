@@ -127,9 +127,24 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
   if (!ready) return null;
 
   if (!visible) {
+    // Rail: miniature donut with the % inside, matching the extended
+    // card's visual language at reduced scale (§D11). Label carries
+    // the `%` glyph so the reading is self-describing — the donut
+    // shape is suggestive, but the label under CPU's rail is a bare
+    // percent + sign now too, and matching the pair keeps the rail
+    // consistent. At 8 px the three-character label (`41%`, `100%`)
+    // still fits comfortably inside the 32 px ring at 3 px stroke.
     return (
       <div data-testid="sidebar-memory-rail" style={RAIL_ROOT} title={tooltip}>
-        {Math.round(percent).toString().padStart(2, "0")}
+        <MemoryDonut
+          percent={percent}
+          label={`${Math.round(percent)}%`}
+          size={32}
+          stroke={3}
+          labelSize={8}
+          svgTestid="sidebar-memory-rail-donut"
+          labelTestid="sidebar-memory-rail-percent"
+        />
       </div>
     );
   }
@@ -171,41 +186,63 @@ export function MemoryWidget({ visible }: MemoryWidgetProps): React.ReactElement
 interface MemoryDonutProps {
   percent: number;
   label: string;
+  /** Diameter in px. 44 for the expanded card, 32 for the rail. */
+  size?: number;
+  /** Stroke width in px — should scale with `size` so the ring
+   *  doesn't visually thicken at small sizes. Defaults to 4 for the
+   *  44 px card, 3 for the 32 px rail. */
+  stroke?: number;
+  /** Font size for the centre `%` label, in px. */
+  labelSize?: number;
+  /** Testid on the SVG element. Different callers use different ids
+   *  so tests can pin the expanded vs rail donut independently. */
+  svgTestid?: string;
+  /** Testid on the label span. */
+  labelTestid?: string;
 }
 
-const DONUT_SIZE = 44;
-const DONUT_STROKE = 4;
-const DONUT_RADIUS = (DONUT_SIZE - DONUT_STROKE) / 2;
-const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
-
-function MemoryDonut({ percent, label }: MemoryDonutProps): React.ReactElement {
+function MemoryDonut({
+  percent,
+  label,
+  size = 44,
+  stroke = 4,
+  labelSize = 11,
+  svgTestid = "sidebar-memory-donut",
+  labelTestid = "sidebar-memory-percent",
+}: MemoryDonutProps): React.ReactElement {
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
   const fraction = Math.min(1, Math.max(0, percent / 100));
-  const dashOffset = DONUT_CIRCUMFERENCE * (1 - fraction);
+  const dashOffset = circumference * (1 - fraction);
   return (
-    <div style={{ position: "relative", width: DONUT_SIZE, height: DONUT_SIZE, flexShrink: 0 }}>
-      <svg width={DONUT_SIZE} height={DONUT_SIZE} data-testid="sidebar-memory-donut">
-        {/* Track ring — always full circumference, dimmed. */}
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} data-testid={svgTestid}>
+        {/* Track ring — always full circumference. `--border-strong`,
+            not `--pane2`, so the unfilled portion (the free-memory
+            fraction the user reads at a glance) is clearly visible
+            against the pane in both light and dark mode. `--pane2`
+            sits right against the pane background and washed out. */}
         <circle
-          cx={DONUT_SIZE / 2}
-          cy={DONUT_SIZE / 2}
-          r={DONUT_RADIUS}
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
           fill="none"
-          stroke="var(--pane2)"
-          strokeWidth={DONUT_STROKE}
+          stroke="var(--border-strong)"
+          strokeWidth={stroke}
         />
         {/* Filled arc — rotated -90° so the arc starts at 12
             o'clock rather than the SVG default 3 o'clock. */}
         <circle
-          cx={DONUT_SIZE / 2}
-          cy={DONUT_SIZE / 2}
-          r={DONUT_RADIUS}
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
           fill="none"
           stroke="var(--accent)"
-          strokeWidth={DONUT_STROKE}
-          strokeDasharray={DONUT_CIRCUMFERENCE}
+          strokeWidth={stroke}
+          strokeDasharray={circumference}
           strokeDashoffset={dashOffset}
           strokeLinecap="round"
-          transform={`rotate(-90 ${DONUT_SIZE / 2} ${DONUT_SIZE / 2})`}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
           style={{ transition: "stroke-dashoffset 500ms ease-out" }}
         />
       </svg>
@@ -216,12 +253,12 @@ function MemoryDonut({ percent, label }: MemoryDonutProps): React.ReactElement {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 11,
+          fontSize: labelSize,
           fontWeight: 600,
           color: "var(--fg)",
           fontFamily: "var(--font-mono)",
         }}
-        data-testid="sidebar-memory-percent"
+        data-testid={labelTestid}
       >
         {label}
       </span>

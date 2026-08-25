@@ -258,7 +258,7 @@ describe("DiskWidget / byte formatters", () => {
 });
 
 describe("DiskWidget / rail", () => {
-  it("renders a compact free-GB figure when collapsed", () => {
+  it("renders a mini usage bar over the free-space figure when collapsed", () => {
     renderWithVolumes(
       [
         volume({
@@ -269,7 +269,31 @@ describe("DiskWidget / rail", () => {
       ],
       false,
     );
-    expect(screen.getByTestId("sidebar-disk-rail").textContent).toBe("412G");
+    expect(screen.getByTestId("sidebar-disk-rail")).toBeInTheDocument();
+    // Bar + label pair mirrors Battery's rail. Free-space label
+    // stays compact — no `B` suffix, since the rail is narrow.
+    const track = screen.getByTestId("sidebar-disk-rail-track");
+    const fill = screen.getByTestId("sidebar-disk-rail-fill");
+    expect(track).toBeInTheDocument();
+    // 588 / 1024 ≈ 57.4 %, well under AMBER_AT (70): accent colour.
+    expect(fill.style.background).toBe("var(--accent)");
+    expect(fill.style.width).toMatch(/^\d/);
+    expect(screen.getByTestId("sidebar-disk-rail-free").textContent).toBe("412G");
     expect(screen.queryByTestId("sidebar-disk")).not.toBeInTheDocument();
+  });
+
+  it("heat-maps the rail bar red once a volume crosses 90 % used", () => {
+    // Same threshold as the expanded card — a nearly-full disk
+    // must shout in either state.
+    renderWithVolumes(
+      [
+        volume({
+          total_bytes: 1 * TB,
+          used_bytes: 0.95 * TB, // 95 % used
+        }),
+      ],
+      false,
+    );
+    expect(screen.getByTestId("sidebar-disk-rail-fill").style.background).toBe("var(--red)");
   });
 });

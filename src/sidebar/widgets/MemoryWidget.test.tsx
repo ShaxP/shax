@@ -162,15 +162,21 @@ describe("formatMemPair helper", () => {
   });
 });
 
-describe("MemoryWidget / rail", () => {
-  it("renders a two-digit zero-padded percent when visible=false", () => {
+describe("MemoryWidget / rail (M13.5.5 remodel)", () => {
+  it("renders a mini donut with the percent inside when visible=false", () => {
+    // The M13.1 glyph rail showed a two-digit zero-padded percent; the
+    // M13.5.5 remodel replaces it with a miniature donut matching the
+    // extended card's visual language at reduced scale (§D11).
     render(
       <SystemLoadProvider value={load({ mem_used_bytes: 1 * GB, mem_total_bytes: 16 * GB })}>
         <MemoryWidget visible={false} />
       </SystemLoadProvider>,
     );
-    // 1 / 16 ≈ 6% → "06".
-    expect(screen.getByTestId("sidebar-memory-rail").textContent).toBe("06");
+    expect(screen.getByTestId("sidebar-memory-rail-donut")).toBeInTheDocument();
+    // Percent inside the ring — includes the `%` glyph so the label
+    // is self-describing, and no zero-padding (the ring shape carries
+    // any width variance the eye needs to disambiguate `6%` vs `60%`).
+    expect(screen.getByTestId("sidebar-memory-rail-percent").textContent).toBe("6%");
   });
 });
 

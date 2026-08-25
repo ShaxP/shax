@@ -133,8 +133,10 @@ describe("GitBranchWidget / expanded", () => {
   });
 });
 
-describe("GitBranchWidget / rail", () => {
-  it("renders the ⎇ glyph with a branch-name tooltip", () => {
+describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
+  it("renders the ⎇ glyph alone on a clean tree", () => {
+    // No counts to show → rail is a single glyph, matching the
+    // expanded card's "counts row disappears when clean" behaviour.
     render(
       <FocusedPaneProvider value={meta({ branch: "main" })}>
         <GitBranchWidget visible={false} />
@@ -143,6 +145,7 @@ describe("GitBranchWidget / rail", () => {
     const rail = screen.getByTestId("sidebar-git-branch-rail");
     expect(rail.textContent).toBe("⎇");
     expect(rail.getAttribute("title")).toContain("main");
+    expect(screen.queryByTestId("sidebar-git-branch-rail-stack")).not.toBeInTheDocument();
   });
 
   it("stays hidden in the rail when branch is null", () => {
@@ -152,6 +155,57 @@ describe("GitBranchWidget / rail", () => {
       </FocusedPaneProvider>,
     );
     expect(screen.queryByTestId("sidebar-git-branch-rail")).not.toBeInTheDocument();
+  });
+
+  it("surfaces every available signal in the rail: +staged ~modified ?untracked ↑ahead ↓behind, each on its own line", async () => {
+    // The rail carries every non-zero signal the widget knows about,
+    // stacked vertically — one column of values under the ⎇ glyph.
+    // Working-tree signals sit above sync signals so the stack
+    // matches the expanded card's reading order.
+    porcelainMock.mockResolvedValue(MOCKUP_STATE);
+    render(
+      <FocusedPaneProvider value={meta({ ahead: 4, behind: 1 })}>
+        <GitBranchWidget visible={false} />
+      </FocusedPaneProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-git-branch-rail-staged")).toHaveTextContent("+1"),
+    );
+    expect(screen.getByTestId("sidebar-git-branch-rail-modified")).toHaveTextContent("~2");
+    expect(screen.getByTestId("sidebar-git-branch-rail-untracked")).toHaveTextContent("?1");
+    expect(screen.getByTestId("sidebar-git-branch-rail-ahead")).toHaveTextContent("↑4");
+    expect(screen.getByTestId("sidebar-git-branch-rail-behind")).toHaveTextContent("↓1");
+    // Values live in a single vertical stack — one flex column
+    // rather than the earlier two-row layout — so each value stands
+    // alone at legible width on the ~40 px rail.
+    const stack = screen.getByTestId("sidebar-git-branch-rail-stack");
+    expect(stack).toBeInTheDocument();
+    expect(stack.style.flexDirection).toBe("column");
+    // Working-tree signals precede sync signals in reading order.
+    const children = Array.from(stack.children);
+    const staged = screen.getByTestId("sidebar-git-branch-rail-staged");
+    const behind = screen.getByTestId("sidebar-git-branch-rail-behind");
+    expect(children.indexOf(staged)).toBeLessThan(children.indexOf(behind));
+  });
+
+  it("elides zeros in the rail — only shows the signals that have content", async () => {
+    // A tree with just untracked files and only ahead commits should
+    // show `?n` alone in the working-tree row and `↑n` alone in the
+    // sync row. Regression guard against a naive render that always
+    // emits every span.
+    porcelainMock.mockResolvedValue(porcelain("# branch.head main", "? only-untracked.ts"));
+    render(
+      <FocusedPaneProvider value={meta({ ahead: 3, behind: null })}>
+        <GitBranchWidget visible={false} />
+      </FocusedPaneProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-git-branch-rail-untracked")).toHaveTextContent("?1"),
+    );
+    expect(screen.queryByTestId("sidebar-git-branch-rail-staged")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch-rail-modified")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-git-branch-rail-ahead")).toHaveTextContent("↑3");
+    expect(screen.queryByTestId("sidebar-git-branch-rail-behind")).not.toBeInTheDocument();
   });
 });
 
