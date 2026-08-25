@@ -94,11 +94,20 @@ const RAIL_GLYPH: CSSProperties = {
   color: "var(--fg-dim)",
 };
 
-// Rail counts — `+n ~n` on one line, colour-coded like the expanded
-// card's status row. Same green / amber vocabulary so the reader
-// doesn't have to relearn what each digit means between states.
-const RAIL_COUNTS: CSSProperties = {
+// Rail counts — colour-coded like the expanded card's status row.
+// Same green / amber / faint vocabulary so the reader doesn't have
+// to relearn what each digit means between states.
+//
+// Two logical rows: working-tree counts (staged / modified /
+// untracked) and upstream sync (ahead / behind). Splitting them by
+// concern keeps each row short enough for the rail's ~40 px content
+// area at 9 px mono; `flex-wrap: wrap` on the working-tree row
+// gracefully bumps `?n` to a second line when the numbers grow into
+// double digits.
+const RAIL_ROW: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
   gap: 3,
   fontFamily: "var(--font-mono)",
   fontSize: 9,
@@ -107,6 +116,12 @@ const RAIL_COUNTS: CSSProperties = {
 
 const RAIL_STAGED: CSSProperties = { color: "var(--green)" };
 const RAIL_MODIFIED: CSSProperties = { color: "var(--amber)" };
+// Untracked is a fainter tier than staged / modified — same signal
+// hierarchy as the expanded card's status row.
+const RAIL_UNTRACKED: CSSProperties = { color: "var(--fg-faint)" };
+// Ahead / behind sit under the working-tree row in dim mono, same
+// colour language as the expanded card's `syncLabel`.
+const RAIL_SYNC: CSSProperties = { color: "var(--fg-dim)" };
 
 export interface GitBranchWidgetProps {
   visible: boolean;
@@ -168,17 +183,22 @@ export function GitBranchWidget({ visible }: GitBranchWidgetProps): React.ReactE
   const showCounts = counts !== null && hasAny(counts);
 
   if (!visible) {
-    // Rail: `⎇` glyph over `+n ~n` counts when non-zero (§D11).
-    // Untracked (`?n`) doesn't fit the rail's ~40 px content width —
-    // the two most-frequently-consulted counts (staged + modified)
-    // win the room. When the tree is clean the rail shows just the
-    // branch glyph, matching the expanded card's "row disappears on
-    // a clean tree" behaviour.
+    // Rail: `⎇` glyph over two conceptually-distinct rows —
+    // working-tree counts (`+n ~n ?n`) and upstream sync
+    // (`↑n ↓n`). Each row renders only when at least one of its
+    // values is non-zero; a clean, in-sync tree shows just the
+    // branch glyph. Splitting by concern keeps each row short
+    // enough to fit the rail's ~40 px content area at 9 px mono
+    // while still surfacing every available signal.
+    const workingTreeHasContent =
+      counts !== null && (counts.staged > 0 || counts.modified > 0 || counts.untracked > 0);
+    const syncHasContent =
+      (typeof ahead === "number" && ahead > 0) || (typeof behind === "number" && behind > 0);
     return (
       <div data-testid="sidebar-git-branch-rail" style={RAIL_ROOT} title={tooltip}>
         <span style={RAIL_GLYPH}>⎇</span>
-        {counts !== null && (counts.staged > 0 || counts.modified > 0) && (
-          <span style={RAIL_COUNTS} data-testid="sidebar-git-branch-rail-counts">
+        {workingTreeHasContent && (
+          <span style={RAIL_ROW} data-testid="sidebar-git-branch-rail-counts">
             {counts.staged > 0 && (
               <span style={RAIL_STAGED} data-testid="sidebar-git-branch-rail-staged">
                 +{counts.staged}
@@ -187,6 +207,25 @@ export function GitBranchWidget({ visible }: GitBranchWidgetProps): React.ReactE
             {counts.modified > 0 && (
               <span style={RAIL_MODIFIED} data-testid="sidebar-git-branch-rail-modified">
                 ~{counts.modified}
+              </span>
+            )}
+            {counts.untracked > 0 && (
+              <span style={RAIL_UNTRACKED} data-testid="sidebar-git-branch-rail-untracked">
+                ?{counts.untracked}
+              </span>
+            )}
+          </span>
+        )}
+        {syncHasContent && (
+          <span style={RAIL_ROW} data-testid="sidebar-git-branch-rail-sync">
+            {typeof ahead === "number" && ahead > 0 && (
+              <span style={RAIL_SYNC} data-testid="sidebar-git-branch-rail-ahead">
+                ↑{ahead}
+              </span>
+            )}
+            {typeof behind === "number" && behind > 0 && (
+              <span style={RAIL_SYNC} data-testid="sidebar-git-branch-rail-behind">
+                ↓{behind}
               </span>
             )}
           </span>

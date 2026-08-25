@@ -156,6 +156,51 @@ describe("GitBranchWidget / rail (M13.5.5 remodel)", () => {
     );
     expect(screen.queryByTestId("sidebar-git-branch-rail")).not.toBeInTheDocument();
   });
+
+  it("surfaces every available signal in the rail: +staged ~modified ?untracked ↑ahead ↓behind", async () => {
+    // The rail carries every non-zero signal the widget knows about,
+    // split across two conceptually-distinct rows: working-tree
+    // counts (staged / modified / untracked) and upstream sync
+    // (ahead / behind). Each renders only when its value is > 0 —
+    // zeros are elided the same way the expanded card elides them.
+    porcelainMock.mockResolvedValue(MOCKUP_STATE);
+    render(
+      <FocusedPaneProvider value={meta({ ahead: 4, behind: 1 })}>
+        <GitBranchWidget visible={false} />
+      </FocusedPaneProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-git-branch-rail-staged")).toHaveTextContent("+1"),
+    );
+    expect(screen.getByTestId("sidebar-git-branch-rail-modified")).toHaveTextContent("~2");
+    expect(screen.getByTestId("sidebar-git-branch-rail-untracked")).toHaveTextContent("?1");
+    expect(screen.getByTestId("sidebar-git-branch-rail-ahead")).toHaveTextContent("↑4");
+    expect(screen.getByTestId("sidebar-git-branch-rail-behind")).toHaveTextContent("↓1");
+    // Two rows keep working-tree and sync counts conceptually
+    // separate — different concerns, different tests.
+    expect(screen.getByTestId("sidebar-git-branch-rail-counts")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-git-branch-rail-sync")).toBeInTheDocument();
+  });
+
+  it("elides zeros in the rail — only shows the signals that have content", async () => {
+    // A tree with just untracked files and only ahead commits should
+    // show `?n` alone in the working-tree row and `↑n` alone in the
+    // sync row. Regression guard against a naive render that always
+    // emits every span.
+    porcelainMock.mockResolvedValue(porcelain("# branch.head main", "? only-untracked.ts"));
+    render(
+      <FocusedPaneProvider value={meta({ ahead: 3, behind: null })}>
+        <GitBranchWidget visible={false} />
+      </FocusedPaneProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-git-branch-rail-untracked")).toHaveTextContent("?1"),
+    );
+    expect(screen.queryByTestId("sidebar-git-branch-rail-staged")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-git-branch-rail-modified")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-git-branch-rail-ahead")).toHaveTextContent("↑3");
+    expect(screen.queryByTestId("sidebar-git-branch-rail-behind")).not.toBeInTheDocument();
+  });
 });
 
 describe("GitBranchWidget / updates", () => {
