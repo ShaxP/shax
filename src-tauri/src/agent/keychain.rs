@@ -15,6 +15,44 @@
 //! Errors always return the OS-provided message (translated
 //! by the crate) rather than a generic "keychain error" so
 //! diagnostics stay useful. Never log the key itself.
+//!
+//! ## macOS: login-password prompt during development
+//!
+//! When running Shax under `pnpm tauri dev` (or any unsigned
+//! / ad-hoc-signed local build), macOS will prompt for the
+//! user's account password every time this module reads a
+//! key back after a rebuild. It looks like a bug but is
+//! macOS's Keychain ACL model working correctly — worth
+//! calling out because it *only* happens in dev, so a new
+//! contributor tends to chase it.
+//!
+//! Each Keychain item carries an Application ACL that
+//! identifies the app allowed to read it silently. That
+//! identity is:
+//!
+//! - **Signed builds** — the app's *designated requirement*
+//!   (roughly "code signed by team X with bundle ID
+//!   `com.shax.app`"). Stable across every update as long as
+//!   that identity doesn't change.
+//! - **Unsigned / ad-hoc-signed dev builds** — the
+//!   executable's code-directory hash. Every rebuild
+//!   produces new bytes → a new hash → the OS decides the
+//!   previous ACL entry doesn't cover this "new" app and
+//!   asks for the password.
+//!
+//! Clicking *Always Allow* records the trust against the
+//! current binary's hash. Next `cargo build` invalidates
+//! that hash and the prompt comes back — there's no clean
+//! fix without a stable local codesigning identity, which
+//! is more setup than the annoyance warrants.
+//!
+//! In a signed + notarised release build, the ACL matches
+//! the stable designated requirement, so users are prompted
+//! at most once (on the very first write) and never again
+//! for reads. A user is only re-prompted if the signing
+//! certificate ever rotates.
+//!
+//! No code change wanted here — this note is the fix.
 
 use keyring::Entry;
 use thiserror::Error;
