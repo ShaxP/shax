@@ -131,17 +131,44 @@ const RAIL_ROOT: CSSProperties = {
   cursor: "default",
 };
 
-const RAIL_BAR_TRACK: CSSProperties = {
-  width: 22,
-  height: 6,
+// Rail battery renders as a real battery *icon* — a rounded outline
+// with a terminal nub on the right, fill inside — matching the
+// mockup rather than a plain progress bar. Same visual grammar as
+// the extended card's `ChargingBadge` SVG, at a level-carrying size.
+//
+// Div-based rather than SVG because the fill width has to animate
+// smoothly (CSS width transitions on a plain `<div>` are cheaper and
+// easier to keep in step with the extended bar's 300 ms ease-out
+// than animating an SVG rect width attribute).
+const RAIL_BATTERY_OUTLINE: CSSProperties = {
+  width: 26,
+  height: 12,
+  border: "1px solid var(--fg-dim)",
   borderRadius: 3,
-  background: "var(--pane2)",
-  overflow: "hidden",
+  padding: 1.5,
+  boxSizing: "border-box",
+  position: "relative",
+  flexShrink: 0,
 };
 
-const RAIL_BAR_FILL_BASE: CSSProperties = {
+// The little cathode nub on the right of a battery outline. Absolute-
+// positioned just outside the outer border so it reads as attached to
+// the body without disturbing the fill geometry inside the outline.
+const RAIL_BATTERY_TERMINAL: CSSProperties = {
+  position: "absolute",
+  right: -3,
+  top: "50%",
+  marginTop: -2.5,
+  width: 2,
+  height: 5,
+  background: "var(--fg-dim)",
+  borderRadius: 1,
+};
+
+const RAIL_BATTERY_FILL_BASE: CSSProperties = {
   height: "100%",
-  borderRadius: 3,
+  borderRadius: 1.5,
+  transition: "width 300ms ease-out, background 300ms ease-out",
 };
 
 const RAIL_PERCENT_ROW: CSSProperties = {
@@ -177,14 +204,15 @@ export function BatteryWidget({ visible }: BatteryWidgetProps): React.ReactEleme
 
   if (!visible) {
     const fillStyle: CSSProperties = {
-      ...RAIL_BAR_FILL_BASE,
+      ...RAIL_BATTERY_FILL_BASE,
       width: `${barWidth}%`,
       background: colour,
     };
     return (
       <div data-testid="sidebar-battery-rail" style={RAIL_ROOT} title={tooltip}>
-        <div style={RAIL_BAR_TRACK} data-testid="sidebar-battery-rail-track">
+        <div style={RAIL_BATTERY_OUTLINE} data-testid="sidebar-battery-rail-track">
           <div style={fillStyle} data-testid="sidebar-battery-rail-fill" />
+          <div style={RAIL_BATTERY_TERMINAL} aria-hidden="true" />
         </div>
         {/* Bolt sits to the LEFT of the percent number when charging
          *  (per `design/battery-charging-collapsed.png`). The row
