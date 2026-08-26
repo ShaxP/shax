@@ -3,6 +3,14 @@
 <plist version="1.0">
 <dict>
 	<!--
+	  Finder's Get Info sheet shows this string as the app's
+	  one-line subtitle. Kept in sync with the product's public
+	  tagline used in README, Cargo.toml description, and the
+	  Tauri bundle short/long descriptions.
+	-->
+	<key>CFBundleGetInfoString</key>
+	<string>Shax — the modern terminal.</string>
+	<!--
 	  Required for the sidebar's Network card to show the Wi-Fi
 	  network's name. Since macOS 14, CWInterface.ssid() returns nil
 	  unless the calling process holds location authorisation, and

@@ -1,5 +1,7 @@
 # Shax
 
+**Shax — the modern terminal.**
+
 An AI-aware terminal emulator for developers. Shax runs ordinary Linux and Unix commands but treats each command and its output as a structured, searchable, occasionally interactive "block." A Claude-powered assistant is available throughout but stays quiet until invoked. It is a calm, fast, local-first daily driver, not an AI gadget.
 
 Shax runs natively on macOS, Windows, and Linux — as a local desktop app. Running Shax itself over SSH GUI forwarding (`ssh -X`, `waypipe`) or inside a container isn't a supported configuration; reaching a remote shell from a locally-running Shax is plain `ssh` in a pane, which is exactly the point.

@@ -1,7 +1,7 @@
 [package]
 name = "shax"
 version = "0.1.0"
-description = "Shax: a structured, searchable, AI-assisted terminal."
+description = "Shax — the modern terminal. Structured, searchable, AI-assisted."
 authors = ["Shax contributors"]
 edition = "2021"
 
