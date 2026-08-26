@@ -26,6 +26,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "shortDescription": "Shax — the modern terminal.",
+    "longDescription": "Shax — the modern terminal. A structured, searchable, AI-assisted terminal emulator that treats every command and its output as a block, keeps a truthful history, and stays out of the way until you reach for the assistant.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
