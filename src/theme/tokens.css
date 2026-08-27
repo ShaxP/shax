@@ -57,6 +57,21 @@
 
 :root,
 [data-theme="dark"] {
+  /*
+   * `color-scheme: dark` tells the UA that native form controls
+   * (in particular the OPEN <select> popup on Linux, which is drawn
+   * by WebKit2GTK via native GTK code and can't be reached with our
+   * CSS) should use their dark-mode variant. Without it, the popup
+   * ignores our theme entirely and comes back in the system-light
+   * palette — the exact "white dropdown, light text, unreadable"
+   * bug reported on Ubuntu.
+   *
+   * The `<select>`'s CLOSED box is still styled by our own CSS in
+   * SettingsModal (with `appearance: none`); this handles the
+   * popup that opens over it.
+   */
+  color-scheme: dark;
+
   /* Surfaces */
   --bg: #0c0d10;
   --pane: #0e0f13;
@@ -160,6 +175,10 @@
  */
 
 [data-theme="light"] {
+  /* Native form controls follow the app theme — see the dark
+   * block above for the full rationale. */
+  color-scheme: light;
+
   /* Surfaces — flipped lightness, warm off-white so the eye
    * doesn't fatigue on pure white. */
   --bg: #fafaf7;

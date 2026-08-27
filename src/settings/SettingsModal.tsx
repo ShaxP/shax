@@ -234,13 +234,32 @@ const APPEARANCE_LABEL: CSSProperties = {
 
 const SELECT_STYLE: CSSProperties = {
   flex: 1,
-  padding: "6px 10px",
+  padding: "6px 28px 6px 10px",
   border: "1px solid var(--border)",
   borderRadius: 6,
   background: "var(--pane2)",
   color: "var(--fg)",
   fontFamily: "var(--font-ui)",
   fontSize: 12.5,
+  // Turn off the native form-control theme so WebKit / Blink /
+  // WebKit2GTK use OUR css instead of the OS palette. On Linux
+  // WebKit2GTK in particular the native GTK theme would otherwise
+  // paint the closed box in the system-light palette even inside a
+  // dark-mode dialog — the "white dropdown, light text, unreadable"
+  // bug reported on Ubuntu.
+  appearance: "none",
+  WebkitAppearance: "none",
+  MozAppearance: "none",
+  // With `appearance: none` the platform chevron disappears; add a
+  // themed one via an inline SVG data URI positioned in the right
+  // padding. `--fg-dim` is close enough to visible on both light
+  // and dark palettes that a single fixed colour survives theme
+  // switches without a per-theme swap.
+  backgroundImage:
+    "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%238b909c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 10px center",
+  backgroundSize: "12px 12px",
 };
 
 const LANE_LIST: CSSProperties = {
@@ -354,13 +373,24 @@ const INPUT: CSSProperties = {
 
 const SELECT: CSSProperties = {
   flex: 1,
-  padding: "6px 10px",
+  padding: "6px 28px 6px 10px",
   background: "var(--pane2)",
   border: "1px solid var(--border)",
   borderRadius: 4,
   color: "var(--fg)",
   fontFamily: "var(--font-ui)",
   fontSize: 12,
+  // Same treatment as SELECT_STYLE above — opt out of native form
+  // theming so WebKit2GTK on Linux doesn't paint the closed box
+  // in system-light palette. See SELECT_STYLE for the full rationale.
+  appearance: "none",
+  WebkitAppearance: "none",
+  MozAppearance: "none",
+  backgroundImage:
+    "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%238b909c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 10px center",
+  backgroundSize: "12px 12px",
 };
 
 const BUTTON: CSSProperties = {
