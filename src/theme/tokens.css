@@ -235,6 +235,40 @@
   --ansi-bright-white: #dcddd6;
 }
 
+/* --- Font-rendering pins --------------------------------
+ *
+ * Reported on Ubuntu light mode: opening the Preferences ▸
+ * Assistant ▸ "Use my Anthropic API key" lane made every piece
+ * of text on the whole page render noticeably bolder. Selecting
+ * that lane reveals a `<input type="password">`, and both WebKit
+ * and Chromium are documented to switch the document-wide font
+ * rendering when a password field is present (as a hedge against
+ * subpixel-rendering side channels leaking password glyphs). The
+ * switch is subpixel-AA → grayscale-AA, which reads as slightly
+ * heavier weight on every glyph in the document.
+ *
+ * Lock the rendering to a consistent mode so the UA has nothing
+ * to switch to:
+ *
+ *   - `-webkit-font-smoothing: subpixel-antialiased` — pin
+ *     WebKit's default; prevents the password-field switch on
+ *     Linux WebKit2GTK and macOS Safari/Tauri.
+ *   - `font-synthesis: none` — belt and braces; stops the UA
+ *     from faking weight variants when a `font-weight: 500`
+ *     or `600` request lands on a family that only ships a
+ *     single 400 weight (common on Linux where the CSS
+ *     `Hanken Grotesk` isn't installed and system fallbacks are
+ *     one-weight only). Removes another route to accidental
+ *     visual bolding.
+ *
+ * Applied to `body` so both properties inherit through the whole
+ * tree without touching individual components.
+ */
+body {
+  -webkit-font-smoothing: subpixel-antialiased;
+  font-synthesis: none;
+}
+
 /* --- Theme-agnostic tokens ------------------------------- */
 
 :root {
