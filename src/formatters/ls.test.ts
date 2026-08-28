@@ -11,6 +11,7 @@ import {
   formatLsMtime,
   humanSize,
   parseLsArgv,
+  pathNeedsShellExpansion,
   resolveLsTarget,
   type LsFlags,
 } from "./ls";
@@ -179,5 +180,45 @@ describe("resolveLsTarget", () => {
 
   it("strips a trailing slash from cwd before joining", () => {
     expect(resolveLsTarget(["src"], "/home/me/proj/")).toBe("/home/me/proj/src");
+  });
+});
+
+describe("pathNeedsShellExpansion", () => {
+  // Shax's block capture holds the pre-expansion command text, so any
+  // glob / tilde / parameter tokens reach the formatter verbatim.
+  // Handing `${cwd}/*` to the directory probe fails with `os error 2`
+  // — reported by a user running `ls *` in a populated cwd.
+  //
+  // The fix defers to the raw block output for anything the shell
+  // would have expanded; these cases pin the detection.
+
+  it.each([
+    ["*"], // bare glob (the reported case)
+    ["*.ts"], // extension glob
+    ["src/*"], // subdirectory glob
+    ["file?.txt"], // single-char glob
+    ["file[12].txt"], // character class
+    ["dir/{a,b}"], // brace expansion
+    ["~"], // home shorthand
+    ["~/Downloads"], // home + subpath
+    ["~user"], // user home
+    ["$HOME"], // env var
+    ["${HOME}/x"], // env var with braces
+    ["prefix$VAR"], // env var mid-path
+  ])("flags %s as needing shell expansion", (path) => {
+    expect(pathNeedsShellExpansion(path)).toBe(true);
+  });
+
+  it.each([
+    ["file.txt"], // plain filename
+    ["src"], // relative dir
+    ["/etc/passwd"], // absolute
+    [".hidden"], // dotfile
+    ["some-file"], // dashes are fine
+    ["../parent"], // relative up
+    ["file with spaces"], // spaces are fine — the tokenizer already handled them
+    ["weird~name"], // `~` mid-path is NOT expansion; only leading `~` is
+  ])("passes %s through as a real path", (path) => {
+    expect(pathNeedsShellExpansion(path)).toBe(false);
   });
 });

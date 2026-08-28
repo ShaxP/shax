@@ -66,4 +66,23 @@ describe("ls promotionGate", () => {
   it("rejects when any single arg trips the killswitch", () => {
     expect(isWidgetPromotable(["ls", "-a", "--sort=size"])).toBe(false);
   });
+
+  it("refuses to promote when a positional carries an unexpanded shell metachar", () => {
+    // Shax's block capture holds the pre-expansion command text. If
+    // the user typed `ls *`, argv arrives as ["ls", "*"] and the
+    // shell already did the real listing. Falling through to the
+    // static formatter (which then PASSes to raw for the same
+    // reason) beats a widget that would try to probe a directory
+    // literally named `*`.
+    expect(isWidgetPromotable(["ls", "*"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "*.ts"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "src/*"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "~"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "~/Downloads"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "$HOME"])).toBe(false);
+    // Same treatment past the `--` separator.
+    expect(isWidgetPromotable(["ls", "--", "*"])).toBe(false);
+    // And even when the flags themselves are fine.
+    expect(isWidgetPromotable(["ls", "-la", "*"])).toBe(false);
+  });
 });

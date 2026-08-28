@@ -441,9 +441,44 @@ export function resolveLsTarget(paths: readonly string[], cwd: string | null): s
 
 // ─── formatter registration ──────────────────────────────────────────────────
 
+/** True when a positional path contains characters the *shell* would
+ *  expand before `ls` ever saw them: glob metachars (`*`, `?`,
+ *  `[`, `{`), a leading `~` for home, or a `$` for parameter
+ *  expansion. Shax's block-capture keeps the pre-expansion command
+ *  text (see `BlockRow.tsx` → `shellTokenize(block.command)`), so
+ *  those tokens reach the formatter unexpanded. Handing `${cwd}/*`
+ *  to `readDirEntries` fails with `os error 2` — literally, no
+ *  directory is named `*`.
+ *
+ *  The shell already did the real work at command time, and the
+ *  block's raw bytes carry the correct rendering of the result.
+ *  When we detect an unexpanded token, PASS to raw rather than
+ *  invent an error dialog for a command that succeeded.
+ *
+ *  Exported for tests. */
+export function pathNeedsShellExpansion(path: string): boolean {
+  // A leading `~` is home expansion — a bare `~` OR `~/…` OR
+  // `~user`. We treat `~x` in any position other than the start
+  // as a legitimate filename character (unusual but legal).
+  if (path.startsWith("~")) return true;
+  return (
+    path.includes("*") ||
+    path.includes("?") ||
+    path.includes("[") ||
+    path.includes("{") ||
+    path.includes("$")
+  );
+}
+
 function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
+  const flags = parseLsArgv(ctx.argv);
   // No cwd + no path → can't probe. RAW fallback.
-  if (ctx.cwd === null && parseLsArgv(ctx.argv).paths.length === 0) return PASS;
+  if (ctx.cwd === null && flags.paths.length === 0) return PASS;
+  // Any unexpanded shell metachar in a positional path → RAW.
+  // Anything else would either be a lie ("here's the cwd, ignore
+  // that you asked for `*`") or an error box for a command the
+  // shell handled correctly.
+  if (flags.paths.some(pathNeedsShellExpansion)) return PASS;
   return <LsView ctx={ctx} />;
 }
 

@@ -31,6 +31,8 @@
  * Pure module.
  */
 
+import { pathNeedsShellExpansion } from "../../formatters/ls";
+
 /** Long flags accepted with no value (`--flag`) or with any value
  *  after `=` (`--flag=whatever`) when the flag itself is a "noise"
  *  flag — no effect on the widget render. */
@@ -56,7 +58,14 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
   for (let i = 1; i < argv.length; i++) {
     const tok = argv[i] ?? "";
     if (tok.length === 0) continue;
-    if (pastSeparator) continue; // rest is positional path
+    if (pastSeparator) {
+      // Rest is positional path — but an unexpanded shell metachar
+      // (`*`, `?`, `[`, `{`, leading `~`, `$`) means the shell did
+      // the resolving and the raw output already has the truthful
+      // rendering. Don't promote to the widget over the raw.
+      if (pathNeedsShellExpansion(tok)) return false;
+      continue;
+    }
     if (tok === "--") {
       pastSeparator = true;
       continue;
@@ -77,7 +86,11 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
       }
       continue;
     }
-    // Positional path — always fine.
+    // Positional path — reject if it would need shell expansion,
+    // otherwise fine. See `pathNeedsShellExpansion` in `ls.tsx` for
+    // the full rationale on why unexpanded globs / `~` / `$` fall
+    // through to raw rather than a static / widget render.
+    if (pathNeedsShellExpansion(tok)) return false;
   }
   return true;
 }
