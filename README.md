@@ -4,7 +4,9 @@
 
 An AI-aware terminal emulator for developers. Shax runs ordinary Linux and Unix commands but treats each command and its output as a structured, searchable, occasionally interactive "block." A Claude-powered assistant is available throughout but stays quiet until invoked. It is a calm, fast, local-first daily driver, not an AI gadget.
 
-Shax runs natively on macOS, Windows, and Linux — as a local desktop app. Running Shax itself over SSH GUI forwarding (`ssh -X`, `waypipe`) or inside a container isn't a supported configuration; reaching a remote shell from a locally-running Shax is plain `ssh` in a pane, which is exactly the point.
+Shax runs natively on **macOS and Linux** — as a local desktop app. Windows is not a supported target. Running Shax itself over SSH GUI forwarding (`ssh -X`, `waypipe`) or inside a container isn't supported either; reaching a remote shell from a locally-running Shax is plain `ssh` in a pane, which is exactly the point.
+
+**On Windows: not supported.** Native PowerShell and cmd don't emit the Unix-style commands the rich formatters read (`ls`, `git status`, `git diff`, and so on), so a Windows-native build would give you a bare block-capturing terminal that Windows Terminal already fills better. WSL2 with WSLg *may* run the Linux build — Tauri's WebKit2GTK does render through Weston/RDP — but we don't test or support that path (no GPU acceleration, DPI-and-clipboard quirks, bugs there get attributed to Shax rather than to WSLg). If you want to try it anyway, nothing stops you; but any issue you hit is yours to work around. Same discipline as the SSH / container non-support call: know who you're for.
 
 Actively developed. Milestones M0–M8 have shipped: a working terminal with structured blocks, native multiplexing, history search (FTS + semantic), a file viewer with static formatters, interactive widgets, the assistant with its safety gate, and the `⌘⇧P` pane-command palette with a community-command sandbox. See `specs/12-roadmap-milestones.md` for the full plan.
 

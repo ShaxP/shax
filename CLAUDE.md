@@ -4,7 +4,9 @@ This file is read by every agent on every task. It is the contract. If anything 
 
 ## What we are building
 
-Shax is a cross-platform desktop terminal emulator (Tauri 2, Rust backend, React and TypeScript frontend). It runs real shell commands, captures each command and its output as a structured block, makes the full history searchable, renders rich and sometimes interactive views of completed output, and offers a Claude-powered assistant that stays out of the way until invoked. Read `specs/00-overview.md` for the product, `specs/01-architecture.md` for the shape.
+Shax is a desktop terminal emulator for **macOS and Linux** (Tauri 2, Rust backend, React and TypeScript frontend). It runs real shell commands, captures each command and its output as a structured block, makes the full history searchable, renders rich and sometimes interactive views of completed output, and offers a Claude-powered assistant that stays out of the way until invoked. Read `specs/00-overview.md` for the product, `specs/01-architecture.md` for the shape.
+
+**Windows is not a target.** The rich formatters (`ls`, `git status`, `git diff`, …) assume Unix-style commands and output; on PowerShell / cmd the value evaporates, and the Git Bash / MSYS2 population is small and shrinking. WSL2 with WSLg *may* work — Tauri's WebKit2GTK renders through Weston/RDP — but we don't test or support that path: no GPU accel, DPI-and-clipboard quirks, and any bug that surfaces there gets attributed to Shax rather than to WSLg. Same discipline as "not supported over SSH forwarding or in a container." Do not add Windows-specific code, add `#[cfg(target_os = "windows")]` blocks, or add Windows to CI matrices.
 
 ## Non-negotiable product principles
 
