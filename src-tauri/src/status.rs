@@ -845,19 +845,10 @@ pub fn system_load_series() -> SystemLoadSeries {
         .unwrap_or_else(SystemLoadSeries::empty)
 }
 
-/// One-minute load average, or `None` where the platform has no such
-/// number to give.
-#[cfg(not(target_os = "windows"))]
+/// One-minute load average. macOS + Linux both provide it via
+/// `getloadavg()`, which `sysinfo::System::load_average` wraps.
 fn load_average_one() -> Option<f64> {
     Some(System::load_average().one)
-}
-
-/// Windows has no load average. `sysinfo` returns zeros rather than
-/// failing, so the `cfg` — not a runtime check — is what keeps a
-/// meaningless 0.00 off the card.
-#[cfg(target_os = "windows")]
-fn load_average_one() -> Option<f64> {
-    None
 }
 
 // ── M13.3: Wi-Fi SSID ──────────────────────────────────────────────
@@ -880,9 +871,6 @@ fn load_average_one() -> Option<f64> {
 /// distro that ships Wi-Fi hardware — Ubuntu, Fedora, Arch all
 /// include it in the default install). Returns the SSID on stdout
 /// with no wrapping, or exits non-zero when disconnected.
-///
-/// Windows: `netsh wlan show interfaces`, parse the `SSID :`
-/// line. `netsh` ships with every Windows release since Vista.
 ///
 /// Failures at any step (binary missing, wrong exit code, malformed
 /// output) collapse to `None` — the widget hides the SSID line and
@@ -920,42 +908,10 @@ fn ssid_impl() -> Option<String> {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// Fallback for platforms we don't target (Windows, BSDs, WASI, …).
+/// Returns `None` so the widget just hides the SSID line.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn ssid_impl() -> Option<String> {
-    let out = std::process::Command::new("netsh")
-        .args(["wlan", "show", "interfaces"])
-        .output();
-    let out = match out {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::debug!("netsh wlan probe failed: {e}");
-            return None;
-        }
-    };
-    if !out.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    // `netsh wlan show interfaces` prints an indented block whose
-    // "SSID :" line carries the network name. Watch out for the
-    // sibling "BSSID :" line (MAC address) — match on "SSID" with
-    // no leading 'B' to avoid it.
-    parse_netsh_ssid(&stdout)
-}
-
-#[cfg(target_os = "windows")]
-fn parse_netsh_ssid(stdout: &str) -> Option<String> {
-    for line in stdout.lines() {
-        let trimmed = line.trim_start();
-        if !trimmed.starts_with("SSID") || trimmed.starts_with("BSSID") {
-            continue;
-        }
-        let (_, rest) = trimmed.split_once(':')?;
-        let name = rest.trim();
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
     None
 }
 
@@ -1511,24 +1467,20 @@ mod tests {
     }
 
     #[test]
-    fn load_average_is_present_off_windows_and_absent_on_it() {
+    fn load_average_is_present() {
         let _guard = serialised();
-        // The whole point of the Option: `sysinfo` returns zeros on
-        // Windows rather than failing, so a naive f64 would render a
-        // confident, meaningless "load 0.00" there.
+        // macOS + Linux both expose `getloadavg()` via
+        // `sysinfo::System::load_average`; the Option in the wire
+        // format was a Windows accommodation and is now dead weight
+        // in every test — but it's public API and safer to keep than
+        // to churn every widget consumer.
         let load = sample_once().current;
-        #[cfg(target_os = "windows")]
-        assert!(
-            load.load_average_one.is_none(),
-            "Windows has no load average to report",
-        );
-        #[cfg(not(target_os = "windows"))]
         match load.load_average_one {
             Some(one) => assert!(
                 one >= 0.0 && one.is_finite(),
                 "load average should be a finite non-negative number, got {one}",
             ),
-            None => panic!("unix platforms should report a load average"),
+            None => panic!("macOS and Linux should report a load average"),
         }
     }
 
@@ -1667,34 +1619,5 @@ mod tests {
     fn ssid_is_none_on_macos() {
         // Locked by design (see doc on `system_ssid`).
         assert_eq!(system_ssid(), None);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn parse_netsh_ssid_picks_the_ssid_line() {
-        let sample = "\r\n\
-            There is 1 interface on the system:\r\n\
-            \r\n\
-                Name                   : Wi-Fi\r\n\
-                Description            : Intel(R) Wi-Fi 6 AX201 160MHz\r\n\
-                GUID                   : abc-123\r\n\
-                State                  : connected\r\n\
-                SSID                   : MyHomeNetwork\r\n\
-                BSSID                  : 00:11:22:33:44:55\r\n\
-                Network type           : Infrastructure\r\n";
-        assert_eq!(
-            parse_netsh_ssid(sample),
-            Some("MyHomeNetwork".to_string()),
-            "should pick the SSID line, not the BSSID (MAC)",
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn parse_netsh_ssid_returns_none_when_disconnected() {
-        let sample = "There is 1 interface on the system:\r\n\
-                Name                   : Wi-Fi\r\n\
-                State                  : disconnected\r\n";
-        assert_eq!(parse_netsh_ssid(sample), None);
     }
 }
