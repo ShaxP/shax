@@ -190,8 +190,20 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    // ── Pure helpers ────────────────────────────────────────────────
+    // The path-shape tests below assume Unix-style absolute paths
+    // (leading `/`). On Windows `Path::is_absolute("/etc")` returns
+    // false — Windows expects `C:\…` — so `absolutise` would
+    // concatenate cwd + "/etc" instead of returning "/etc" verbatim.
+    // The code is correct per-platform; the tests are Unix-shaped by
+    // choice because Shax's shell-typed argv is expected to be
+    // Unix-style (users type `/etc`, `~`, `$HOME` even in a Windows
+    // git-bash pane). We gate them with `#[cfg(unix)]` rather than
+    // adding a parallel Windows-path suite whose expectations would
+    // duplicate `Path::is_absolute`'s own contract.
 
+    // ── Pure helpers (Unix path shapes) ─────────────────────────────
+
+    #[cfg(unix)]
     #[test]
     fn absolutise_passes_absolute_through() {
         assert_eq!(absolutise("/home/me", "/etc/passwd"), "/etc/passwd");
@@ -203,6 +215,7 @@ mod tests {
         assert_eq!(absolutise("/home/me/proj/", "src"), "/home/me/proj/src");
     }
 
+    #[cfg(unix)]
     #[test]
     fn absolutise_handles_root_cwd() {
         assert_eq!(absolutise("/", "etc"), "/etc");
@@ -225,6 +238,7 @@ mod tests {
         assert_eq!(r.filter_names, None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn plain_absolute_path_survives_cwd() {
         let r = resolve("/home/me", "/etc");
@@ -234,18 +248,22 @@ mod tests {
 
     // ── Tilde + env expansion ──────────────────────────────────────
 
+    // `HOME` is a Unix convention (`USERPROFILE` on Windows); a Windows
+    // shell that types `~` typically means the git-bash flavour where
+    // `HOME` is set, but standard PowerShell / cmd don't set it. Rather
+    // than fake `HOME` on Windows for the test, gate to Unix — the
+    // behaviour on Windows falls out of `shellexpand::tilde_with_context`,
+    // which is upstream's contract.
+    #[cfg(unix)]
     #[test]
     fn tilde_expands_to_home() {
-        // `$HOME` is always defined in the Tauri process env on the
-        // platforms we ship on; falling back to `dirs::home_dir()`
-        // inside shellexpand covers the theoretical case where it
-        // isn't.
         let home = std::env::var("HOME").expect("HOME env var required for test");
         let r = resolve("/tmp", "~");
         assert_eq!(r.parent_dir.as_deref(), Some(home.as_str()));
         assert_eq!(r.filter_names, None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn tilde_with_subpath_expands() {
         let home = std::env::var("HOME").expect("HOME env var required for test");
@@ -253,15 +271,18 @@ mod tests {
         assert_eq!(r.parent_dir.unwrap(), format!("{home}/Downloads"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn env_var_expands() {
         // Set a deterministic env var so this test doesn't depend on
-        // the runner's environment.
+        // the runner's environment. Assertion is Unix-path-shaped;
+        // see the block comment above the pure-helper section.
         std::env::set_var("SHAX_LS_TEST_DIR", "/opt/somewhere");
         let r = resolve("/tmp", "$SHAX_LS_TEST_DIR");
         assert_eq!(r.parent_dir.as_deref(), Some("/opt/somewhere"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn env_var_with_braces_expands() {
         std::env::set_var("SHAX_LS_TEST_DIR2", "/opt/two");
