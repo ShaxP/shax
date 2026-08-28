@@ -8,9 +8,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyLsView,
-  canonicalisePathArg,
   formatLsMtime,
   humanSize,
+  needsBackendResolution,
   parseLsArgv,
   resolveLsTarget,
   type LsFlags,
@@ -183,89 +183,64 @@ describe("resolveLsTarget", () => {
   });
 });
 
-describe("canonicalisePathArg", () => {
-  // Shax's block capture holds the pre-expansion command text, so any
-  // glob / tilde / parameter tokens reach the formatter verbatim.
-  //
-  // For globs we strip to the parent directory so `ls *` and `ls`
-  // render the same content — reported by a user who found the raw
-  // `ls *` output (per-directory headers) uglier than the block-form
-  // rendering of the cwd.
-  //
-  // For tilde / env we return null; only the shell knows $HOME /
-  // $VAR values, so the caller falls through to raw.
+describe("needsBackendResolution", () => {
+  // Shax's block capture holds the pre-expansion command text, so
+  // anything the shell would have expanded (tilde, env, glob)
+  // reaches the client verbatim. These cases pin which tokens
+  // trigger the `resolve_ls_arg` round trip.
 
-  describe("glob patterns → parent directory", () => {
-    it.each([
-      ["*", ""], // bare glob → cwd (reported case)
-      ["*.ts", ""], // extension glob → cwd
-      ["file?.txt", ""], // single-char glob → cwd
-      ["file[12].txt", ""], // character class → cwd
-      ["{a,b}", ""], // brace expansion → cwd
-      ["src/*", "src"], // subdirectory glob → src
-      ["src/sub/*", "src/sub"], // deeper glob → deeper parent
-      ["dir/*.ts", "dir"], // extension in subdir → subdir
-      ["dir/{a,b}", "dir"], // brace in subdir → subdir
-      ["/etc/*.conf", "/etc"], // absolute + glob → absolute parent
-    ])("`%s` → `%s`", (input, expected) => {
-      expect(canonicalisePathArg(input)).toBe(expected);
-    });
+  it.each([
+    ["~"], // bare home
+    ["~/Downloads"], // home + subpath
+    ["~user"], // user's home
+    ["$HOME"], // env var
+    ["${HOME}/x"], // env var with braces
+    ["prefix$VAR"], // env var mid-path
+    ["*"], // bare glob
+    ["*.ts"], // extension glob
+    ["src/*"], // subdirectory glob
+    ["file?.txt"], // single-char glob
+    ["file[12].txt"], // character class
+    ["{a,b}"], // brace expansion (rejected by backend → PASS)
+  ])("routes `%s` through the backend", (path) => {
+    expect(needsBackendResolution(path)).toBe(true);
   });
 
-  describe("tilde / env → null (defer to raw)", () => {
-    it.each([
-      ["~"], // bare home
-      ["~/Downloads"], // home + subpath
-      ["~user"], // user's home
-      ["$HOME"], // env var
-      ["${HOME}/x"], // env var with braces
-      ["prefix$VAR"], // env var mid-path
-    ])("`%s`", (path) => {
-      expect(canonicalisePathArg(path)).toBeNull();
-    });
-  });
-
-  describe("plain paths passed through unchanged", () => {
-    it.each([
-      ["file.txt"],
-      ["src"],
-      ["/etc/passwd"],
-      [".hidden"],
-      ["some-file"],
-      ["../parent"],
-      ["file with spaces"], // tokenizer already handled spaces
-      ["weird~name"], // `~` mid-path is a legitimate filename char
-    ])("`%s`", (path) => {
-      expect(canonicalisePathArg(path)).toBe(path);
-    });
+  it.each([
+    ["file.txt"],
+    ["src"],
+    ["/etc/passwd"],
+    [".hidden"],
+    ["some-file"],
+    ["../parent"],
+    ["file with spaces"], // tokenizer handled spaces
+    ["weird~name"], // `~` mid-path is a legitimate filename char
+  ])("skips the backend for plain path `%s`", (path) => {
+    expect(needsBackendResolution(path)).toBe(false);
   });
 });
 
-describe("resolveLsTarget glob resolution", () => {
-  // The glue: canonicalisePathArg-then-join. Same input space as
-  // the block above, but now composed with a cwd.
+describe("resolveLsTarget (sync fast path)", () => {
+  // Only used for the sync fast path — plain positionals. Anything
+  // that needs backend resolution returns null here on purpose so
+  // the caller routes to `resolve_ls_arg` instead.
 
-  it("`ls *` in /home/me → /home/me", () => {
-    expect(resolveLsTarget(["*"], "/home/me")).toBe("/home/me");
+  it("returns cwd when no positional and joining is unambiguous", () => {
+    expect(resolveLsTarget([], "/home/me")).toBe("/home/me");
   });
 
-  it("`ls src/*` in /home/me → /home/me/src", () => {
-    expect(resolveLsTarget(["src/*"], "/home/me")).toBe("/home/me/src");
+  it("joins a plain relative path with cwd", () => {
+    expect(resolveLsTarget(["src"], "/home/me/proj")).toBe("/home/me/proj/src");
   });
 
-  it("`ls dir/*.ts` in /home/me/proj → /home/me/proj/dir", () => {
-    expect(resolveLsTarget(["dir/*.ts"], "/home/me/proj")).toBe("/home/me/proj/dir");
+  it("passes an absolute path through unchanged", () => {
+    expect(resolveLsTarget(["/etc"], "/home/me")).toBe("/etc");
   });
 
-  it("`ls /etc/*.conf` → /etc (absolute survives)", () => {
-    expect(resolveLsTarget(["/etc/*.conf"], "/home/me")).toBe("/etc");
-  });
-
-  it("`ls ~/Downloads` → null (formatter will PASS to raw)", () => {
+  it("returns null for tilde / env / glob — those go through the backend", () => {
     expect(resolveLsTarget(["~/Downloads"], "/home/me")).toBeNull();
-  });
-
-  it("`ls $HOME` → null (env expansion defers to raw)", () => {
     expect(resolveLsTarget(["$HOME"], "/home/me")).toBeNull();
+    expect(resolveLsTarget(["*.ts"], "/home/me")).toBeNull();
+    expect(resolveLsTarget(["src/*"], "/home/me")).toBeNull();
   });
 });

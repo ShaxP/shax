@@ -28,10 +28,15 @@
  *     would change entry ordering or filename decoration we
  *     don't have parser support for.
  *
+ * Positional paths — including glob patterns, tilde, and env vars —
+ * always promote here: the actual filesystem resolution happens in
+ * the formatter via the backend `resolve_ls_arg` command, which
+ * mirrors what the shell did at execution time. If that resolution
+ * fails, the formatter itself renders a "check RAW" line (not the
+ * widget), so the promotion gate can be permissive about paths.
+ *
  * Pure module.
  */
-
-import { canonicalisePathArg } from "../../formatters/ls";
 
 /** Long flags accepted with no value (`--flag`) or with any value
  *  after `=` (`--flag=whatever`) when the flag itself is a "noise"
@@ -58,17 +63,7 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
   for (let i = 1; i < argv.length; i++) {
     const tok = argv[i] ?? "";
     if (tok.length === 0) continue;
-    if (pastSeparator) {
-      // Rest is positional path. Glob patterns are fine — the
-      // formatter strips them to the parent directory (see
-      // `canonicalisePathArg` in ls.tsx) and the widget probes
-      // that parent, giving the user the useful listing at a
-      // glance. Unexpandable tokens (leading `~`, `$…`) can't be
-      // resolved client-side, so we defer to the static path,
-      // which itself PASSes to raw.
-      if (canonicalisePathArg(tok) === null) return false;
-      continue;
-    }
+    if (pastSeparator) continue; // rest is positional path
     if (tok === "--") {
       pastSeparator = true;
       continue;
@@ -89,11 +84,9 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
       }
       continue;
     }
-    // Positional path — accept glob patterns (rendered as their
-    // parent directory) but reject `~` / `$` which we can't
-    // resolve client-side. See `canonicalisePathArg` in ls.tsx
-    // for the full rationale.
-    if (canonicalisePathArg(tok) === null) return false;
+    // Positional path — always fine. Backend expansion via
+    // `resolve_ls_arg` handles globs, tilde, and env vars; the
+    // widget doesn't need to gate on them.
   }
   return true;
 }

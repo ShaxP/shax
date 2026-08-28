@@ -67,36 +67,27 @@ describe("ls promotionGate", () => {
     expect(isWidgetPromotable(["ls", "-a", "--sort=size"])).toBe(false);
   });
 
-  it("promotes glob positionals — canonicalised to the pattern's parent directory", () => {
-    // Shax's block capture holds the pre-expansion command text.
-    // `ls *` reaches the widget as `["ls", "*"]`; the formatter's
-    // `canonicalisePathArg` strips the glob to the parent (cwd for
-    // bare `*`, `src` for `src/*`), so the widget probes a real
-    // directory and renders the same content the user would have
-    // seen from bare `ls` / `ls src`. Better than raw for the
-    // reported case where the shell-recursed output was uglier
-    // than the block-form render of the cwd.
+  it("promotes ALL positional-path forms — resolution is the formatter's job now", () => {
+    // Backend `resolve_ls_arg` (mirroring what the shell does at
+    // execution time) turns `~`, `$HOME`, and globs into a real
+    // parent directory + optional filter. The widget doesn't need
+    // to gate on which forms are resolvable; if resolution fails
+    // the formatter itself shows a "check RAW" line and the widget
+    // never mounts.
     expect(isWidgetPromotable(["ls", "*"])).toBe(true);
     expect(isWidgetPromotable(["ls", "*.ts"])).toBe(true);
     expect(isWidgetPromotable(["ls", "src/*"])).toBe(true);
     expect(isWidgetPromotable(["ls", "dir/{a,b}"])).toBe(true);
-    // Flags + glob combos still promote.
+    expect(isWidgetPromotable(["ls", "~"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "~/Downloads"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "~user"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "$HOME"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "${HOME}/x"])).toBe(true);
+    // Flag combos still promote.
     expect(isWidgetPromotable(["ls", "-la", "*"])).toBe(true);
-    // Same past the `--` separator.
-    expect(isWidgetPromotable(["ls", "--", "*"])).toBe(true);
-  });
-
-  it("refuses to promote when a positional needs shell expansion we can't do client-side", () => {
-    // Only the shell knows `$HOME` and per-user home dirs, so
-    // tilde and env positionals defer to the raw block bytes.
-    expect(isWidgetPromotable(["ls", "~"])).toBe(false);
-    expect(isWidgetPromotable(["ls", "~/Downloads"])).toBe(false);
-    expect(isWidgetPromotable(["ls", "~user"])).toBe(false);
-    expect(isWidgetPromotable(["ls", "$HOME"])).toBe(false);
-    expect(isWidgetPromotable(["ls", "${HOME}/x"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "-la", "~/Downloads"])).toBe(true);
     // Past the `--` separator too.
-    expect(isWidgetPromotable(["ls", "--", "~"])).toBe(false);
-    // Combined with fine flags — still rejects.
-    expect(isWidgetPromotable(["ls", "-la", "~/Downloads"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "--", "*"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "--", "~"])).toBe(true);
   });
 });

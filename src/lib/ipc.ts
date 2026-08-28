@@ -535,6 +535,41 @@ export async function readDirEntries(path: string): Promise<DirEntry[]> {
 }
 
 /**
+ * Shell-side expansion for one `ls` positional argument. Handles
+ * tilde (`~`, `~user`), env vars (`$VAR`, `${VAR}`), and glob
+ * patterns (`*`, `?`, `[abc]`) so the formatter renders the same
+ * content the shell would have listed.
+ *
+ * Returns:
+ *   - `parent_dir === null` → couldn't resolve (undefined env var,
+ *     unrecognised `~user`, brace `{a,b}` expansion, cross-parent
+ *     glob). The formatter shows a minimal "check raw" hint and
+ *     the user's RAW toggle carries the truthful output.
+ *   - `parent_dir` set, `filter_names === null` → probe that
+ *     directory and render every entry.
+ *   - `parent_dir` set, `filter_names === []` → glob matched
+ *     nothing; render an empty listing (distinct from an error).
+ *   - `parent_dir` set, `filter_names` a non-empty array → probe
+ *     the directory and filter entries down to those basenames
+ *     before applying `-a` / sort flags.
+ *
+ * See `src-tauri/src/ipc/ls_resolve.rs` for the full algorithm.
+ */
+export interface LsResolveResult {
+  parent_dir: string | null;
+  filter_names: string[] | null;
+}
+export async function resolveLsArg(cwd: string, pathArg: string): Promise<LsResolveResult> {
+  if (!isTauriContext()) {
+    // Test / dev-server context: no Tauri, so we can't shell-expand.
+    // Signal unresolvable so the formatter drops through to raw.
+    return { parent_dir: null, filter_names: null };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LsResolveResult>("resolve_ls_arg", { cwd, pathArg });
+}
+
+/**
  * Run `git status --porcelain=v2 --branch -z` in `cwd` and return
  * stdout. Used by the slice-4.5 git-status formatter so we parse a
  * stable machine-readable format instead of screen-scraping the

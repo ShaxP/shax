@@ -3,6 +3,8 @@
 //! All commands return `Result<_, String>` at the IPC boundary. Internally they use
 //! typed `PtyError` values that are converted to strings with `.map_err(|e| e.to_string())`.
 
+pub mod ls_resolve;
+
 pub use crate::blocks::{BlockId, BlockSummary};
 pub use crate::pty::{PtyEvent, PtyId, SpawnOpts};
 pub use crate::store::{SearchHit, SearchOptions};
