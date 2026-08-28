@@ -176,6 +176,28 @@ const RIGHT_PANE: CSSProperties = {
   overflowY: "auto",
 };
 
+/*
+ * The scrolled contents get their own opaque fill, and that is load-
+ * bearing on Linux — not decoration.
+ *
+ * WebKit2GTK only promotes an `overflow: auto` box to a composited
+ * scrolling layer once it *actually* overflows. Crossing that threshold
+ * (expanding the API-key lane is enough) moves every glyph in the pane
+ * into the new layer, and WebKit drops subpixel antialiasing for a
+ * layer whose scrolled contents it can't prove opaque — so all the text
+ * in the pane re-rasterises grayscale and visibly gains weight, then
+ * snaps back when the lane collapses. Painting an opaque background on
+ * the contents keeps the layer opaque, so the text renders identically
+ * whether or not the pane scrolls.
+ *
+ * The colour matches PANEL's, so this is invisible on every platform;
+ * `background` on RIGHT_PANE itself does *not* work — that paints into
+ * the scroll container's layer, not the scrolled contents'.
+ */
+const RIGHT_PANE_CONTENTS: CSSProperties = {
+  background: "var(--pane)",
+};
+
 const FOOTER: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -709,47 +731,49 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.React
             </div>
           </nav>
 
-          <div style={RIGHT_PANE}>
-            {activeSection === "appearance" && (
-              <AppearanceSection
-                theme={theme}
-                onPickTheme={persistTheme}
-                appearance={appearance}
-                catalog={themeCatalog}
-                onPatchAppearance={persistAppearance}
-              />
-            )}
-            {activeSection === "prompt" && (
-              <PromptSection appearance={appearance} onPatchAppearance={persistAppearance} />
-            )}
-            {activeSection === "assistant" && (
-              <AssistantSection
-                config={config}
-                apiKey={apiKey}
-                setApiKey={setApiKey}
-                apiKeyConfigured={apiKeyConfigured}
-                cliVersion={cliVersion}
-                cliInstalled={cliInstalled}
-                claudeActive={claudeActive}
-                ollamaActive={ollamaActive}
-                ollama={ollama}
-                ollamaReachable={ollamaReachable}
-                busy={busy}
-                onPickLane={persistClaudeLane}
-                onPickOllama={() => {
-                  if (!ollamaReachable || !ollama || ollama.models.length === 0) return;
-                  const first = ollama.models[0];
-                  void persist({
-                    ...config,
-                    provider: "ollama",
-                    ollama_model: config.ollama_model ?? first ?? null,
-                  });
-                }}
-                onPickOllamaModel={persistOllamaModel}
-                onSaveKey={saveKey}
-                onClearKey={clearKey}
-              />
-            )}
+          <div data-testid="settings-content" style={RIGHT_PANE}>
+            <div data-testid="settings-content-surface" style={RIGHT_PANE_CONTENTS}>
+              {activeSection === "appearance" && (
+                <AppearanceSection
+                  theme={theme}
+                  onPickTheme={persistTheme}
+                  appearance={appearance}
+                  catalog={themeCatalog}
+                  onPatchAppearance={persistAppearance}
+                />
+              )}
+              {activeSection === "prompt" && (
+                <PromptSection appearance={appearance} onPatchAppearance={persistAppearance} />
+              )}
+              {activeSection === "assistant" && (
+                <AssistantSection
+                  config={config}
+                  apiKey={apiKey}
+                  setApiKey={setApiKey}
+                  apiKeyConfigured={apiKeyConfigured}
+                  cliVersion={cliVersion}
+                  cliInstalled={cliInstalled}
+                  claudeActive={claudeActive}
+                  ollamaActive={ollamaActive}
+                  ollama={ollama}
+                  ollamaReachable={ollamaReachable}
+                  busy={busy}
+                  onPickLane={persistClaudeLane}
+                  onPickOllama={() => {
+                    if (!ollamaReachable || !ollama || ollama.models.length === 0) return;
+                    const first = ollama.models[0];
+                    void persist({
+                      ...config,
+                      provider: "ollama",
+                      ollama_model: config.ollama_model ?? first ?? null,
+                    });
+                  }}
+                  onPickOllamaModel={persistOllamaModel}
+                  onSaveKey={saveKey}
+                  onClearKey={clearKey}
+                />
+              )}
+            </div>
           </div>
         </div>
 

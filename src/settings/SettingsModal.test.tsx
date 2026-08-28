@@ -566,3 +566,23 @@ describe("SettingsModal — Appearance section (M10.4)", () => {
     expect(lastSaved().appearance.cursor_blink).toBe(false);
   });
 });
+
+// ── Scrolled-contents opacity (Linux WebKit antialiasing) ──────────────
+
+describe("SettingsModal — the scrolling pane's contents stay opaque", () => {
+  it("renders every section inside one opaque surface", async () => {
+    await open();
+    const pane = screen.getByTestId("settings-content");
+    const surface = screen.getByTestId("settings-content-surface");
+
+    // WebKit2GTK promotes the pane to a composited scrolling layer the
+    // moment it overflows, and drops subpixel antialiasing for a layer
+    // whose scrolled contents it can't prove opaque — every glyph in
+    // the pane visibly gains weight. The sections must therefore render
+    // inside this fill, not as bare children of the scroller. See
+    // RIGHT_PANE_CONTENTS in SettingsModal.tsx.
+    expect(pane.children).toHaveLength(1);
+    expect(pane.firstElementChild).toBe(surface);
+    expect(surface.style.background).toBe("var(--pane)");
+  });
+});
