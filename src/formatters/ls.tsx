@@ -427,58 +427,76 @@ function LsLongRow({ entry }: { entry: DirEntry }): React.ReactElement {
   );
 }
 
+/** Canonicalise a raw positional path token into a filesystem
+ *  path the formatter can hand to `readDirEntries`.
+ *
+ *  Shax's block-capture keeps the pre-expansion command text (see
+ *  `BlockRow.tsx` → `shellTokenize(block.command)`), so shell
+ *  expansions reach the formatter unresolved. Two kinds:
+ *
+ *    - Glob metachars (`*`, `?`, `[`, `{`): the shell would have
+ *      expanded these to entries within the pattern's parent
+ *      directory. We strip the pattern and return the parent —
+ *      `"*"` → `""` (cwd), `"src/*"` → `"src"`, `"dir/*.ts"` →
+ *      `"dir"`. Rendering the parent directory matches what a
+ *      user typing `ls *` wants at a glance — a listing of "what's
+ *      here" — with the trade that the widget's dense render
+ *      shows every entry, not just the pattern's matches. The
+ *      raw ls output is one toggle away for the exact matches
+ *      (fidelity contract, spec §07 rule 2).
+ *
+ *    - Tilde (`~/…`, `~user`) or parameter expansion (`$FOO`):
+ *      only the shell knows the caller's `$HOME` and env, so we
+ *      can't resolve these client-side. Returns `null` — the
+ *      caller (`render`) then PASSes to the raw block bytes,
+ *      which the shell already rendered correctly.
+ *
+ *  Exported for direct testing without going through a render. */
+export function canonicalisePathArg(path: string): string | null {
+  // Tilde only counts at the start. `weird~name` mid-token is a
+  // legitimate filename character.
+  if (path.startsWith("~")) return null;
+  if (path.includes("$")) return null;
+  const globIdx = path.search(/[*?[\]{}]/);
+  if (globIdx === -1) return path;
+  // Strip everything from the last `/` before the glob onward.
+  // If there's no such slash the whole path was the pattern, so
+  // the parent is the cwd — represented here as `""` and joined
+  // in `resolveLsTarget`.
+  const lastSlash = path.lastIndexOf("/", globIdx - 1);
+  return lastSlash === -1 ? "" : path.slice(0, lastSlash);
+}
+
 /** Resolve the path argv references. Single positional wins; if
  *  none, we use ctx.cwd. Relative positionals are joined with
- *  ctx.cwd. */
+ *  ctx.cwd. A glob is stripped to its parent directory before
+ *  joining (see `canonicalisePathArg`); an unexpandable token
+ *  (tilde / env) makes the whole call return `null` so the caller
+ *  can PASS to raw. */
 export function resolveLsTarget(paths: readonly string[], cwd: string | null): string | null {
   const first = paths[0];
   if (first === undefined) return cwd;
-  if (first.startsWith("/")) return first;
+  const canon = canonicalisePathArg(first);
+  if (canon === null) return null;
+  // Empty canon → the whole positional was a glob like `*`, so
+  // the parent is the cwd itself.
+  if (canon === "") return cwd;
+  if (canon.startsWith("/")) return canon;
   if (cwd === null) return null;
   const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
-  return `${base}/${first}`;
+  return `${base}/${canon}`;
 }
 
 // ─── formatter registration ──────────────────────────────────────────────────
-
-/** True when a positional path contains characters the *shell* would
- *  expand before `ls` ever saw them: glob metachars (`*`, `?`,
- *  `[`, `{`), a leading `~` for home, or a `$` for parameter
- *  expansion. Shax's block-capture keeps the pre-expansion command
- *  text (see `BlockRow.tsx` → `shellTokenize(block.command)`), so
- *  those tokens reach the formatter unexpanded. Handing `${cwd}/*`
- *  to `readDirEntries` fails with `os error 2` — literally, no
- *  directory is named `*`.
- *
- *  The shell already did the real work at command time, and the
- *  block's raw bytes carry the correct rendering of the result.
- *  When we detect an unexpanded token, PASS to raw rather than
- *  invent an error dialog for a command that succeeded.
- *
- *  Exported for tests. */
-export function pathNeedsShellExpansion(path: string): boolean {
-  // A leading `~` is home expansion — a bare `~` OR `~/…` OR
-  // `~user`. We treat `~x` in any position other than the start
-  // as a legitimate filename character (unusual but legal).
-  if (path.startsWith("~")) return true;
-  return (
-    path.includes("*") ||
-    path.includes("?") ||
-    path.includes("[") ||
-    path.includes("{") ||
-    path.includes("$")
-  );
-}
 
 function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
   const flags = parseLsArgv(ctx.argv);
   // No cwd + no path → can't probe. RAW fallback.
   if (ctx.cwd === null && flags.paths.length === 0) return PASS;
-  // Any unexpanded shell metachar in a positional path → RAW.
-  // Anything else would either be a lie ("here's the cwd, ignore
-  // that you asked for `*`") or an error box for a command the
-  // shell handled correctly.
-  if (flags.paths.some(pathNeedsShellExpansion)) return PASS;
+  // A tilde / env positional can't be resolved client-side. PASS
+  // to raw so the shell-rendered bytes stand instead of an error
+  // dialog for a command that succeeded.
+  if (flags.paths.some((p) => canonicalisePathArg(p) === null)) return PASS;
   return <LsView ctx={ctx} />;
 }
 

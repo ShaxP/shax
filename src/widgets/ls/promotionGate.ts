@@ -31,7 +31,7 @@
  * Pure module.
  */
 
-import { pathNeedsShellExpansion } from "../../formatters/ls";
+import { canonicalisePathArg } from "../../formatters/ls";
 
 /** Long flags accepted with no value (`--flag`) or with any value
  *  after `=` (`--flag=whatever`) when the flag itself is a "noise"
@@ -59,11 +59,14 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
     const tok = argv[i] ?? "";
     if (tok.length === 0) continue;
     if (pastSeparator) {
-      // Rest is positional path — but an unexpanded shell metachar
-      // (`*`, `?`, `[`, `{`, leading `~`, `$`) means the shell did
-      // the resolving and the raw output already has the truthful
-      // rendering. Don't promote to the widget over the raw.
-      if (pathNeedsShellExpansion(tok)) return false;
+      // Rest is positional path. Glob patterns are fine — the
+      // formatter strips them to the parent directory (see
+      // `canonicalisePathArg` in ls.tsx) and the widget probes
+      // that parent, giving the user the useful listing at a
+      // glance. Unexpandable tokens (leading `~`, `$…`) can't be
+      // resolved client-side, so we defer to the static path,
+      // which itself PASSes to raw.
+      if (canonicalisePathArg(tok) === null) return false;
       continue;
     }
     if (tok === "--") {
@@ -86,11 +89,11 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
       }
       continue;
     }
-    // Positional path — reject if it would need shell expansion,
-    // otherwise fine. See `pathNeedsShellExpansion` in `ls.tsx` for
-    // the full rationale on why unexpanded globs / `~` / `$` fall
-    // through to raw rather than a static / widget render.
-    if (pathNeedsShellExpansion(tok)) return false;
+    // Positional path — accept glob patterns (rendered as their
+    // parent directory) but reject `~` / `$` which we can't
+    // resolve client-side. See `canonicalisePathArg` in ls.tsx
+    // for the full rationale.
+    if (canonicalisePathArg(tok) === null) return false;
   }
   return true;
 }
