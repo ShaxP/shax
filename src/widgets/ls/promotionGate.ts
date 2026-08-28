@@ -28,6 +28,13 @@
  *     would change entry ordering or filename decoration we
  *     don't have parser support for.
  *
+ * Positional paths — including glob patterns, tilde, and env vars —
+ * always promote here: the actual filesystem resolution happens in
+ * the formatter via the backend `resolve_ls_arg` command, which
+ * mirrors what the shell did at execution time. If that resolution
+ * fails, the formatter itself renders a "check RAW" line (not the
+ * widget), so the promotion gate can be permissive about paths.
+ *
  * Pure module.
  */
 
@@ -77,7 +84,9 @@ export function isWidgetPromotable(argv: readonly string[]): boolean {
       }
       continue;
     }
-    // Positional path — always fine.
+    // Positional path — always fine. Backend expansion via
+    // `resolve_ls_arg` handles globs, tilde, and env vars; the
+    // widget doesn't need to gate on them.
   }
   return true;
 }

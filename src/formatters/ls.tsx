@@ -25,7 +25,7 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { readDirEntries, type DirEntry } from "../lib/ipc";
+import { readDirEntries, resolveLsArg, type DirEntry } from "../lib/ipc";
 import { LsWidget } from "../widgets/ls/LsWidget";
 import { isWidgetPromotable } from "../widgets/ls/promotionGate";
 import { PASS, type Formatter, type FormatterContext } from "./types";
@@ -313,24 +313,88 @@ interface LsViewProps {
   ctx: FormatterContext;
 }
 
+/** Resolution state for the positional argument. Plain paths resolve
+ *  synchronously off `ctx.cwd`; anything with a `~`/`$`/glob makes
+ *  a round-trip to the Rust `resolve_ls_arg` command which mirrors
+ *  what the shell would have done at execution time. */
+type Resolution =
+  /** Awaiting the backend `resolve_ls_arg` round-trip. */
+  | { state: "resolving" }
+  /** Backend (or sync fast path) resolved to a probable directory,
+   *  optionally with a glob-matched name filter to overlay. */
+  | { state: "ready"; parentDir: string; filterNames: string[] | null }
+  /** No positional and no ctx.cwd, OR the backend couldn't expand
+   *  the token (unknown env var, brace expansion, cross-parent
+   *  glob). The formatter shows a "check RAW" line instead of an
+   *  error dialog — the raw bytes carry the shell's truthful
+   *  output for that block. */
+  | { state: "unresolvable"; reason: string };
+
 function LsView({ ctx }: LsViewProps): React.ReactElement {
   const flags = useMemo(() => parseLsArgv(ctx.argv), [ctx.argv]);
-  // Argument path → which directory to probe. The MVP only
-  // handles a single path (or implicit cwd); multi-path ls
-  // would be a follow-up. We resolve relative to ctx.cwd.
-  const target = useMemo(() => resolveLsTarget(flags.paths, ctx.cwd), [flags.paths, ctx.cwd]);
-  const [entries, setEntries] = useState<DirEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const positional = flags.paths[0];
+  // Sync fast path for the common cases: bare `ls`, `ls src`,
+  // `ls /etc`. Anything with a `~`, `$`, or glob metachar routes
+  // through the async backend command instead — the initial state
+  // is `resolving` and a useEffect below dispatches the round trip.
+  const [resolution, setResolution] = useState<Resolution>(() => {
+    if (positional === undefined) {
+      if (ctx.cwd === null) {
+        return { state: "unresolvable", reason: "no cwd" };
+      }
+      return { state: "ready", parentDir: ctx.cwd, filterNames: null };
+    }
+    if (!needsBackendResolution(positional)) {
+      const parent = joinRelative(positional, ctx.cwd);
+      if (parent === null) {
+        return { state: "unresolvable", reason: "no cwd for relative path" };
+      }
+      return { state: "ready", parentDir: parent, filterNames: null };
+    }
+    return { state: "resolving" };
+  });
 
+  // Backend round trip for the expansion cases. Runs once per
+  // (cwd, positional) pair; cancellable so a fast pane-focus swap
+  // doesn't race the previous block's callback.
   useEffect(() => {
-    setEntries(null);
-    setError(null);
-    if (target === null) {
-      setError("ls formatter: no cwd or path resolvable");
+    if (positional === undefined || !needsBackendResolution(positional)) return;
+    if (ctx.cwd === null) {
+      setResolution({ state: "unresolvable", reason: "no cwd" });
       return;
     }
     let cancelled = false;
-    void readDirEntries(target).then(
+    setResolution({ state: "resolving" });
+    void resolveLsArg(ctx.cwd, positional).then((r) => {
+      if (cancelled) return;
+      if (r.parent_dir === null) {
+        setResolution({
+          state: "unresolvable",
+          reason: `couldn't expand \`${positional}\``,
+        });
+        return;
+      }
+      setResolution({
+        state: "ready",
+        parentDir: r.parent_dir,
+        filterNames: r.filter_names,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [positional, ctx.cwd]);
+
+  const [entries, setEntries] = useState<DirEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Probe the resolved directory once resolution lands.
+  useEffect(() => {
+    if (resolution.state !== "ready") return;
+    setEntries(null);
+    setError(null);
+    let cancelled = false;
+    void readDirEntries(resolution.parentDir).then(
       (es) => {
         if (cancelled) return;
         setEntries(es);
@@ -344,8 +408,22 @@ function LsView({ ctx }: LsViewProps): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [resolution]);
 
+  if (resolution.state === "unresolvable") {
+    return (
+      <div data-testid="formatter-ls-unresolvable" style={{ ...SHELL, ...STATUS_LINE }}>
+        ls formatter: {resolution.reason} — see RAW for the shell's output.
+      </div>
+    );
+  }
+  if (resolution.state === "resolving") {
+    return (
+      <div data-testid="formatter-ls-resolving" style={{ ...SHELL, ...STATUS_LINE }}>
+        Resolving {positional}…
+      </div>
+    );
+  }
   if (error !== null) {
     return (
       <div data-testid="formatter-ls-error" style={{ ...SHELL, ...STATUS_LINE }}>
@@ -356,20 +434,34 @@ function LsView({ ctx }: LsViewProps): React.ReactElement {
   if (entries === null) {
     return (
       <div data-testid="formatter-ls-loading" style={{ ...SHELL, ...STATUS_LINE }}>
-        Probing {target}…
+        Probing {resolution.parentDir}…
       </div>
     );
   }
 
-  // Widget promotion (M5 slice 3). Bare `ls`, `-a`, path
-  // args, and known "safe" flags render as the interactive
-  // widget. Anything else falls through to the static grid /
-  // long list below.
-  if (target !== null && isWidgetPromotable(ctx.argv)) {
-    return <LsWidget initialEntries={entries} dirPath={target} paneId={ctx.paneId} flags={flags} />;
+  // Apply the glob filter (if any) BEFORE `-a`/sort/dotfile
+  // visibility so `applyLsView` sees only the matched entries.
+  // The filter is a Set for O(1) lookup on large listings.
+  const filterSet = resolution.filterNames === null ? null : new Set(resolution.filterNames);
+  const filtered = filterSet === null ? entries : entries.filter((e) => filterSet.has(e.name));
+
+  // Widget promotion (M5 slice 3). Bare `ls`, `-a`, path args, and
+  // known "safe" flags render as the interactive widget. The
+  // pre-filtered entry list flows into the widget so it renders the
+  // same content the shell would have shown.
+  if (isWidgetPromotable(ctx.argv)) {
+    return (
+      <LsWidget
+        initialEntries={filtered}
+        dirPath={resolution.parentDir}
+        paneId={ctx.paneId}
+        flags={flags}
+        filterNames={resolution.filterNames}
+      />
+    );
   }
 
-  const view = applyLsView(entries, flags);
+  const view = applyLsView(filtered, flags);
 
   return (
     <div data-testid="formatter-ls" style={SHELL}>
@@ -427,23 +519,44 @@ function LsLongRow({ entry }: { entry: DirEntry }): React.ReactElement {
   );
 }
 
-/** Resolve the path argv references. Single positional wins; if
- *  none, we use ctx.cwd. Relative positionals are joined with
- *  ctx.cwd. */
+/** True when a positional path needs the backend `resolve_ls_arg`
+ *  command to expand into a real filesystem path — tilde, env
+ *  variables, and glob patterns can't be resolved from React
+ *  alone. Plain paths (`src`, `/etc`, `../parent`) skip the round
+ *  trip and go straight to `readDirEntries`.
+ *
+ *  Exported for tests. */
+export function needsBackendResolution(path: string): boolean {
+  if (path.startsWith("~")) return true;
+  return path.includes("$") || /[*?[\]{}]/.test(path);
+}
+
+/** Sync path resolution for plain (non-expandable) positionals.
+ *  When we don't need the backend, we still have to join a relative
+ *  argument with `ctx.cwd`. */
+function joinRelative(path: string, cwd: string | null): string | null {
+  if (path.startsWith("/")) return path;
+  if (cwd === null) return null;
+  const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
+  return `${base}/${path}`;
+}
+
+/** Legacy: the sync target resolver, kept because tests bind on
+ *  the empty-cwd + relative-positional negative branch. New callers
+ *  should route unexpanded tokens through the backend command. */
 export function resolveLsTarget(paths: readonly string[], cwd: string | null): string | null {
   const first = paths[0];
   if (first === undefined) return cwd;
-  if (first.startsWith("/")) return first;
-  if (cwd === null) return null;
-  const base = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
-  return `${base}/${first}`;
+  if (needsBackendResolution(first)) return null;
+  return joinRelative(first, cwd);
 }
 
 // ─── formatter registration ──────────────────────────────────────────────────
 
 function render(ctx: FormatterContext): React.ReactNode | typeof PASS {
-  // No cwd + no path → can't probe. RAW fallback.
-  if (ctx.cwd === null && parseLsArgv(ctx.argv).paths.length === 0) return PASS;
+  const flags = parseLsArgv(ctx.argv);
+  // No cwd + no path → can't probe anything. RAW fallback.
+  if (ctx.cwd === null && flags.paths.length === 0) return PASS;
   return <LsView ctx={ctx} />;
 }
 

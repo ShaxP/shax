@@ -4191,6 +4191,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "glob",
  "keyring",
  "libc",
  "local-ip-address",
@@ -4204,6 +4205,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "shellexpand",
  "starship-battery",
  "sysinfo",
  "tauri",
@@ -4226,6 +4228,15 @@ name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
+name = "shellexpand"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
+dependencies = [
+ "dirs",
+]
 
 [[package]]
 name = "shlex"

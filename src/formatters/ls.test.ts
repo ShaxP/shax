@@ -10,6 +10,7 @@ import {
   applyLsView,
   formatLsMtime,
   humanSize,
+  needsBackendResolution,
   parseLsArgv,
   resolveLsTarget,
   type LsFlags,
@@ -179,5 +180,67 @@ describe("resolveLsTarget", () => {
 
   it("strips a trailing slash from cwd before joining", () => {
     expect(resolveLsTarget(["src"], "/home/me/proj/")).toBe("/home/me/proj/src");
+  });
+});
+
+describe("needsBackendResolution", () => {
+  // Shax's block capture holds the pre-expansion command text, so
+  // anything the shell would have expanded (tilde, env, glob)
+  // reaches the client verbatim. These cases pin which tokens
+  // trigger the `resolve_ls_arg` round trip.
+
+  it.each([
+    ["~"], // bare home
+    ["~/Downloads"], // home + subpath
+    ["~user"], // user's home
+    ["$HOME"], // env var
+    ["${HOME}/x"], // env var with braces
+    ["prefix$VAR"], // env var mid-path
+    ["*"], // bare glob
+    ["*.ts"], // extension glob
+    ["src/*"], // subdirectory glob
+    ["file?.txt"], // single-char glob
+    ["file[12].txt"], // character class
+    ["{a,b}"], // brace expansion (rejected by backend → PASS)
+  ])("routes `%s` through the backend", (path) => {
+    expect(needsBackendResolution(path)).toBe(true);
+  });
+
+  it.each([
+    ["file.txt"],
+    ["src"],
+    ["/etc/passwd"],
+    [".hidden"],
+    ["some-file"],
+    ["../parent"],
+    ["file with spaces"], // tokenizer handled spaces
+    ["weird~name"], // `~` mid-path is a legitimate filename char
+  ])("skips the backend for plain path `%s`", (path) => {
+    expect(needsBackendResolution(path)).toBe(false);
+  });
+});
+
+describe("resolveLsTarget (sync fast path)", () => {
+  // Only used for the sync fast path — plain positionals. Anything
+  // that needs backend resolution returns null here on purpose so
+  // the caller routes to `resolve_ls_arg` instead.
+
+  it("returns cwd when no positional and joining is unambiguous", () => {
+    expect(resolveLsTarget([], "/home/me")).toBe("/home/me");
+  });
+
+  it("joins a plain relative path with cwd", () => {
+    expect(resolveLsTarget(["src"], "/home/me/proj")).toBe("/home/me/proj/src");
+  });
+
+  it("passes an absolute path through unchanged", () => {
+    expect(resolveLsTarget(["/etc"], "/home/me")).toBe("/etc");
+  });
+
+  it("returns null for tilde / env / glob — those go through the backend", () => {
+    expect(resolveLsTarget(["~/Downloads"], "/home/me")).toBeNull();
+    expect(resolveLsTarget(["$HOME"], "/home/me")).toBeNull();
+    expect(resolveLsTarget(["*.ts"], "/home/me")).toBeNull();
+    expect(resolveLsTarget(["src/*"], "/home/me")).toBeNull();
   });
 });

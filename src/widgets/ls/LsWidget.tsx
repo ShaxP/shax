@@ -67,6 +67,15 @@ export interface LsWidgetProps {
    *  order. Sort is applied to every fresh probe (root and
    *  expanded children) so the view stays consistent. */
   flags: LsFlags;
+  /** Optional glob-match filter applied on top of every root
+   *  probe (initial + refresh). When the block came from a
+   *  pattern like `ls *.ts`, the backend `resolve_ls_arg`
+   *  handed us the list of matched basenames; we keep that
+   *  filter across refreshes so a widget-emitted `cd` or a
+   *  freshly-run command doesn't accidentally show entries
+   *  outside the pattern. `null` means "no filter — show
+   *  every entry in dirPath". */
+  filterNames?: readonly string[] | null;
 }
 
 const HOST: CSSProperties = {
@@ -151,7 +160,14 @@ export function LsWidget({
   dirPath,
   paneId,
   flags,
+  filterNames = null,
 }: LsWidgetProps): React.ReactElement {
+  // Freeze the glob-match filter as a Set for O(1) lookup and
+  // stable reference across renders. `null` means no filter.
+  const filterSet = useMemo(
+    () => (filterNames === null ? null : new Set(filterNames)),
+    [filterNames],
+  );
   const [rootEntries, setRootEntries] = useState<readonly DirEntry[]>(initialEntries);
   // `expandedChildren[absolutePath] === DirEntry[]` when the
   // user has expanded that folder. Missing = collapsed.
@@ -227,7 +243,15 @@ export function LsWidget({
         // we emitted `cd` and pre-froze) skip the re-probe.
         if (!isLiveRef.current) return;
         void readDirEntries(dirPath).then(
-          (entries) => setRootEntries(entries),
+          (entries) => {
+            // Re-apply the glob filter (if any) so a refresh after
+            // an emitted `cd` doesn't accidentally widen the view
+            // past the pattern the user originally typed. `null`
+            // means no glob was involved — show everything.
+            const filtered =
+              filterSet === null ? entries : entries.filter((e) => filterSet.has(e.name));
+            setRootEntries(filtered);
+          },
           (err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(`ls widget refresh failed: ${msg}`);
@@ -246,7 +270,7 @@ export function LsWidget({
       window.removeEventListener("shax:block-complete", onBlockComplete);
       blockEl.removeAttribute("data-widget-live");
     };
-  }, [paneId, dirPath]);
+  }, [paneId, dirPath, filterSet]);
 
   // Keep `data-widget-live` in sync with the isLive state so
   // freeze also drops the visual pinning.

@@ -66,4 +66,28 @@ describe("ls promotionGate", () => {
   it("rejects when any single arg trips the killswitch", () => {
     expect(isWidgetPromotable(["ls", "-a", "--sort=size"])).toBe(false);
   });
+
+  it("promotes ALL positional-path forms — resolution is the formatter's job now", () => {
+    // Backend `resolve_ls_arg` (mirroring what the shell does at
+    // execution time) turns `~`, `$HOME`, and globs into a real
+    // parent directory + optional filter. The widget doesn't need
+    // to gate on which forms are resolvable; if resolution fails
+    // the formatter itself shows a "check RAW" line and the widget
+    // never mounts.
+    expect(isWidgetPromotable(["ls", "*"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "*.ts"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "src/*"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "dir/{a,b}"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "~"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "~/Downloads"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "~user"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "$HOME"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "${HOME}/x"])).toBe(true);
+    // Flag combos still promote.
+    expect(isWidgetPromotable(["ls", "-la", "*"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "-la", "~/Downloads"])).toBe(true);
+    // Past the `--` separator too.
+    expect(isWidgetPromotable(["ls", "--", "*"])).toBe(true);
+    expect(isWidgetPromotable(["ls", "--", "~"])).toBe(true);
+  });
 });

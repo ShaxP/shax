@@ -75,6 +75,16 @@ local-ip-address = "0.6"
 # Network card's throughput lines. Still no `disk` / `component`.
 sysinfo = { version = "0.32", default-features = false, features = ["system", "network", "disk"] }
 
+# ls formatter shell-side expansion (M4 slice 4.4 amendment). Shax's
+# block capture keeps pre-expansion command text, so `~/foo`, `$HOME`,
+# and `*.ts` reach the formatter verbatim. `shellexpand` covers the
+# tilde + parameter half (`~`, `~user` via getpwnam on Unix, `$VAR`,
+# `${VAR}`); the `glob` crate covers the pattern half (`*`, `?`,
+# `[abc]`). Together they let `resolve_ls_arg` return the same
+# directory listing the shell would have shown.
+shellexpand = "3"
+glob = "0.3"
+
 # M13.4 — the sidebar's keep-awake assertion (spec §19 D6). macOS and
 # Linux shell out to `caffeinate` / `systemd-inhibit`, which needs no
 # crate; Windows has no equivalent command and uses

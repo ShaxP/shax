@@ -27,9 +27,10 @@ use agent::{
 use ipc::{
     app_state_load, app_state_save, block_get_output, close_window_confirmed, git_branches,
     git_diff, git_root_for, git_status_porcelain, git_user_email, home_dir, list_branches,
-    list_community_commands, list_community_formatters, list_cwds, list_themes, open_new_window,
-    pty_get_block_output, pty_kill, pty_list_blocks, pty_resize, pty_running_commands, pty_spawn,
-    pty_write, quit_confirmed, read_dir_entries, read_file_bytes, search_blocks, stat_file,
+    list_community_commands, list_community_formatters, list_cwds, list_themes,
+    ls_resolve::resolve_ls_arg, open_new_window, pty_get_block_output, pty_kill, pty_list_blocks,
+    pty_resize, pty_running_commands, pty_spawn, pty_write, quit_confirmed, read_dir_entries,
+    read_file_bytes, search_blocks, stat_file,
 };
 use preferences::Preferences;
 use pty::PtyManager;
@@ -341,6 +342,7 @@ pub fn run() {
             block_get_output,
             read_file_bytes,
             read_dir_entries,
+            resolve_ls_arg,
             git_status_porcelain,
             git_branches,
             git_user_email,
