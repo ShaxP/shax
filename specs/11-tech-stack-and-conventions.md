@@ -4,14 +4,14 @@ Concrete choices. Pin versions in the lockfiles; the names below are the intende
 
 ## Runtime stack
 
-- **Shell:** Tauri 2 (Rust host, webview frontend), packaged for macOS, Windows, and Linux.
+- **Shell:** Tauri 2 (Rust host, webview frontend), packaged for **macOS and Linux** only. Windows is out of scope — see `00-overview.md`. The Windows-specific code paths that used to live in this tree (Credential Manager keychain backend, `windows-sys` for keep-awake, ConPTY-adjacent probes) are being removed as the code cleanup slice lands after this decision.
 - **Backend (Rust):**
   - `portable-pty` for PTYs.
   - a VT parser (`vte`) for the escape and OSC 133 handling; consider `alacritty_terminal` only if a single-renderer model is needed later.
   - `rusqlite` with bundled SQLite (FTS5 enabled) plus `sqlite-vec` for embeddings.
   - `tokio` for async, `serde` for IPC payloads, `thiserror` for library errors, `anyhow` at app edges, `uuid`, `time` or `chrono`.
   - native probes for the statusbar and sidebar: `starship-battery`, `local-ip-address`, `sysinfo` (feature-gated to `system`).
-  - `windows-sys` (Windows only, `Win32_System_Power`) for the M13.4 keep-awake assertion. macOS and Linux need no crate for this — they spawn the OS's own `caffeinate` / `systemd-inhibit` helper. Already in the tree via Tauri.
+  - keep-awake: spawn the OS's own `caffeinate` (macOS) / `systemd-inhibit` (Linux) helper. No Windows path needed once native Windows is dropped.
 - **Frontend (TypeScript, React):**
   - React 18+ with strict TypeScript, built with Vite.
   - `xterm.js` plus the fit addon for terminal rendering.

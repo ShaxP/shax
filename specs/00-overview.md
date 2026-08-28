@@ -2,7 +2,9 @@
 
 ## What Shax is
 
-Shax is a cross-platform desktop terminal emulator for developers. It runs ordinary Linux and Unix commands, but instead of treating the screen as one flat byte stream, it treats each command and its output as a structured block: a unit with the command, its output, an exit status, timing, the directory it ran in, and which pane and session produced it. Those blocks are richly formatted, fully searchable, and occasionally interactive. A Claude-powered assistant is available throughout but stays quiet until invoked.
+Shax is a desktop terminal emulator for **macOS and Linux**, built for developers who live in a Unix shell. It runs ordinary Linux and Unix commands, but instead of treating the screen as one flat byte stream, it treats each command and its output as a structured block: a unit with the command, its output, an exit status, timing, the directory it ran in, and which pane and session produced it. Those blocks are richly formatted, fully searchable, and occasionally interactive. A Claude-powered assistant is available throughout but stays quiet until invoked.
+
+Windows is deliberately out of scope. Every high-value surface — the `ls` / `git status` / `git diff` formatters, the promotion gate, the block-capture heuristics — assumes Unix-style argv and output. PowerShell and cmd don't produce those. WSL2 with WSLg *may* run the Linux build (Tauri's WebKit2GTK renders through Weston/RDP), but we don't test or support that path: no GPU acceleration, DPI-and-clipboard quirks, and bugs surfacing there get attributed to Shax rather than to WSLg. Same discipline as the SSH / container non-support call: "know who you're for."
 
 It is built on Tauri 2: a Rust backend and a React and TypeScript frontend in a native window. It is local-first and privacy-respecting. No account is required to use the terminal.
 

@@ -16,7 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-latest, ubuntu-latest]
+        # Native Windows was dropped as a target (see CLAUDE.md +
+        # specs/00-overview.md); Windows users install the Linux
+        # build inside WSL2. The Ubuntu matrix entry is what those
+        # users' runtime actually looks like.
+        os: [macos-15, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
