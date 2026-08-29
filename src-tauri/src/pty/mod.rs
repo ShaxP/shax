@@ -1147,10 +1147,7 @@ fn resolve_shell(opts: &SpawnOpts) -> String {
     #[cfg(target_os = "linux")]
     return "/bin/bash".to_owned();
 
-    #[cfg(target_os = "windows")]
-    return "cmd.exe".to_owned();
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     return "/bin/sh".to_owned();
 }
 

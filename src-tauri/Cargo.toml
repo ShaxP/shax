@@ -39,30 +39,25 @@ rusqlite = { version = "0.37.0", features = ["bundled"] }
 # M6 assistant. reqwest for HTTPS to Anthropic; futures-util
 # for streaming the response body chunk-by-chunk (SSE parsed
 # in `assistant::anthropic::sse`); keyring for OS-native
-# credential storage (macOS Keychain / Windows Credential
-# Manager / Linux Secret Service).
+# credential storage (macOS Keychain / Linux Secret Service).
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
 ort = "2.0.0-rc.12"
 # `default-features = false` drops `esaxx-rs` (Unigram
 # trainer — unused; we load a pre-serialized `tokenizer.json`
 # and only encode with WordPiece) and `indicatif` (training
-# progress bars). Dropping `esaxx-rs` also fixes a Windows
-# MSVC-runtime mismatch — it defaults to `/MT` static, while
-# `ort-sys` builds `/MD` dynamic, and the linker can't merge
-# the two.
+# progress bars).
 #
 # `fancy-regex` (pure Rust) replaces the default `onig` (C
 # library) — tokenizers requires one of the two regex
-# backends, and fancy-regex avoids another C-linkage vector
-# on Windows.
+# backends, and fancy-regex avoids a C-linkage vector we
+# don't otherwise need.
 tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
 # M12.4b — statusbar native probes. `starship-battery` is the
-# actively-maintained fork of the (now-stale) `battery` crate;
-# Starship prompt uses it, so it's kept current against macOS /
-# Linux / Windows quirks. `local-ip-address` returns the primary
-# interface's IP via each OS's native syscall.
+# actively-maintained fork of the (now-stale) `battery` crate.
+# `local-ip-address` returns the primary interface's IP via each
+# OS's native syscall.
 starship-battery = "0.11"
 local-ip-address = "0.6"
 # M13.3 — sidebar CPU / memory probe (spec §19). Feature-gated
@@ -84,14 +79,6 @@ sysinfo = { version = "0.32", default-features = false, features = ["system", "n
 # directory listing the shell would have shown.
 shellexpand = "3"
 glob = "0.3"
-
-# M13.4 — the sidebar's keep-awake assertion (spec §19 D6). macOS and
-# Linux shell out to `caffeinate` / `systemd-inhibit`, which needs no
-# crate; Windows has no equivalent command and uses
-# `SetThreadExecutionState` directly. Already in the dependency tree
-# via Tauri, so this pulls nothing new down.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
 
 # `prctl(PR_SET_PDEATHSIG)` so the keep-awake helper dies with Shax.
 # macOS gets the same guarantee from `caffeinate -w <pid>`; Linux has

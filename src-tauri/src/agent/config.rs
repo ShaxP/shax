@@ -110,10 +110,6 @@ pub(crate) fn platform_config_dir() -> Option<PathBuf> {
                 .join("Application Support")
         });
     }
-    #[cfg(target_os = "windows")]
-    {
-        return std::env::var_os("APPDATA").map(PathBuf::from);
-    }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {

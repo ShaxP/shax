@@ -1790,11 +1790,7 @@ fn data_dir() -> Option<PathBuf> {
         }
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
     }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         None
     }
