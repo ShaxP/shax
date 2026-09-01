@@ -30,8 +30,11 @@ Preferences.appearance = {
   font_family:  Option<String>,              // None = built-in default (JetBrains Mono)
   font_size:    u8,                          // 10..=24, clamped on write
   ligatures:    bool,
+  window_decorations: System | None,         // native OS title bar; default is platform-dependent
 }
 ```
+
+`window_decorations` is the one field whose default is not uniform: `None` on Linux, `System` everywhere else. A tiling compositor (Hyprland, sway, i3, river, niri) places windows itself and draws no server-side decoration, so the GTK client-side title bar duplicates the compositor's own bar and costs ~40px for a set of buttons — minimise, maximise, close — that the compositor already binds to keys. Linux users on a floating desktop set `System` to get them back. On macOS `System` is effectively mandatory: `tauri.conf.json` opts into `titleBarStyle: "Overlay"` so the traffic lights float over the webview, and the chrome row reserves a left inset for them, so an undecorated macOS window would lose the lights and keep the gap. The setting is therefore only offered in the UI on Linux.
 
 Migration: an old `preferences.json` with just `{ "theme": "dark" }` deserialises with `theme_mode = Dark`, `theme_light = shax-light-default`, `theme_dark = shax-dark-default`, and default font settings. No user action required. `#[serde(default)]` on every field, same tolerance rule as the rest of `preferences.rs`.
 

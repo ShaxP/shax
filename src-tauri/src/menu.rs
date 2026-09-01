@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use uuid::Uuid;
 
 use crate::mux::{WindowId, Windows};
+use crate::preferences;
 use crate::pty::{PtyId, PtyManager};
 
 // ─── Menu item ids ─────────────────────────────────────────────────
@@ -292,7 +293,11 @@ pub fn spawn_window_with_label<R: tauri::Runtime>(
 ) -> tauri::Result<WindowId> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Shax")
-        .inner_size(800.0, 600.0);
+        .inner_size(800.0, 600.0)
+        // Applied at build time, not after: setting it on a built
+        // window makes an undecorated window flash its title bar
+        // on the way up.
+        .decorations(decorations_enabled());
     // See `open_new_window` doc: `title_bar_style` and
     // `hidden_title` are macOS-only methods on the builder.
     #[cfg(target_os = "macos")]
@@ -303,6 +308,40 @@ pub fn spawn_window_with_label<R: tauri::Runtime>(
     register_close_teardown(app, &window);
     save_session_windows(app);
     Ok(WindowId::from_label(label))
+}
+
+/// Whether new windows should wear native OS decorations, per the
+/// user's saved preference. A missing or unreadable preferences
+/// file falls back to the platform default (see
+/// [`preferences::WindowDecorations`]) rather than failing the
+/// window build — chrome is not worth refusing to open a window over.
+fn decorations_enabled() -> bool {
+    preferences::load()
+        .unwrap_or_default()
+        .appearance
+        .window_decorations
+        .enabled()
+}
+
+/// Push the saved window-decoration preference onto every open window.
+///
+/// Two callers, for two gaps `spawn_window_with_label` can't cover:
+///
+/// 1. **Startup.** The main window is declared in `tauri.conf.json`,
+///    which has no way to express a per-platform default, so it is
+///    always built decorated and corrected here.
+/// 2. **Toggling.** `set_preferences` calls this so the switch takes
+///    effect immediately instead of at the next launch.
+///
+/// Failures are logged, not propagated: a compositor that refuses the
+/// request leaves the user with a title bar, which is cosmetic.
+pub fn apply_window_decorations<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let decorations = decorations_enabled();
+    for (label, window) in app.webview_windows() {
+        if let Err(e) = window.set_decorations(decorations) {
+            tracing::warn!(%label, error = %e, "failed to apply window decorations");
+        }
+    }
 }
 
 /// Hook a window's `CloseRequested` event to reap any PTYs the window

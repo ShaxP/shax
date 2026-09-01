@@ -32,6 +32,7 @@ import {
   type AppearancePreferences,
 } from "../theme/preferences";
 import type { ThemePreference } from "../theme/theme";
+import { currentPlatform } from "../lib/platform";
 import { BUNDLED_FONTS } from "../theme/fonts";
 import { listThemes, type Theme } from "../lib/ipc";
 import {
@@ -974,6 +975,38 @@ function AppearanceSection({
           Fuses `==`, `!=`, `=&gt;` etc. when the font supports it.
         </span>
       </div>
+
+      {/* ── Window ───────────────────────────────────────
+          Linux only. On macOS the native decorations carry the
+          traffic lights that this bar's left inset is reserved
+          for, so turning them off would strip the lights and
+          leave dead space — not a choice worth offering. */}
+      {currentPlatform() === "linux" && (
+        <>
+          <hr style={SUB_DIVIDER} />
+          <div style={SECTION_TITLE}>Window</div>
+          <div style={APPEARANCE_ROW}>
+            <label htmlFor="settings-window-decorations" style={APPEARANCE_LABEL}>
+              Title bar
+            </label>
+            <input
+              id="settings-window-decorations"
+              data-testid="settings-window-decorations"
+              type="checkbox"
+              checked={appearance.window_decorations === "system"}
+              onChange={(e) =>
+                void onPatchAppearance({
+                  window_decorations: e.target.checked ? "system" : "none",
+                })
+              }
+            />
+            <span style={{ ...LANE_STATUS, marginTop: 0, marginLeft: 4 }}>
+              Off by default — a tiling compositor already manages the window. Shax&apos;s tab row
+              stays draggable either way.
+            </span>
+          </div>
+        </>
+      )}
     </section>
   );
 }

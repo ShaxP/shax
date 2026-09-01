@@ -45,9 +45,16 @@ fn get_preferences() -> Result<Preferences, String> {
 }
 
 /// Overwrite the persisted app-level preferences.
+///
+/// Window decorations are re-applied after the write so toggling
+/// them takes effect immediately rather than at the next launch.
+/// Every other field in the block is read by the frontend, which
+/// already has the new value in hand.
 #[tauri::command]
-fn set_preferences(preferences: Preferences) -> Result<(), String> {
-    preferences::save(&preferences).map_err(|e| e.to_string())
+fn set_preferences(app: tauri::AppHandle, preferences: Preferences) -> Result<(), String> {
+    preferences::save(&preferences).map_err(|e| e.to_string())?;
+    menu::apply_window_decorations(&app);
+    Ok(())
 }
 
 /// Managed handle to the process-wide `Embedder`. Shared by
@@ -304,6 +311,13 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 menu::register_close_teardown(&handle, &window);
             }
+
+            // The main window is declared in `tauri.conf.json`, which
+            // can't express a per-platform decoration default, so it
+            // comes up decorated on every OS. Correct it here before
+            // the webview paints. Windows spawned later get the right
+            // value at build time from `spawn_window_with_label`.
+            menu::apply_window_decorations(&handle);
 
             // M13 refinement: one sampler for the whole app. CPU
             // usage is a delta between refreshes, so letting each

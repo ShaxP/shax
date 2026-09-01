@@ -115,6 +115,54 @@ fn default_line_editing() -> LineEditing {
 /// The `theme_light` and `theme_dark` fields carry
 /// preset ids from the theme catalog (see
 /// `crate::themes`). Persisted verbatim, so a rename in
+/// Whether Shax asks the OS for native window decorations —
+/// the title bar and its minimise / maximise / close buttons.
+///
+/// - `System` — wear the platform's native decorations.
+/// - `None` — no OS decorations; Shax's own chrome row is the
+///   only bar. That row is a drag region, so an undecorated
+///   window can still be moved with the mouse.
+///
+/// The default is platform-dependent: `None` on Linux, `System`
+/// everywhere else. Two reasons the platforms differ:
+///
+/// - **Linux.** Tiling compositors (Hyprland, sway, i3, river,
+///   niri) own window placement and draw no server-side
+///   decoration, so a GTK client-side title bar duplicates the
+///   compositor's own bar and burns ~40px. Users on a floating
+///   desktop who want the buttons back set `System`.
+/// - **macOS.** `System` is effectively required. `tauri.conf.json`
+///   opts into `titleBarStyle: "Overlay"` so the native traffic
+///   lights float over the webview, and `TitleBar.tsx` reserves a
+///   left inset for them; removing decorations would strip the
+///   lights and leave that inset as dead space.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowDecorations {
+    System,
+    None,
+}
+
+impl WindowDecorations {
+    /// The `bool` Tauri's `decorations` builder arg / setter wants.
+    pub fn enabled(self) -> bool {
+        matches!(self, Self::System)
+    }
+}
+
+impl Default for WindowDecorations {
+    fn default() -> Self {
+        // `cfg!` rather than `#[cfg]` blocks: the non-taken branch
+        // still type-checks on every platform, so a rename can't
+        // silently break the build on an OS CI didn't run.
+        if cfg!(target_os = "linux") {
+            Self::None
+        } else {
+            Self::System
+        }
+    }
+}
+
 /// the catalog silently orphans user choice — treat ids as
 /// a schema-level contract.
 ///
@@ -150,6 +198,13 @@ pub struct AppearancePreferences {
     /// distraction some users find in blinking cursors.
     #[serde(default)]
     pub cursor_blink: bool,
+    /// Whether the window wears native OS decorations. Default is
+    /// platform-dependent — see [`WindowDecorations`]. A file
+    /// written before this field existed deserialises onto that
+    /// platform default, so Linux installs pick up the undecorated
+    /// window without anyone editing JSON.
+    #[serde(default)]
+    pub window_decorations: WindowDecorations,
 }
 
 impl Default for AppearancePreferences {
@@ -162,6 +217,7 @@ impl Default for AppearancePreferences {
             ligatures: true,
             line_editing: LineEditing::default(),
             cursor_blink: false,
+            window_decorations: WindowDecorations::default(),
         }
     }
 }
@@ -378,6 +434,7 @@ mod tests {
                 ligatures: false,
                 line_editing: LineEditing::Vi,
                 cursor_blink: true,
+                window_decorations: WindowDecorations::System,
             },
             ..Preferences::default()
         };
@@ -390,6 +447,10 @@ mod tests {
         assert!(!back.appearance.ligatures);
         assert_eq!(back.appearance.line_editing, LineEditing::Vi);
         assert!(back.appearance.cursor_blink);
+        assert_eq!(
+            back.appearance.window_decorations,
+            WindowDecorations::System
+        );
     }
 
     #[test]
@@ -400,6 +461,86 @@ mod tests {
         let old_json = r#"{"appearance":{"theme_light":"shax-light","theme_dark":"shax-dark","font_size":13,"ligatures":true,"line_editing":"emacs"}}"#;
         let p: Preferences = serde_json::from_str(old_json).unwrap();
         assert!(!p.appearance.cursor_blink);
+    }
+
+    // ── Window decorations ──────────────────────────────────
+
+    #[test]
+    fn default_window_decorations_is_platform_dependent() {
+        // Linux tiling compositors draw their own chrome, so the
+        // GTK title bar is redundant there. macOS needs decorations
+        // for the traffic lights the TitleBar inset reserves space
+        // for. This asymmetry is the whole point of the type — if
+        // someone "simplifies" it to a uniform default, this fails.
+        let expected = if cfg!(target_os = "linux") {
+            WindowDecorations::None
+        } else {
+            WindowDecorations::System
+        };
+        assert_eq!(
+            AppearancePreferences::default().window_decorations,
+            expected
+        );
+    }
+
+    #[test]
+    fn window_decorations_enabled_maps_to_bool() {
+        assert!(WindowDecorations::System.enabled());
+        assert!(!WindowDecorations::None.enabled());
+    }
+
+    #[test]
+    fn window_decorations_serialises_as_kebab_case() {
+        for (mode, wire) in [
+            (WindowDecorations::System, "system"),
+            (WindowDecorations::None, "none"),
+        ] {
+            let p = Preferences {
+                appearance: AppearancePreferences {
+                    window_decorations: mode,
+                    ..AppearancePreferences::default()
+                },
+                ..Preferences::default()
+            };
+            let json = serde_json::to_string(&p).unwrap();
+            assert!(
+                json.contains(&format!(r#""window_decorations":"{wire}""#)),
+                "expected {wire} in {json}"
+            );
+            let back: Preferences = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.appearance.window_decorations, mode);
+        }
+    }
+
+    #[test]
+    fn appearance_without_window_decorations_gets_platform_default() {
+        // An appearance block written before this field existed must
+        // pick up the platform default rather than failing to parse —
+        // that is what makes Linux installs undecorated with no user
+        // action, and it must not disturb the fields around it.
+        let old_json = r#"{"appearance":{"font_size":15,"cursor_blink":true}}"#;
+        let p: Preferences = serde_json::from_str(old_json).unwrap();
+        assert_eq!(p.appearance.font_size, 15);
+        assert!(p.appearance.cursor_blink);
+        assert_eq!(
+            p.appearance.window_decorations,
+            AppearancePreferences::default().window_decorations
+        );
+    }
+
+    #[test]
+    fn explicit_window_decorations_survives_a_load_save_round_trip() {
+        // A user on a floating Linux desktop who turns the title bar
+        // back on must keep it: the platform default must not win
+        // over an explicit choice on the next read.
+        let json = r#"{"appearance":{"window_decorations":"system"}}"#;
+        let p: Preferences = serde_json::from_str(json).unwrap();
+        assert_eq!(p.appearance.window_decorations, WindowDecorations::System);
+        let round: Preferences = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(
+            round.appearance.window_decorations,
+            WindowDecorations::System
+        );
     }
 
     // ── M12.2 line-editing mode ─────────────────────────────

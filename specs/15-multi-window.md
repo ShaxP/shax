@@ -32,6 +32,7 @@ macOS convention differs from Windows/Linux; we follow each rather than force un
 
 - **macOS.** Closing the last window does **not** quit. The process stays alive in the dock and menu bar. `Cmd+Q` (or `Shax → Quit` in the app menu) quits explicitly. Reopening from the dock spawns a fresh window (or restores from session if that's the user setting).
 - **Windows / Linux.** Closing the last window quits the process. No hidden menu-bar mode.
+- **Window decorations.** Whether a window wears the native OS title bar is the user's `appearance.window_decorations` preference, defaulting to `None` on Linux and `System` elsewhere (see `specs/16-themes-and-fonts.md`). Applied at build time for spawned windows so an undecorated window never flashes a title bar on the way up; the main window is declared in `tauri.conf.json`, which cannot express a per-platform default, so it is built decorated and corrected during setup. Toggling the preference re-applies to every open window immediately — no relaunch. Shax's own chrome row is a drag region, so an undecorated window is still mouse-movable.
 - **Session-restore hook.** On startup, if a session file exists and either (a) a window is being created because the user launched the app or (b) macOS is reopening from a hidden state, restore the persisted windows. Never restore silently in the middle of a running session.
 
 ## Session restore
