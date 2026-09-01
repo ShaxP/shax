@@ -30,6 +30,8 @@ Follow-on: bracketed paste. Multi-line paste today submits each line as it arriv
 
 The shim (`shax.zsh` / `shax.bash` / `shax.fish`) resets `PROMPT` / `PS1` / `fish_prompt` to a bare OSC 133 A + B marker with no visible glyphs. Starship, p10k, oh-my-zsh themes, and any custom `PROMPT` the user has stop rendering. The user gets Shax's own header row instead — richer, faster, honest.
 
+Resetting once at source time is not enough, because decorators re-render on **every** prompt cycle from inside a hook the shim itself chains. Both shims therefore re-assert after the user's hooks have run, by the mechanism their shell provides: zsh registers a `_shax_reset_prompt` precmd *after* the user's (`add-zsh-hook` appends, and starship / p10k rebuild `PROMPT` in their own precmd); bash restores `PS1` from `_shax_bare_ps1` at the end of `_shax_prompt_command_wrapper`, after the chained `PROMPT_COMMAND` — which is where starship, oh-my-posh and powerline assign `PS1`. Losing this is not merely cosmetic: the decorator's assignment takes the OSC 133 B marker with it, so the frontend can no longer separate prompt bytes from user typing.
+
 The shim also actively defuses three things known to fight the strip:
 
 - **vi-mode.** `bindkey -e` in zsh; `set -o emacs` in bash. Fish's default is already single-mode. Users who deliberately want vi keys will lose them until an escape hatch is added.

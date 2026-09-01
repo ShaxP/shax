@@ -1623,6 +1623,17 @@ mod tests {
              redisplay-diff optimization",
         );
         assert!(shim.contains("PS2=''"), "shax.bash must clear PS2",);
+        // Setting PS1 once at source time is not enough: prompt
+        // decorators (starship, oh-my-posh, powerline) assign PS1 from
+        // inside their own PROMPT_COMMAND, which the shim chains and
+        // therefore replays on every cycle. The wrapper has to restore
+        // the bare prompt afterwards or the decorator wins from the
+        // first prompt onward, taking the OSC 133 B marker with it.
+        assert!(
+            shim.contains(r#"PS1="$_shax_bare_ps1""#),
+            "shax.bash must re-assert PS1 from _shax_bare_ps1 after running the \
+             chained PROMPT_COMMAND, or prompt decorators clobber it every cycle",
+        );
         assert!(
             shim.contains(r#"SHAX_LINE_EDITING" == "vi""#),
             "shax.bash must branch on SHAX_LINE_EDITING",
@@ -2010,6 +2021,100 @@ mod tests {
         );
 
         manager.kill(id).await.expect("kill");
+    }
+
+    /// Prompt decorators — starship, oh-my-posh, powerline — render by
+    /// assigning `PS1` from inside their own `PROMPT_COMMAND`. The shim
+    /// chains the user's `PROMPT_COMMAND`, so a one-shot `PS1` assignment
+    /// at source time is overwritten on the very first prompt cycle: the
+    /// decorator's glyphs paint into the strip *and* the OSC 133 B marker
+    /// disappears with them, so the frontend can no longer tell prompt
+    /// bytes from user typing.
+    ///
+    /// Reported on Omarchy, where `/usr/share/omarchy/default/bash/init`
+    /// runs `eval "$(starship init bash)"` — an extra `~ ❯` showed up in
+    /// the strip. `shax.zsh` already defended against this with a
+    /// `_shax_reset_prompt` precmd registered after the user's;
+    /// `shax.bash` had no equivalent.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_integration_survives_a_prompt_decorator() {
+        let Some(bash) = shell_on_path("bash") else {
+            eprintln!("skipping bash prompt-decorator test: bash not on PATH");
+            return;
+        };
+        let manager = Arc::new(PtyManager::new());
+        set_global_manager(Arc::clone(&manager));
+
+        let (channel, mut rx) = make_test_channel();
+
+        // Isolated HOME whose .bashrc installs a starship-shaped
+        // decorator: a PROMPT_COMMAND that reassigns PS1 every cycle. A
+        // literal sentinel rather than real starship so the test doesn't
+        // depend on a binary CI may not have.
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join(".bashrc"),
+            "_fake_decorator() { PS1='DECORATOR> '; }\nPROMPT_COMMAND=_fake_decorator\n",
+        )
+        .expect("write .bashrc");
+
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("SHELL".into(), bash.clone());
+        env.insert("HOME".into(), home.path().display().to_string());
+
+        let id = manager
+            .spawn(
+                SpawnOpts {
+                    rows: 24,
+                    cols: 80,
+                    cwd: Some(home.path().display().to_string()),
+                    env: Some(env),
+                },
+                channel,
+            )
+            .await
+            .expect("spawn");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Dump the live PS1 to a file rather than scraping the terminal:
+        // PS1 is mostly escape bytes, which the VT layer would consume
+        // before any assertion could see them.
+        let probe = home.path().join("ps1.txt");
+        let cmd = format!("printf '%s' \"$PS1\" > {}\n", probe.display());
+        manager
+            .write(id, &B64.encode(cmd.as_bytes()))
+            .await
+            .expect("write");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut contents = String::new();
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&probe) {
+                if !text.is_empty() {
+                    contents = text;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        manager.kill(id).await.expect("kill");
+
+        assert!(
+            !contents.is_empty(),
+            "bash never wrote its PS1 to the probe file",
+        );
+        assert!(
+            !contents.contains("DECORATOR"),
+            "the decorator's PROMPT_COMMAND clobbered Shax's PS1; got {contents:?}",
+        );
+        assert!(
+            contents.contains("133;B"),
+            "PS1 must still carry the OSC 133 B marker after a decorator ran; got {contents:?}",
+        );
     }
 
     /// Regression test for the Fedora phantom-block bug. The exact
