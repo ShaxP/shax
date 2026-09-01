@@ -9,6 +9,7 @@
  */
 
 import type { ThemePreference } from "./theme";
+import { currentPlatform, type Platform } from "../lib/platform";
 
 /** Default assistant dock width in pixels (M7.7a). Matches the old overlay
  * width so users don't feel a jump when the dock lands. Kept in sync with
@@ -44,6 +45,33 @@ export const DEFAULT_FONT_SIZE = 13;
 export type LineEditing = "emacs" | "vi";
 
 /**
+ * Whether the window wears native OS decorations — the title bar and
+ * its minimise / maximise / close buttons.
+ *
+ * Mirrors `WindowDecorations` in `src-tauri/src/preferences.rs`; see
+ * that type for why the default differs by platform.
+ */
+export type WindowDecorations = "system" | "none";
+
+/**
+ * The platform-dependent default, mirroring `impl Default for
+ * WindowDecorations` on the Rust side.
+ *
+ * Linux tiling compositors own window placement and draw no
+ * server-side decoration, so a GTK title bar is redundant there. On
+ * macOS the decorations carry the traffic lights that
+ * `TitleBar.tsx`'s inset is reserved for, so they stay.
+ *
+ * Takes the platform as an argument so tests can drive both branches
+ * without stubbing `navigator`.
+ */
+export function defaultWindowDecorations(
+  platform: Platform = currentPlatform(),
+): WindowDecorations {
+  return platform === "linux" ? "none" : "system";
+}
+
+/**
  * Appearance sub-block introduced in M10.1. Mirrors
  * `AppearancePreferences` in `src-tauri/src/preferences.rs`.
  * A pre-M10 `preferences.json` without this block deserialises
@@ -66,6 +94,12 @@ export interface AppearancePreferences {
    * some users find in blinking cursors.
    */
   cursor_blink: boolean;
+  /**
+   * Whether the window wears native OS decorations. Defaults to
+   * `"none"` on Linux and `"system"` elsewhere — see
+   * {@link defaultWindowDecorations}.
+   */
+  window_decorations: WindowDecorations;
 }
 
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
@@ -76,6 +110,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   ligatures: true,
   line_editing: "emacs",
   cursor_blink: false,
+  window_decorations: defaultWindowDecorations(),
 };
 
 export interface Preferences {
