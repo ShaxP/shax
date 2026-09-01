@@ -319,6 +319,14 @@ pub fn run() {
             // value at build time from `spawn_window_with_label`.
             menu::apply_window_decorations(&handle);
 
+            // Collect shell-shim temp dirs orphaned by a previous run
+            // that died without unwinding (crash, force-quit, or a
+            // `tauri dev` restart) — `TempDir`'s destructor can't run
+            // in those cases. Off-thread because it stats the whole
+            // temp dir and startup shouldn't wait on it; best-effort,
+            // so a failure here never blocks launch.
+            std::thread::spawn(pty::sweep_stale_shim_dirs);
+
             // M13 refinement: one sampler for the whole app. CPU
             // usage is a delta between refreshes, so letting each
             // window poll on its own timer made every window's

@@ -9,6 +9,7 @@
 use std::{
     collections::HashMap,
     io::Write as _,
+    path::Path,
     sync::{Arc, OnceLock},
 };
 
@@ -957,11 +958,96 @@ fn shell_is_zsh(shell: &str) -> bool {
 }
 
 /// Create a per-PTY temp directory containing the ZDOTDIR shim files and
+/// Filename prefix for every per-PTY shell-shim temp dir.
+///
+/// `tempfile`'s default is a bare `.tmp`, which is indistinguishable
+/// from every other program's scratch space — so an orphaned shim dir
+/// could never be swept without risking someone else's data. The full
+/// shape is `shax-shim-<pid>-<random>`, carrying the owning process id
+/// so [`sweep_stale_shim_dirs`] can tell a dead owner's leftovers from
+/// a live instance's working directories.
+const SHIM_DIR_PREFIX: &str = "shax-shim-";
+
+/// Create a shim temp dir tagged with this process's pid.
+///
+/// `TempDir` deletes on drop, which covers every orderly shutdown. It
+/// cannot cover `SIGKILL` — a crash, a force-quit, or `tauri dev`
+/// killing the app to restart it — because destructors don't run. Those
+/// leftovers are what the startup sweep collects.
+fn new_shim_tempdir() -> std::io::Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix(&format!("{SHIM_DIR_PREFIX}{}-", std::process::id()))
+        .tempdir()
+}
+
+/// Whether a pid belongs to a live process.
+///
+/// `kill(pid, 0)` performs the permission and existence checks without
+/// sending anything. `EPERM` means the process exists but belongs to
+/// someone else — still alive, so still hands-off.
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // Safety: `kill` with signal 0 sends nothing; it only probes. The
+    // pid comes from a directory name we wrote ourselves.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Delete shim temp dirs left behind by Shax processes that are gone.
+///
+/// Called once at startup. Split from [`sweep_stale_shim_dirs`] so tests
+/// can drive a scratch root and an injected liveness predicate instead of
+/// touching the real temp dir or spawning processes.
+///
+/// Deliberately conservative — a directory is removed only when its name
+/// parses as ours *and* the pid it names is neither us nor alive. A pid
+/// that has been recycled by an unrelated process reads as "alive" and
+/// the directory is left in place: leaking a few KB is strictly better
+/// than deleting the working directory of a running shell.
+fn sweep_stale_shim_dirs_in(root: &Path, is_alive: impl Fn(u32) -> bool) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let me = std::process::id();
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix(SHIM_DIR_PREFIX) else {
+            continue;
+        };
+        // `<pid>-<random>` — the pid runs up to the first dash.
+        let Some(pid) = rest.split('-').next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid == me || is_alive(pid) {
+            continue;
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Sweep the real temp dir. Best-effort: failures are logged, never
+/// propagated, because stale scratch space must not stop Shax starting.
+#[cfg(unix)]
+pub fn sweep_stale_shim_dirs() {
+    let removed = sweep_stale_shim_dirs_in(&std::env::temp_dir(), pid_is_alive);
+    if removed > 0 {
+        tracing::info!(removed, "swept stale shell-shim temp dirs");
+    }
+}
+
 /// configure `cmd` to use it.  The caller holds the `TempDir` alive.
 fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
     use std::fs;
 
-    let tmpdir = tempfile::TempDir::new()
+    let tmpdir = new_shim_tempdir()
         .map_err(|e| PtyError::Spawn(format!("tempdir for ZDOTDIR shim: {e}")))?;
     let dir = tmpdir.path();
 
@@ -1043,7 +1129,7 @@ fn create_zdotdir_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, Pt
 fn create_bash_rcfile_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
     use std::fs;
 
-    let tmpdir = tempfile::TempDir::new()
+    let tmpdir = new_shim_tempdir()
         .map_err(|e| PtyError::Spawn(format!("tempdir for bash rcfile shim: {e}")))?;
     let dir = tmpdir.path();
 
@@ -1082,7 +1168,7 @@ fn create_bash_rcfile_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir
 fn create_fish_xdg_shim(cmd: &mut CommandBuilder) -> Result<tempfile::TempDir, PtyError> {
     use std::fs;
 
-    let tmpdir = tempfile::TempDir::new()
+    let tmpdir = new_shim_tempdir()
         .map_err(|e| PtyError::Spawn(format!("tempdir for fish XDG shim: {e}")))?;
     let dir = tmpdir.path();
     let fish_dir = dir.join("fish");
@@ -1813,6 +1899,102 @@ mod tests {
         assert!(
             rcfile.contains("shax.bash"),
             "rcfile must source shax.bash, got: {rcfile}",
+        );
+    }
+
+    // ── shim temp-dir naming + sweep ────────────────────────
+
+    #[test]
+    fn shim_dirs_are_tagged_with_the_owning_pid() {
+        // The pid tag is what makes the sweep safe: without it a stale
+        // dir is indistinguishable from any other program's scratch
+        // space and could never be removed.
+        let dir = new_shim_tempdir().expect("create shim tempdir");
+        let name = dir
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            .expect("shim dir name");
+        let expected = format!("{SHIM_DIR_PREFIX}{}-", std::process::id());
+        assert!(
+            name.starts_with(&expected),
+            "shim dir should be named `{expected}<random>`, got `{name}`",
+        );
+    }
+
+    #[test]
+    fn sweep_removes_dirs_whose_owner_is_gone() {
+        let root = tempfile::tempdir().expect("root");
+        let dead = root.path().join(format!("{SHIM_DIR_PREFIX}424242-abcdef"));
+        std::fs::create_dir_all(dead.join("nested")).expect("create dead dir");
+        std::fs::write(dead.join("shax.bash"), "# shim").expect("write shim");
+
+        // `|_| false` — nothing is alive.
+        let removed = sweep_stale_shim_dirs_in(root.path(), |_| false);
+
+        assert_eq!(removed, 1);
+        assert!(!dead.exists(), "a dead owner's dir must be removed");
+    }
+
+    #[test]
+    fn sweep_never_touches_a_live_owners_dir() {
+        // Conservative by design: a recycled pid reads as alive and we
+        // leave the directory alone. Leaking a few KB beats deleting a
+        // running shell's working directory.
+        let root = tempfile::tempdir().expect("root");
+        let live = root.path().join(format!("{SHIM_DIR_PREFIX}424242-abcdef"));
+        std::fs::create_dir_all(&live).expect("create live dir");
+
+        let removed = sweep_stale_shim_dirs_in(root.path(), |_| true);
+
+        assert_eq!(removed, 0);
+        assert!(live.exists(), "a live owner's dir must survive");
+    }
+
+    #[test]
+    fn sweep_never_touches_our_own_dir() {
+        // Our own pid must be skipped before the liveness probe — the
+        // dirs backing this process's open PTYs are in here.
+        let root = tempfile::tempdir().expect("root");
+        let ours = root
+            .path()
+            .join(format!("{SHIM_DIR_PREFIX}{}-abcdef", std::process::id()));
+        std::fs::create_dir_all(&ours).expect("create our dir");
+
+        // Even claiming nothing is alive must not delete our own.
+        let removed = sweep_stale_shim_dirs_in(root.path(), |_| false);
+
+        assert_eq!(removed, 0);
+        assert!(ours.exists(), "our own shim dir must survive the sweep");
+    }
+
+    #[test]
+    fn sweep_ignores_anything_that_is_not_ours() {
+        let root = tempfile::tempdir().expect("root");
+        // Someone else's scratch dir — the exact case the old bare
+        // `.tmp` prefix made indistinguishable from ours.
+        let foreign = root.path().join(".tmpABCDEF");
+        std::fs::create_dir_all(&foreign).expect("create foreign dir");
+        // Right prefix, unparseable pid.
+        let malformed = root.path().join(format!("{SHIM_DIR_PREFIX}notapid-x"));
+        std::fs::create_dir_all(&malformed).expect("create malformed dir");
+        // A plain file wearing the prefix.
+        let file = root.path().join(format!("{SHIM_DIR_PREFIX}424242-file"));
+        std::fs::write(&file, "not a dir").expect("write file");
+
+        let removed = sweep_stale_shim_dirs_in(root.path(), |_| false);
+
+        assert_eq!(removed, 0);
+        assert!(foreign.exists(), "another program's temp dir is off-limits");
+        assert!(malformed.exists(), "an unparseable pid must not be swept");
+        assert!(file.exists(), "a file must not be swept");
+    }
+
+    #[test]
+    fn pid_is_alive_agrees_with_reality_for_this_process() {
+        assert!(
+            pid_is_alive(std::process::id()),
+            "the running test process must read as alive",
         );
     }
 
