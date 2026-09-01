@@ -80,10 +80,15 @@ sysinfo = { version = "0.32", default-features = false, features = ["system", "n
 shellexpand = "3"
 glob = "0.3"
 
-# `prctl(PR_SET_PDEATHSIG)` so the keep-awake helper dies with Shax.
-# macOS gets the same guarantee from `caffeinate -w <pid>`; Linux has
-# no equivalent flag. Already in the tree transitively.
-[target.'cfg(target_os = "linux")'.dependencies]
+# Two uses, hence `cfg(unix)` rather than Linux-only (Windows is not
+# a target, so this is every platform we build for):
+#   - `prctl(PR_SET_PDEATHSIG)` so the keep-awake helper dies with
+#     Shax. Linux-only; macOS gets the same guarantee from
+#     `caffeinate -w <pid>`.
+#   - `kill(pid, 0)` liveness probing in the PTY shim-dir sweep, which
+#     must not delete a directory another running Shax still owns.
+# Already in the tree transitively.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
