@@ -205,6 +205,25 @@ _shax_prompt_command_wrapper() {
   if [[ -n "$_shax_previous_prompt_command" ]]; then
     eval "$_shax_previous_prompt_command"
   fi
+  # Re-assert our bare prompt AFTER the user's PROMPT_COMMAND ran.
+  #
+  # Prompt decorators that hook bash — starship, oh-my-posh, powerline,
+  # liquidprompt — do their work by assigning PS1 from inside their own
+  # PROMPT_COMMAND. Because we chain theirs above, a one-shot PS1
+  # assignment at source time loses on the very first prompt cycle and
+  # every one after: their glyphs render, and (worse) the OSC 133 B
+  # marker that separates prompt bytes from user typing disappears with
+  # them, degrading block capture.
+  #
+  # This is the bash analogue of `_shax_reset_prompt` in shax.zsh, which
+  # registers a precmd hook after the user's for exactly this reason.
+  #
+  # `_shax_bare_ps1` is only set when the assertive block below ran, so
+  # `SHAX_DISABLE_HARDENING=1` still leaves the user's prompt untouched.
+  if [[ -n "$_shax_bare_ps1" ]]; then
+    PS1="$_shax_bare_ps1"
+    PS2=''
+  fi
 }
 
 # ── M12.2 always-assertive hardening (spec §18 D2) ────────────────────────
@@ -242,6 +261,9 @@ if [[ "$SHAX_DISABLE_HARDENING" != "1" ]]; then
   # cycle; PS1 still carries only the closing B so everything after
   # it is user typing.
   PS1=$'\xe2\x80\x8b\[\e]133;B\a\]'
+  # Remembered so the PROMPT_COMMAND wrapper can restore it after each
+  # cycle — see the re-assert there for why a one-shot set isn't enough.
+  _shax_bare_ps1="$PS1"
   # PS2 (continuation prompt) cleared so a lingering `> ` doesn't paint
   # bytes we don't own during multi-line commands.
   PS2=''
