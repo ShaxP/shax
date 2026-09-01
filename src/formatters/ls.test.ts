@@ -63,6 +63,22 @@ describe("parseLsArgv", () => {
     expect(flags.paths).toEqual(["src"]);
   });
 
+  it("parses --group-directories-first", () => {
+    const flags = parseLsArgv(["ls", "--group-directories-first"]);
+    expect(flags.groupDirectoriesFirst).toBe(true);
+  });
+
+  it("parses the full Omarchy eza alias", () => {
+    // `alias ls='eza -lh --group-directories-first --icons=auto'`.
+    // `--icons=auto` is decoration only and stays an unrecognised
+    // no-op; the rest must land.
+    const flags = parseLsArgv(["eza", "-lh", "--group-directories-first", "--icons=auto"]);
+    expect(flags.long).toBe(true);
+    expect(flags.humanReadable).toBe(true);
+    expect(flags.groupDirectoriesFirst).toBe(true);
+    expect(flags.paths).toEqual([]);
+  });
+
   it("respects the `--` end-of-flags sentinel", () => {
     const flags = parseLsArgv(["ls", "--", "-l", "src"]);
     expect(flags.long).toBe(false);
@@ -85,6 +101,7 @@ const BLANK_FLAGS: LsFlags = {
   sortByTime: false,
   sortBySize: false,
   reverse: false,
+  groupDirectoriesFirst: false,
   paths: [],
 };
 
@@ -96,6 +113,40 @@ describe("applyLsView", () => {
     entry("c", { modified_ms: 1000, size: 50 }),
     entry("d", { modified_ms: 2000, size: 10 }),
   ];
+
+  it("groups directories first when asked, preserving name order", () => {
+    const mixed = [
+      entry("b.txt"),
+      entry("adir", { kind: "dir" }),
+      entry("a.txt"),
+      entry("zdir", { kind: "dir" }),
+    ];
+    const view = applyLsView(mixed, { ...BLANK_FLAGS, groupDirectoriesFirst: true });
+    expect(view.map((e) => e.name)).toEqual(["adir", "zdir", "a.txt", "b.txt"]);
+  });
+
+  it("leaves directories interleaved without the flag", () => {
+    const mixed = [entry("b.txt"), entry("adir", { kind: "dir" }), entry("a.txt")];
+    const view = applyLsView(mixed, BLANK_FLAGS);
+    expect(view.map((e) => e.name)).toEqual(["a.txt", "adir", "b.txt"]);
+  });
+
+  it("reverses the whole listing after grouping, like GNU ls -r", () => {
+    // GNU folds grouping into the comparison and `-r` inverts it, so
+    // files come first and each group is reversed.
+    const mixed = [
+      entry("b.txt"),
+      entry("adir", { kind: "dir" }),
+      entry("a.txt"),
+      entry("zdir", { kind: "dir" }),
+    ];
+    const view = applyLsView(mixed, {
+      ...BLANK_FLAGS,
+      groupDirectoriesFirst: true,
+      reverse: true,
+    });
+    expect(view.map((e) => e.name)).toEqual(["b.txt", "a.txt", "zdir", "adir"]);
+  });
 
   it("hides dotfiles by default", () => {
     const view = applyLsView(entries, BLANK_FLAGS);

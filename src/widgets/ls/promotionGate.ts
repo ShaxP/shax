@@ -20,6 +20,14 @@
  *     Ubuntu ship `alias ls='ls --color=auto'` in their default
  *     rc files, and rejecting that alias was silently degrading
  *     every Linux user's ls to the non-interactive formatter.
+ *   - `--group-directories-first` — ordering, applied by
+ *     `applyLsView`; see the `--icons` note below for why both
+ *     matter on eza-aliasing distros
+ *   - `--icons[=WHEN]` — decoration of the raw bytes only. Omarchy
+ *     ships `alias ls='eza -lh --group-directories-first
+ *     --icons=auto'`, and rejecting it degraded every pane's `ls`
+ *     to the non-interactive formatter — the same failure the
+ *     `--color=auto` entry above was added to fix.
  *   - positional path arguments
  *   - `--` separator
  *
@@ -51,6 +59,15 @@ const KNOWN_OK_LONG_FLAGS = new Set<string>([
   // of the raw ls bytes. See header comment for why this matters
   // on Linux specifically.
   "--color",
+  // Ordering flag, honoured for real by `applyLsView` rather than
+  // waved through as noise — the widget must not show a different
+  // order than the bytes the user actually got.
+  "--group-directories-first",
+  // Noise flag, same reasoning as `--color`: the widget draws its
+  // own icons from a filesystem probe, so whatever eza decorated
+  // the raw bytes with is irrelevant. `--icons` takes an optional
+  // `=WHEN` value, handled by the `split("=")` below.
+  "--icons",
 ]);
 
 // Short-flag chars that are safe. Combined forms like `-la`

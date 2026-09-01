@@ -60,7 +60,35 @@ describe("ls promotionGate", () => {
 
   it("rejects unknown long flags", () => {
     expect(isWidgetPromotable(["ls", "--sort=size"])).toBe(false);
-    expect(isWidgetPromotable(["ls", "--group-directories-first"])).toBe(false);
+    // `--group-directories-first` used to be the second sample here.
+    // It is now genuinely supported — `applyLsView` implements the
+    // ordering — so it moved to the accepted set and these stand in
+    // as flags that still change a shape we can't reproduce.
+    expect(isWidgetPromotable(["ls", "--indicator-style=slash"])).toBe(false);
+    expect(isWidgetPromotable(["ls", "--file-type"])).toBe(false);
+  });
+
+  it("promotes the Omarchy eza alias", () => {
+    // `alias ls='eza -lh --group-directories-first --icons=auto'`.
+    // Rejecting this silently dropped every pane's `ls` to the
+    // non-interactive formatter — no navigation — which is exactly
+    // the bug `--color=auto` was whitelisted for on Fedora/Ubuntu.
+    expect(isWidgetPromotable(["eza", "-lh", "--group-directories-first", "--icons=auto"])).toBe(
+      true,
+    );
+    // `lsa='ls -a'` expands with the alias body in front.
+    expect(
+      isWidgetPromotable(["eza", "-lh", "--group-directories-first", "--icons=auto", "-a"]),
+    ).toBe(true);
+    // Valueless `--icons` too.
+    expect(isWidgetPromotable(["eza", "--icons"])).toBe(true);
+  });
+
+  it("still rejects eza flags that change the output shape", () => {
+    // `lt='eza --tree --level=2 --long --icons --git'` must stay
+    // RAW: a tree is not a flat listing the widget can navigate.
+    expect(isWidgetPromotable(["eza", "--tree", "--level=2", "--long"])).toBe(false);
+    expect(isWidgetPromotable(["eza", "--git"])).toBe(false);
   });
 
   it("rejects when any single arg trips the killswitch", () => {

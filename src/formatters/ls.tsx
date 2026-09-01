@@ -42,6 +42,14 @@ export interface LsFlags {
   sortByTime: boolean; // -t
   sortBySize: boolean; // -S
   reverse: boolean; // -r
+  /**
+   * `--group-directories-first`. Sorts directories ahead of
+   * everything else, name order preserved within each group.
+   * GNU `ls` supports it, and it is in eza's default alias on
+   * several distros (Omarchy ships
+   * `alias ls='eza -lh --group-directories-first --icons=auto'`).
+   */
+  groupDirectoriesFirst: boolean;
   /** Positional path arguments (zero or more). */
   paths: string[];
 }
@@ -63,6 +71,7 @@ const FLAG_NAME_MAP: Record<string, keyof Omit<LsFlags, "paths">> = {
   "--long": "long",
   "--human-readable": "humanReadable",
   "--reverse": "reverse",
+  "--group-directories-first": "groupDirectoriesFirst",
 };
 
 /** Split an argv into recognised LsFlags. Unknown flags are
@@ -78,6 +87,7 @@ export function parseLsArgv(argv: readonly string[]): LsFlags {
     sortByTime: false,
     sortBySize: false,
     reverse: false,
+    groupDirectoriesFirst: false,
     paths: [],
   };
   // Skip argv[0] (the program name itself).
@@ -231,6 +241,16 @@ export function applyLsView(entries: readonly DirEntry[], flags: LsFlags): DirEn
     // names compare by their full string so `.bashrc` interleaves
     // with `bashfoo` rather than coming first.
     view.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  }
+  if (flags.groupDirectoriesFirst) {
+    // Stable partition, so whichever sort ran above still orders
+    // each group internally. Applied BEFORE `reverse` so `-r`
+    // flips the whole listing — matching GNU ls, where grouping is
+    // part of the comparison and `-r` inverts the comparison,
+    // putting files ahead of directories.
+    const dirs = view.filter((e) => e.kind === "dir");
+    const rest = view.filter((e) => e.kind !== "dir");
+    view = [...dirs, ...rest];
   }
   if (flags.reverse) view.reverse();
   return view;
