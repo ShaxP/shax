@@ -186,6 +186,7 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
         "tokyo-night",
         include_str!("../assets/themes/tokyo-night.json"),
     ),
+    ("retro-82", include_str!("../assets/themes/retro-82.json")),
     (
         "phosphor-amber",
         include_str!("../assets/themes/phosphor-amber.json"),
