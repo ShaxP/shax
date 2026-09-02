@@ -1345,7 +1345,7 @@ const TOOL_PROPOSAL_BUTTON_APPROVE_DESTRUCTIVE: CSSProperties = {
   ...TOOL_PROPOSAL_BUTTON,
   background: "var(--red)",
   borderColor: "var(--red)",
-  color: "#fff",
+  color: "var(--red-fg)",
   fontWeight: 600,
 };
 
@@ -1354,7 +1354,7 @@ const TOOL_PROPOSAL_BUTTON_RUN_PROBE: CSSProperties = {
   ...TOOL_PROPOSAL_BUTTON,
   background: "var(--green)",
   borderColor: "var(--green)",
-  color: "#fff",
+  color: "var(--green-fg)",
   fontWeight: 600,
 };
 
@@ -1383,7 +1383,15 @@ const APPROVE_MNEMONIC: CSSProperties = {
   fontSize: 10.5,
   fontFamily: "var(--font-mono)",
   fontWeight: 500,
-  background: "rgba(255, 255, 255, 0.18)",
+  // Veil derived from the button's own ink rather than a fixed
+  // white. A hardcoded `rgba(255,255,255,0.18)` only reads correctly
+  // when the button beneath is mid-dark with white text; on a preset
+  // whose accent is light it washes out, and once the ink went dark
+  // (accent-fg) the chip lightened exactly where it should have
+  // darkened. `currentColor` is the button's `color`, so this
+  // self-corrects on --accent, --green and --red in every preset.
+  // Same class of bug as the M12.6c ChatMarkdown overlay fix.
+  background: "color-mix(in srgb, currentColor 18%, transparent)",
   color: "inherit",
   lineHeight: 1.3,
 };
