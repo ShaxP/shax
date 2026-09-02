@@ -18,6 +18,7 @@
     "fg-faint": "#5f8f96",
     "accent": "#faa968",
     "accent-soft": "rgba(250, 169, 104, 0.14)",
+    "accent-fg": "#031222",
     "green": "#028391",
     "red": "#f85525",
     "amber": "#e97b3c",

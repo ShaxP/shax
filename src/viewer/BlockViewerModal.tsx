@@ -133,7 +133,7 @@ const TOGGLE_BASE: CSSProperties = {
 const TOGGLE_ON: CSSProperties = {
   ...TOGGLE_BASE,
   background: "var(--accent)",
-  color: "var(--bg)",
+  color: "var(--accent-fg)",
 };
 
 const TOGGLE_OFF: CSSProperties = {

@@ -18,6 +18,7 @@
     "fg-faint": "#565b66",
     "accent": "oklch(0.72 0.13 250)",
     "accent-soft": "oklch(0.72 0.13 250 / 0.14)",
+    "accent-fg": "#090a0d",
     "green": "oklch(0.74 0.11 155)",
     "red": "oklch(0.69 0.16 25)",
     "amber": "oklch(0.8 0.11 80)",

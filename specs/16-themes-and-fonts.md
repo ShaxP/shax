@@ -9,6 +9,7 @@ Grows out of `13-design.md` (the token palette M1.5 defined) and `11-tech-stack-
 - A **theme** is a set of colour values: an ANSI 16-colour palette xterm.js consumes plus a chrome palette rendered as CSS custom properties. Purely data.
 - A theme carries a **mode** (`light` or `dark`) and an **id** that identifies it in preferences and picker UIs.
 - A theme is **not** layout, spacing, typography choice, or component structure. Those are token defaults from `13`. A theme swap moves colour, not geometry.
+- A theme carries its own **ink for coloured surfaces**, `chrome.accent-fg` — the text colour used wherever `--accent` is a *background* (the statusline mode pill, the calendar's today chip, every primary and approve button). It is deliberately not `--fg`, `--bg`, or a literal white: those are readable only on presets whose accent happens to be dark, and are unreadable on presets whose accent is light. Every preset's `accent-fg` must reach WCAG AA (4.5:1) against its own `accent`, which `themes.rs` enforces as a test — a new preset cannot ship an illegible chip.
 - A theme is **not** user-authored in v1. The catalog is embedded in the app bundle as JSON. A future community-drop-in mechanism (`~/.config/shax/themes/<id>/theme.json`) is called out in `12` — deferred, not designed here.
 
 ## What a font is (and isn't)

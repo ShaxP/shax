@@ -177,7 +177,10 @@ const MODE_PILL: CSSProperties = {
   alignItems: "center",
   height: "100%",
   padding: "0 13px",
-  color: "#fff",
+  // Ink for every mode background below (--accent / --amber / --cyan),
+  // all of which are bright chip colours. `#fff` on them failed WCAG AA
+  // on every preset — worst case 1.0:1 on Phosphor White.
+  color: "var(--accent-fg)",
   fontWeight: 700,
   letterSpacing: "0.08em",
 };

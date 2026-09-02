@@ -431,7 +431,7 @@ const BUTTON_PRIMARY: CSSProperties = {
   ...BUTTON,
   background: "var(--accent)",
   borderColor: "var(--accent)",
-  color: "#fff",
+  color: "var(--accent-fg)",
   fontWeight: 600,
 };
 
@@ -1476,7 +1476,7 @@ function ThemeOption({
         borderRadius: 4,
         border: "1px solid transparent",
         background: active ? "var(--accent)" : "transparent",
-        color: active ? "#fff" : "var(--fg)",
+        color: active ? "var(--accent-fg)" : "var(--fg)",
         fontFamily: "var(--font-ui)",
         fontSize: 12,
         fontWeight: active ? 600 : 400,
