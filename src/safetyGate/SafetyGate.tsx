@@ -181,7 +181,7 @@ const BUTTON_APPROVE: CSSProperties = {
   ...BUTTON_BASE,
   background: "var(--accent)",
   borderColor: "var(--accent)",
-  color: "#fff",
+  color: "var(--accent-fg)",
   fontWeight: 600,
 };
 

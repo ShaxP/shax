@@ -92,6 +92,9 @@
   /* Accent */
   --accent: oklch(0.72 0.13 250);
   --accent-soft: oklch(0.72 0.13 250 / 0.14);
+  /* Foreground for text sitting ON --accent. Never --fg: on presets
+     with a light accent that fails WCAG AA badly. See spec 16. */
+  --accent-fg: #090a0d;
 
   /* Semantic */
   --green: oklch(0.74 0.11 155);

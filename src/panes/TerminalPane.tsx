@@ -1648,7 +1648,7 @@ function TerminalPaneInner({
                 alignItems: "center",
                 gap: 8,
                 background: "var(--accent)",
-                color: "var(--bg)",
+                color: "var(--accent-fg)",
                 border: "none",
                 borderRadius: "var(--radius-sm)",
                 padding: "5px 12px",

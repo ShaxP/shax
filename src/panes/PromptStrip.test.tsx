@@ -843,9 +843,12 @@ describe("PromptStrip / cursor focus state (M12.8)", () => {
     );
     fireEvent.focus(screen.getByTestId("prompt-strip"));
     const cursor = screen.getByTestId("prompt-cursor");
-    // Focused block: accent bg, bg-inverse fg.
+    // Focused block: accent bg, with the preset's accent ink so the
+    // character under the block stays readable. `--bg` used to stand in
+    // for that and only worked on presets whose background happened to
+    // contrast with their accent.
     expect(cursor.style.background).toBe("var(--accent)");
-    expect(cursor.style.color).toBe("var(--bg)");
+    expect(cursor.style.color).toBe("var(--accent-fg)");
     fireEvent.blur(screen.getByTestId("prompt-strip"));
     // Blurred block: transparent bg, fg text color, accent border.
     expect(cursor.style.background).toBe("transparent");

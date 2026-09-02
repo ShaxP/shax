@@ -387,7 +387,7 @@ const OPEN_SETTINGS_BUTTON: CSSProperties = {
   borderRadius: 4,
   border: "1px solid var(--accent)",
   background: "var(--accent)",
-  color: "#fff",
+  color: "var(--accent-fg)",
   fontFamily: "var(--font-ui)",
   fontSize: 12,
   fontWeight: 600,
@@ -1337,7 +1337,7 @@ const TOOL_PROPOSAL_BUTTON_APPROVE: CSSProperties = {
   ...TOOL_PROPOSAL_BUTTON,
   background: "var(--accent)",
   borderColor: "var(--accent)",
-  color: "#fff",
+  color: "var(--accent-fg)",
   fontWeight: 600,
 };
 

@@ -132,7 +132,7 @@ const USE_BUTTON: CSSProperties = {
   border: "1px solid var(--accent)",
   borderRadius: 4,
   background: "var(--accent)",
-  color: "#fff",
+  color: "var(--accent-fg)",
   fontFamily: "var(--font-ui)",
   fontSize: 12,
   fontWeight: 600,
