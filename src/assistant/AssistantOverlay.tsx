@@ -1378,7 +1378,19 @@ const PROBE_CHIP: CSSProperties = {
 // matching the old modal's "(Enter)" hint (M7.7d).
 const APPROVE_MNEMONIC: CSSProperties = {
   marginLeft: 8,
-  fontSize: 10.5,
+  // Slightly above the button label's 12px. `⏎` and `⌥` carry far
+  // less ink than a letterform, so at the label's own size they read
+  // as smaller than they measure; at the previous 10.5 the return
+  // symbol muddied into a smudge.
+  //
+  // Size is the only lever here: `fonts.css` declares a single
+  // `font-weight: normal` face per family, so asking for a heavier
+  // weight buys synthetic emboldening, which smears a thin symbol
+  // rather than thickening it. Swapping `⏎` (U+23CE) for `↵` (U+21B5)
+  // would be worse still — JetBrains Mono covers the former but not
+  // the latter, so `↵` falls out to a fallback face and stops
+  // matching the `⌥` beside it.
+  fontSize: 12.5,
   fontFamily: "var(--font-mono)",
   fontWeight: 500,
   // No fill: the mnemonic sits ON the button and reads as part of its
