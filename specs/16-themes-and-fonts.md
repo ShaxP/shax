@@ -71,6 +71,7 @@ Built-in themes for v1. Each ships as a JSON file under `src-tauri/assets/themes
 - **Gruvbox** — Light, Dark.
 - **Nord** — dark.
 - **Tokyo Night** — dark.
+- **Retro '82** — dark. Amber-and-cream on deep navy with teal structure; a port of the [retro-82](https://github.com/oldjobobo/retro-82.nvim) palette (CC0), which ships as an Omarchy desktop theme. Ported from the theme's own generated terminal palette so a Shax pane matches the user's other terminals exactly, including two upstream quirks kept deliberately: `blue` and `magenta` are the same teal, and most `bright*` slots repeat their regular counterpart.
 - **Phosphor** — Amber, Green, White. Terminal-only CRT recreations; ignore the chrome palette and force the entire UI to the phosphor colour with a subtle scanline background — deliberate retro toggle rather than a serious daily driver.
 
 Every preset is licensed for redistribution under its upstream terms; each JSON file carries a `source` + `license` field the About screen surfaces.
