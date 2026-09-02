@@ -93,7 +93,7 @@ const DAY_OTHER_MONTH: CSSProperties = {
 const DAY_TODAY: CSSProperties = {
   ...DAY_BASE,
   background: "var(--accent)",
-  color: "var(--fg)",
+  color: "var(--accent-fg)",
   fontWeight: 600,
 };
 
@@ -124,7 +124,7 @@ const RAIL_DAY: CSSProperties = {
   // between the two states of the widget.
   borderRadius: 4,
   background: "var(--accent)",
-  color: "var(--fg)",
+  color: "var(--accent-fg)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

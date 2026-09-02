@@ -288,6 +288,101 @@ mod tests {
         assert_eq!(get(DEFAULT_LIGHT_THEME_ID).unwrap().mode, ThemeMode::Light);
     }
 
+    /// Parse the colour syntaxes the presets actually use: `#rrggbb`
+    /// and `oklch(L C H)` (the Shax presets express their accents in
+    /// oklch). Returns linear-light sRGB components.
+    fn parse_color(raw: &str) -> Option<[f64; 3]> {
+        let raw = raw.trim();
+        if let Some(hex) = raw.strip_prefix('#') {
+            if hex.len() != 6 {
+                return None;
+            }
+            let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+            return Some([
+                f64::from(ch(0)?) / 255.0,
+                f64::from(ch(2)?) / 255.0,
+                f64::from(ch(4)?) / 255.0,
+            ]);
+        }
+        let inner = raw.strip_prefix("oklch(")?.trim_end_matches(')');
+        // `L C H` optionally followed by `/ alpha`, which we ignore —
+        // these are opaque surfaces.
+        let head = inner.split('/').next()?;
+        let mut parts = head.split_whitespace();
+        let l: f64 = parts.next()?.parse().ok()?;
+        let c: f64 = parts.next()?.parse().ok()?;
+        let h: f64 = parts.next()?.parse().ok()?;
+        let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+        let l_ = (l + 0.396_337_777_4 * a + 0.215_803_757_3 * b).powi(3);
+        let m_ = (l - 0.105_561_345_8 * a - 0.063_854_172_8 * b).powi(3);
+        let s_ = (l - 0.089_484_177_5 * a - 1.291_485_548_0 * b).powi(3);
+        let lin = [
+            4.076_741_662_1 * l_ - 3.307_711_591_3 * m_ + 0.230_969_929_2 * s_,
+            -1.268_438_004_6 * l_ + 2.609_757_401_1 * m_ - 0.341_319_396_5 * s_,
+            -0.004_196_086_3 * l_ - 0.703_418_614_7 * m_ + 1.707_614_701_0 * s_,
+        ];
+        // Back to gamma-encoded sRGB so both syntaxes reach
+        // `relative_luminance` in the same space.
+        let enc = |v: f64| {
+            let v = v.clamp(0.0, 1.0);
+            if v <= 0.003_130_8 {
+                12.92 * v
+            } else {
+                1.055 * v.powf(1.0 / 2.4) - 0.055
+            }
+        };
+        Some([enc(lin[0]), enc(lin[1]), enc(lin[2])])
+    }
+
+    /// WCAG 2.1 relative luminance.
+    fn relative_luminance(srgb: [f64; 3]) -> f64 {
+        let lin = |c: f64| {
+            if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(srgb[0]) + 0.7152 * lin(srgb[1]) + 0.0722 * lin(srgb[2])
+    }
+
+    fn contrast_ratio(a: [f64; 3], b: [f64; 3]) -> f64 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// `accent-fg` is the ink for text sitting ON `--accent`: the mode
+    /// pill, the calendar's today chip, every primary button.
+    ///
+    /// Before this token existed the codebase had three different
+    /// answers — `#fff`, `--fg`, and `--bg` — none theme-aware. On a
+    /// preset with a light accent they were unreadable: white on Retro
+    /// '82's `#faa968` is 1.92:1 and the calendar's `--fg` cream was
+    /// 1.44:1, against a 4.5:1 requirement.
+    ///
+    /// Pinning the invariant here means a new preset cannot ship an
+    /// illegible accent chip, and nobody can "tidy" an accent-fg back
+    /// to a foreground colour without CI saying so.
+    #[test]
+    fn accent_fg_is_legible_on_accent_in_every_preset() {
+        for theme in catalog() {
+            let accent = theme.chrome.get("accent").expect("accent");
+            let ink = theme.chrome.get("accent-fg").expect("accent-fg");
+            let a = parse_color(accent)
+                .unwrap_or_else(|| panic!("{}: cannot parse accent {accent}", theme.id));
+            let f = parse_color(ink)
+                .unwrap_or_else(|| panic!("{}: cannot parse accent-fg {ink}", theme.id));
+            let ratio = contrast_ratio(a, f);
+            assert!(
+                ratio >= 4.5,
+                "{}: accent-fg {ink} on accent {accent} is {ratio:.2}:1, below the WCAG AA \
+                 minimum of 4.5:1 for normal text",
+                theme.id,
+            );
+        }
+    }
+
     #[test]
     fn every_preset_ships_required_chrome_keys() {
         // These are the CSS custom properties currently
@@ -308,6 +403,7 @@ mod tests {
             "fg-faint",
             "accent",
             "accent-soft",
+            "accent-fg",
             "green",
             "red",
             "amber",

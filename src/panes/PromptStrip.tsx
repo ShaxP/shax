@@ -329,7 +329,7 @@ const CURSOR_BLOCK_FOCUSED: CSSProperties = {
   minWidth: "1ch",
   height: CURSOR_HEIGHT,
   background: "var(--accent)",
-  color: "var(--bg)",
+  color: "var(--accent-fg)",
   verticalAlign: CURSOR_VERTICAL_ALIGN,
   // Zero horizontal padding so the block aligns with the
   // underlying character's width exactly. `lineHeight` matches
