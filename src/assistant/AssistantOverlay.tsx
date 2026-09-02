@@ -1378,20 +1378,36 @@ const PROBE_CHIP: CSSProperties = {
 // matching the old modal's "(Enter)" hint (M7.7d).
 const APPROVE_MNEMONIC: CSSProperties = {
   marginLeft: 8,
-  padding: "1px 6px",
-  borderRadius: 4,
-  fontSize: 10.5,
+  // Slightly above the button label's 12px. `⏎` and `⌥` carry far
+  // less ink than a letterform, so at the label's own size they read
+  // as smaller than they measure; at the previous 10.5 the return
+  // symbol muddied into a smudge.
+  //
+  // Size is the only lever here: `fonts.css` declares a single
+  // `font-weight: normal` face per family, so asking for a heavier
+  // weight buys synthetic emboldening, which smears a thin symbol
+  // rather than thickening it. Swapping `⏎` (U+23CE) for `↵` (U+21B5)
+  // would be worse still — JetBrains Mono covers the former but not
+  // the latter, so `↵` falls out to a fallback face and stops
+  // matching the `⌥` beside it.
+  fontSize: 12.5,
   fontFamily: "var(--font-mono)",
   fontWeight: 500,
-  // Veil derived from the button's own ink rather than a fixed
-  // white. A hardcoded `rgba(255,255,255,0.18)` only reads correctly
-  // when the button beneath is mid-dark with white text; on a preset
-  // whose accent is light it washes out, and once the ink went dark
-  // (accent-fg) the chip lightened exactly where it should have
-  // darkened. `currentColor` is the button's `color`, so this
-  // self-corrects on --accent, --green and --red in every preset.
-  // Same class of bug as the M12.6c ChatMarkdown overlay fix.
-  background: "color-mix(in srgb, currentColor 18%, transparent)",
+  // No fill: the mnemonic sits ON the button and reads as part of its
+  // label, so it takes the button's own background.
+  //
+  // A filled chip needs a colour that contrasts with the button, and
+  // every such colour is wrong on some preset. The original fixed
+  // `rgba(255,255,255,0.18)` washed out on presets with a light
+  // accent; deriving the veil from `currentColor` fixed that but then
+  // went visibly dark on those same buttons, because the ink is dark
+  // there. Both are a patch on a surface that wants none.
+  //
+  // The safety gate's modal already renders the same hint as plain
+  // text ("Run anyway (Enter)"), so dropping the fill also makes the
+  // two approval surfaces agree. `padding` and `borderRadius` went
+  // with it — they only shaped the fill; `marginLeft` is the gap.
+  background: "transparent",
   color: "inherit",
   lineHeight: 1.3,
 };
