@@ -60,24 +60,82 @@ export function isDestructive(command: string): boolean {
   return destructiveReason(command) !== null;
 }
 
-/** Human-readable reason a command matched a destructive
- *  pattern. Returned for the modal's headline; null if not
- *  destructive. */
-export function destructiveReason(command: string): string | null {
-  const trimmed = command.trim();
-  if (trimmed.length === 0) return null;
+/** Leading shell keywords and grouping that can sit in front of a
+ *  real command inside a compound statement — `if …; then rm -rf x; fi`
+ *  hands us the segment `then rm -rf x`, which no `^`-anchored pattern
+ *  would match. */
+const SEGMENT_PREFIX = /^(?:(?:then|else|elif|do|if|while|until|time)\s+|[!({]\s*)/;
 
+/** Split a compound command into the individual commands it runs.
+ *
+ *  Deliberately does NOT split on a single `|`: the "piping remote
+ *  script to a shell" pattern (`curl … | sh`) needs the pipe intact to
+ *  match at all, and splitting it would turn one destructive command
+ *  into two innocent-looking halves — weakening the gate rather than
+ *  strengthening it.
+ *
+ *  Quoting is not parsed. `echo "a; b"` therefore splits, which can
+ *  only ever produce a false positive — one extra Enter press, the
+ *  trade this module already makes everywhere else.
+ */
+function commandSegments(command: string): string[] {
+  const segments: string[] = [];
+  for (const raw of command.split(/&&|\|\||;|\n/)) {
+    let segment = raw.trim();
+    for (;;) {
+      const stripped = segment.replace(SEGMENT_PREFIX, "");
+      if (stripped === segment) break;
+      segment = stripped;
+    }
+    if (segment.length > 0) segments.push(segment);
+  }
+  return segments;
+}
+
+/** Match a single command (no `&&` / `;` chaining) against the
+ *  destructive patterns. */
+function segmentReason(segment: string): string | null {
   // rm handled specially because flag ORDER varies and the
   // "near / or $HOME" and wildcard cases are subsets of the
   // general "recursive force delete" catch-all.
-  if (isRmRecursiveForce(trimmed)) {
-    if (/\s(?:\/|\$HOME|~)(?:\s|$)/.test(trimmed)) return "recursive delete near / or $HOME";
-    if (/\s\*(?:\s|$)/.test(trimmed)) return "wildcard force delete";
+  if (isRmRecursiveForce(segment)) {
+    if (/\s(?:\/|\$HOME|~)(?:\s|$)/.test(segment)) return "recursive delete near / or $HOME";
+    if (/\s\*(?:\s|$)/.test(segment)) return "wildcard force delete";
     return "recursive force delete";
   }
 
   for (const { test, reason } of REASONED_PATTERNS) {
-    if (test.test(trimmed)) return reason;
+    if (test.test(segment)) return reason;
+  }
+  return null;
+}
+
+/** Human-readable reason a command matched a destructive
+ *  pattern. Returned for the modal's headline; null if not
+ *  destructive.
+ *
+ *  Every pattern here is `^`-anchored, so before this looked at
+ *  segments it only ever inspected the FIRST command in a compound
+ *  statement. `rm -rf /tmp/x` was caught; `cd /tmp && rm -rf x` and
+ *  `test -d /tmp/x && rm -rf /tmp/x` were not — and a model asked to
+ *  delete a directory that may not exist will readily emit the guarded
+ *  form. The guard defeated the anchor and the user got the ordinary
+ *  approval card for a recursive delete.
+ *
+ *  The whole string is still tested first, because the pipe-to-shell
+ *  pattern only matches with its pipe in place. Segments are tested
+ *  after, so a destructive command anywhere in a chain is caught.
+ */
+export function destructiveReason(command: string): string | null {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) return null;
+
+  const whole = segmentReason(trimmed);
+  if (whole !== null) return whole;
+
+  for (const segment of commandSegments(trimmed)) {
+    const reason = segmentReason(segment);
+    if (reason !== null) return reason;
   }
   return null;
 }

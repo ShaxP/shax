@@ -40,6 +40,24 @@ Pulled from `src/safetyGate/policy.ts:122-157`. Order matters — first match wi
 
 The classifier is intentionally over-cautious. Regex intent is captured above — the actual patterns tolerate `sudo` prefixes, `git -C <path>` and `git -c key=val` prefixes, and every reasonable ordering of clustered flags (`-rf`, `-vrf`, `-rvf`, `-r -f`, `--recursive --force`). False positives cost the user one `Enter` press; false negatives are how you delete a hard drive.
 
+## Compound commands
+
+Every pattern above is anchored to the start of a command, so the classifier tests the whole string **and** each command in a chain, splitting on `&&`, `||`, `;` and newlines. A destructive command anywhere in the chain trips the gate:
+
+```sh
+cd /tmp && rm -rf build          # recursive force delete
+test -d ./dist && rm -rf ./dist  # recursive force delete
+if [ -d x ]; then rm -rf x; fi   # recursive force delete
+cd repo && git push --force      # force push
+```
+
+Leading shell keywords (`then`, `else`, `do`, `if`, `while`, `until`, `time`) and grouping (`(`, `{`, `!`) are stripped from each segment first, so the command inside an `if` block is seen.
+
+Two deliberate limits:
+
+- **A single `|` is not a split point.** The `curl … | sh` pattern needs its pipe to match; splitting would turn one destructive command into two innocent halves and weaken the gate.
+- **Quoting is not parsed.** `echo "a; b"` splits, which can only produce a false positive — one extra `Enter`, the trade this module makes everywhere. Commands nested inside a string (`bash -c 'rm -rf x'`) or handed to `find -exec` are *not* inspected; catching those needs a real shell parser.
+
 ## What this means for extension authors
 
 - **You're free to offer destructive actions.** A `git-history-rewrite` community command is fine; the user just sees the red gate before it runs. That's the point of the gate, not a limitation.
