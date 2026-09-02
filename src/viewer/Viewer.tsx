@@ -17,13 +17,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import {
+  HighlightStyle,
   bracketMatching,
-  defaultHighlightStyle,
   foldGutter,
   foldKeymap,
   indentOnInput,
   syntaxHighlighting,
 } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
@@ -36,7 +37,6 @@ import {
   lineNumbers,
   rectangularSelection,
 } from "@codemirror/view";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { vim, Vim } from "@replit/codemirror-vim";
 
 import { languageExtension, type LanguageId } from "./detectLanguage";
@@ -135,19 +135,145 @@ const MODE_PILL_STYLE: CSSProperties = {
   fontWeight: 600,
 };
 
-/** Extension bundle used for the light theme — no editor
- *  chrome extension (CodeMirror's default renders correctly
- *  on light) plus `defaultHighlightStyle`, which is designed
- *  for light backgrounds and covers the tag categories the
- *  language extensions emit. */
-const lightThemeExtensions: Extension = [syntaxHighlighting(defaultHighlightStyle)];
+/**
+ * Editor chrome, painted from the active preset's CSS custom
+ * properties rather than a bundled palette.
+ *
+ * Every value is a `var(--…)` that `applyTheme` writes onto
+ * `<html>`, so switching preset restyles the editor with no
+ * reconfigure — the browser re-resolves the variables. Only the
+ * `dark` flag below has to be swapped, because CodeMirror uses it
+ * for internal decisions (selection layering, native scrollbar
+ * hinting) that a colour can't express.
+ *
+ * This replaces `@codemirror/theme-one-dark`, which hardcoded
+ * `#282c34` and its own token colours for *every* dark preset —
+ * so the viewer painted a grey editor with One Dark syntax while
+ * the inline `cat` formatter, driven by the same file, used the
+ * preset's `--syntax-*` values. One file, two colour schemes.
+ */
+const EDITOR_CHROME = {
+  "&": {
+    backgroundColor: "var(--pane)",
+    color: "var(--fg)",
+  },
+  ".cm-content": { caretColor: "var(--cursor, var(--accent))" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--cursor, var(--accent))" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+    { backgroundColor: "var(--selection, var(--surface-hover))" },
+  ".cm-gutters": {
+    backgroundColor: "var(--pane2)",
+    color: "var(--fg-faint)",
+    borderRight: "1px solid var(--border)",
+  },
+  ".cm-activeLine": { backgroundColor: "var(--surface)" },
+  ".cm-activeLineGutter": {
+    backgroundColor: "var(--surface)",
+    color: "var(--fg-dim)",
+  },
+  ".cm-foldPlaceholder": {
+    backgroundColor: "var(--surface)",
+    color: "var(--fg-dim)",
+    border: "none",
+  },
+  ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
+  // Search hits keep the normal foreground and are marked with an
+  // outline rather than a filled accent background: text on a solid
+  // `--accent` is a contrast trap on presets whose accent is light.
+  ".cm-searchMatch": {
+    backgroundColor: "var(--accent-soft)",
+    outline: "1px solid var(--border-strong)",
+  },
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "var(--accent-soft)",
+    outline: "2px solid var(--accent)",
+  },
+  ".cm-matchingBracket, .cm-nonmatchingBracket": {
+    backgroundColor: "var(--surface-hover)",
+    outline: "1px solid var(--border-strong)",
+  },
+  ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--fg)" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+  ".cm-tooltip": {
+    backgroundColor: "var(--surface)",
+    border: "1px solid var(--border)",
+    color: "var(--fg)",
+  },
+};
+
+/**
+ * Token colours from the preset's `syntax` block — the same
+ * `--syntax-*` variables `syntax.css` uses for highlight.js, so the
+ * viewer and the inline formatter agree on what a keyword looks like.
+ *
+ * Tags the presets have no opinion on fall through to the nearest
+ * sibling (regex shares `literal`, meta shares `comment`), matching
+ * how `syntax.css` groups the hljs classes.
+ */
+const shaxHighlightStyle = HighlightStyle.define([
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: "var(--syntax-comment)" },
+  { tag: [t.meta, t.processingInstruction], color: "var(--syntax-comment)" },
+  {
+    tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.definitionKeyword, t.operatorKeyword],
+    color: "var(--syntax-keyword)",
+  },
+  { tag: [t.string, t.special(t.string), t.docString], color: "var(--syntax-string)" },
+  { tag: [t.number, t.integer, t.float], color: "var(--syntax-number)" },
+  { tag: [t.bool, t.null, t.atom, t.unit], color: "var(--syntax-literal)" },
+  { tag: [t.regexp, t.escape], color: "var(--syntax-literal)" },
+  {
+    tag: [t.standard(t.name), t.standard(t.variableName), t.macroName],
+    color: "var(--syntax-builtin)",
+  },
+  { tag: [t.variableName, t.propertyName, t.labelName], color: "var(--syntax-name)" },
+  {
+    tag: [t.function(t.variableName), t.function(t.propertyName)],
+    color: "var(--syntax-title)",
+  },
+  { tag: [t.typeName, t.className, t.namespace, t.tagName], color: "var(--syntax-type)" },
+  {
+    tag: [t.definition(t.variableName), t.definition(t.propertyName)],
+    color: "var(--syntax-variable)",
+  },
+  { tag: [t.attributeName], color: "var(--syntax-flag)" },
+  {
+    tag: [
+      t.operator,
+      t.arithmeticOperator,
+      t.logicOperator,
+      t.compareOperator,
+      t.definitionOperator,
+      t.updateOperator,
+      t.derefOperator,
+    ],
+    color: "var(--syntax-operator)",
+  },
+  { tag: [t.heading], color: "var(--syntax-title)", fontWeight: "bold" },
+  { tag: [t.link, t.url], color: "var(--syntax-title)", textDecoration: "underline" },
+  { tag: [t.emphasis], fontStyle: "italic" },
+  { tag: [t.strong], fontWeight: "bold" },
+  { tag: [t.strikethrough], textDecoration: "line-through" },
+  { tag: [t.invalid], color: "var(--red)" },
+]);
+
+/** Exposed so the theme tests can assert the chrome is expressed
+ *  purely in preset variables — a literal colour here is exactly
+ *  the regression that made the viewer ignore the active theme. */
+export const __testing = { EDITOR_CHROME };
 
 /** Resolve the current theme from `document.documentElement`
- *  (which `applyTheme` sets). Falls back to dark. */
+ *  (which `applyTheme` sets). Falls back to dark.
+ *
+ *  Colours ride on CSS variables, so only the `dark` flag actually
+ *  differs between the two branches. */
 function currentThemeExtension(): Extension {
   const attr =
     typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null;
-  return attr === "light" ? lightThemeExtensions : oneDark;
+  return [
+    EditorView.theme(EDITOR_CHROME, { dark: attr !== "light" }),
+    syntaxHighlighting(shaxHighlightStyle),
+  ];
 }
 
 export function Viewer({ text, language = "plaintext", style }: ViewerProps): React.ReactElement {
