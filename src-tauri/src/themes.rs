@@ -352,34 +352,56 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// `accent-fg` is the ink for text sitting ON `--accent`: the mode
-    /// pill, the calendar's today chip, every primary button.
+    /// Each `<surface>-fg` is the ink for text sitting ON that surface
+    /// when it is used as a *background*:
     ///
-    /// Before this token existed the codebase had three different
-    /// answers — `#fff`, `--fg`, and `--bg` — none theme-aware. On a
-    /// preset with a light accent they were unreadable: white on Retro
-    /// '82's `#faa968` is 1.92:1 and the calendar's `--fg` cream was
-    /// 1.44:1, against a 4.5:1 requirement.
+    /// - `accent-fg` — the mode pill, the calendar's today chip, every
+    ///   primary and approve button.
+    /// - `green-fg` — the assistant's read-only "Run" probe button.
+    /// - `red-fg` — the safety gate's "Run anyway" and the assistant's
+    ///   destructive proposal.
+    ///
+    /// Before these tokens the codebase had three different answers —
+    /// `#fff`, `--fg`, `--bg` — none theme-aware. White failed WCAG AA
+    /// on 14 of 17 presets over `--green` and 12 of 17 over `--red`,
+    /// bottoming out at 1.14:1 (Phosphor White's green) and 1.31:1
+    /// (Phosphor Green's red). The red ones front destructive actions,
+    /// so this is a safety property, not only an aesthetic one.
+    ///
+    /// The right ink is genuinely per-theme *and* per-surface: 5 presets
+    /// want a LIGHT ink on `--red` (Solarized's red is dark enough that
+    /// white wins) while wanting a dark one on `--accent`. That is why
+    /// there are three tokens rather than one reused everywhere —
+    /// reusing `accent-fg` would regress Nord red 4.09 -> 3.56.
     ///
     /// Pinning the invariant here means a new preset cannot ship an
-    /// illegible accent chip, and nobody can "tidy" an accent-fg back
-    /// to a foreground colour without CI saying so.
+    /// illegible chip, and nobody can "tidy" one of these back to a
+    /// foreground colour without CI saying so.
     #[test]
-    fn accent_fg_is_legible_on_accent_in_every_preset() {
+    fn surface_inks_are_legible_in_every_preset() {
         for theme in catalog() {
-            let accent = theme.chrome.get("accent").expect("accent");
-            let ink = theme.chrome.get("accent-fg").expect("accent-fg");
-            let a = parse_color(accent)
-                .unwrap_or_else(|| panic!("{}: cannot parse accent {accent}", theme.id));
-            let f = parse_color(ink)
-                .unwrap_or_else(|| panic!("{}: cannot parse accent-fg {ink}", theme.id));
-            let ratio = contrast_ratio(a, f);
-            assert!(
-                ratio >= 4.5,
-                "{}: accent-fg {ink} on accent {accent} is {ratio:.2}:1, below the WCAG AA \
-                 minimum of 4.5:1 for normal text",
-                theme.id,
-            );
+            for surface in ["accent", "green", "red"] {
+                let ink_key = format!("{surface}-fg");
+                let bg = theme
+                    .chrome
+                    .get(surface)
+                    .unwrap_or_else(|| panic!("{}: missing {surface}", theme.id));
+                let ink = theme
+                    .chrome
+                    .get(&ink_key)
+                    .unwrap_or_else(|| panic!("{}: missing {ink_key}", theme.id));
+                let b = parse_color(bg)
+                    .unwrap_or_else(|| panic!("{}: cannot parse {surface} {bg}", theme.id));
+                let f = parse_color(ink)
+                    .unwrap_or_else(|| panic!("{}: cannot parse {ink_key} {ink}", theme.id));
+                let ratio = contrast_ratio(b, f);
+                assert!(
+                    ratio >= 4.5,
+                    "{}: {ink_key} {ink} on {surface} {bg} is {ratio:.2}:1, below the WCAG AA \
+                     minimum of 4.5:1 for normal text",
+                    theme.id,
+                );
+            }
         }
     }
 
@@ -405,7 +427,9 @@ mod tests {
             "accent-soft",
             "accent-fg",
             "green",
+            "green-fg",
             "red",
+            "red-fg",
             "amber",
             "cyan",
             "magenta",

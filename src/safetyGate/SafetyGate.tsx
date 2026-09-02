@@ -189,7 +189,7 @@ const BUTTON_APPROVE_DESTRUCTIVE: CSSProperties = {
   ...BUTTON_BASE,
   background: "var(--red)",
   borderColor: "var(--red)",
-  color: "#fff",
+  color: "var(--red-fg)",
   fontWeight: 600,
 };
 
