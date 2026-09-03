@@ -444,3 +444,112 @@ describe("SafetyGate", () => {
     window.removeEventListener("shax:emit-command-approved", approvedSpy);
   });
 });
+
+describe("SafetyGate — undeliverable approved emits", () => {
+  // An approved command that no pane picks up used to vanish. The
+  // pane handler ignores emits addressed elsewhere, so a stale or
+  // closed paneId reached no listener and nobody was left to
+  // complain; the assistant then waited out its full five-minute
+  // timeout and told the user they had declined a command they had
+  // in fact approved.
+  it("reports an approved emit that no pane acknowledges", () => {
+    vi.useFakeTimers();
+    try {
+      render(<SafetyGate />);
+      const rejected: { id: string; reason: string }[] = [];
+      const onRejected = (e: Event): void => {
+        rejected.push((e as CustomEvent<{ id: string; reason: string }>).detail);
+      };
+      window.addEventListener("shax:approval-rejected", onRejected);
+      try {
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent("shax:emit-command", {
+              // readonly → the gate's silent-forward path, which is
+              // where a probe's command travels after the Run click.
+              detail: {
+                paneId: "pty-gone",
+                command: "ls -lh",
+                source: "ai",
+                toolCallId: "call-1",
+                readonly: true,
+              },
+            }),
+          );
+        });
+        expect(rejected).toHaveLength(0);
+        act(() => {
+          vi.advanceTimersByTime(2500);
+        });
+        expect(rejected).toHaveLength(1);
+        expect(rejected[0]?.id).toBe("call-1");
+        expect(rejected[0]?.reason).toContain("no pane accepted");
+      } finally {
+        window.removeEventListener("shax:approval-rejected", onRejected);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays quiet when a pane acknowledges the command", () => {
+    vi.useFakeTimers();
+    try {
+      render(<SafetyGate />);
+      const rejected: unknown[] = [];
+      const onRejected = (e: Event): void => {
+        rejected.push(e);
+      };
+      const onApproved = (e: Event): void => {
+        const detail = (e as CustomEvent<ApprovedCommandDetail>).detail;
+        // Stand in for TerminalPane committing the command.
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command-accepted", {
+            detail: { toolCallId: detail.toolCallId },
+          }),
+        );
+      };
+      window.addEventListener("shax:approval-rejected", onRejected);
+      window.addEventListener("shax:emit-command-approved", onApproved);
+      try {
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent("shax:emit-command", {
+              detail: {
+                paneId: "pty-1",
+                command: "ls -lh",
+                source: "ai",
+                toolCallId: "call-2",
+                readonly: true,
+              },
+            }),
+          );
+        });
+        act(() => {
+          vi.advanceTimersByTime(2500);
+        });
+        expect(rejected).toHaveLength(0);
+      } finally {
+        window.removeEventListener("shax:approval-rejected", onRejected);
+        window.removeEventListener("shax:emit-command-approved", onApproved);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards the correlation id so the pane can report a refusal", () => {
+    render(<SafetyGate />);
+    const approved = proposeAndCollect({
+      paneId: "pty-1",
+      command: "ls -lh",
+      source: "ai",
+      toolCallId: "call-3",
+      readonly: true,
+    });
+    expect(approved).toHaveLength(1);
+    // Without this the pane has no id to speak with, which is why the
+    // drop paths could only return silently.
+    expect(approved[0]?.detail.toolCallId).toBe("call-3");
+  });
+});
