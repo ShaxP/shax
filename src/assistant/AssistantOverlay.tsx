@@ -414,7 +414,7 @@ interface ChatTurn {
      *   - `declined` — command dropped by the user.
      *  Retrospective turns restored from history default to
      *  `approved` since we only persist settled ones. */
-    status?: "pending" | "approved" | "declined";
+    status?: "pending" | "approved" | "declined" | "timeout";
     /** Only set when kind === "destructive" — surfaces the same
      *  reason the modal used to show in its headline. */
     destructiveReason?: string | null;
@@ -818,7 +818,7 @@ export function AssistantOverlay({
     proposalTurnId: string,
   ): Promise<{
     result: CommandToolResult;
-    status: "approved" | "declined";
+    status: "approved" | "declined" | "timeout";
     destructiveReason: string | null;
   }> => {
     const command = extractCommand(call);
@@ -1003,14 +1003,21 @@ export function AssistantOverlay({
       };
     }
     if (settled.kind === "timeout") {
+      // Deliberately NOT phrased as a decline. This branch means the
+      // approval never resolved either way, which is not the same as
+      // the user saying no — and telling the model otherwise made it
+      // reason about a refusal that never happened. A real decline
+      // takes the `declined` branch above and says so.
       return {
         result: {
           exit_code: null,
           duration_ms: null,
-          output: "The command was not approved by the user (or timed out).",
+          output:
+            "No response after 5 minutes — the approval card is still waiting. " +
+            "This is not a decline; ask the user whether to proceed rather than assuming.",
           truncated: false,
         },
-        status: "declined",
+        status: "timeout",
         destructiveReason,
       };
     }
@@ -1535,6 +1542,13 @@ function ToolProposalBubble({
     headerColor = "var(--fg-faint)";
     headerIcon = "✕";
     headerText = "Declined";
+  } else if (status === "timeout") {
+    // Distinct from Declined: nobody said no, the approval simply
+    // never resolved. Amber rather than faint so an unanswered card
+    // reads as needing attention instead of settled business.
+    headerColor = "var(--amber)";
+    headerIcon = "⧗";
+    headerText = "No response — still awaiting approval";
   } else if (isDestructive) {
     headerColor = "var(--red)";
     headerIcon = "⚠";

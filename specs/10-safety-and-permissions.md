@@ -22,6 +22,16 @@ The gate is source-aware — the *policy* is one, the *rendering surface* is cho
 
 The single-chokepoint property still holds: every command flows through the same classification and the same approve / decline exit, regardless of where the buttons are drawn.
 
+### Approval has three outcomes, not two
+
+Approve and Decline are the outcomes the *user* chooses. A third exists and must be reported as distinct from both: an approved command the pane cannot deliver.
+
+A pane refuses an approved emit when a full-screen program owns it (non-negotiable #4) or it has no shell attached, and an emit addressed to a pane that has since closed reaches no handler at all. None of these is a decline, and reporting them as one is a correctness bug in its own right — the assistant tells the user they refused a command they in fact approved, and reasons onward from a refusal that never happened.
+
+So every approved emit is acknowledged by the pane that commits it. A refusing pane reports its reason; an emit nothing acknowledges within a short window is reported by the gate as undeliverable. The source learns within seconds rather than waiting out its own timeout. A timeout, when it does occur, means only that the approval never resolved — it is surfaced as "no response", never as a decline.
+
+This is a reporting rule, not a relaxation: nothing here approves a command the gate would otherwise stop.
+
 ### Read-only fast path
 
 Pure reads (an `ls` probe, a `git status` probe, a `git diff`) do not need approval. When the assistant proposes a read-only probe (a dedicated tool separate from `run_command`), the card renders as **SUGGESTED — READ ONLY** with a single `Run` button and no Approve / Decline flow. The user's Run click is the confirmation. The command still emits visibly into the pane's scrollback — the log stays an honest audit trail — and the gate still classifies: if the model marks something read-only that the classifier flags as destructive, the gate refuses the emit outright rather than quietly running it, and the model must retry via `run_command` where the user gets a real Approve gate.

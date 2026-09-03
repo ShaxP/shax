@@ -92,6 +92,23 @@ export interface ApprovedCommandDetail {
   paneId: string;
   command: string;
   source: EmitSource;
+  /** Correlation id, forwarded from the proposal so the pane can
+   *  report the command back as rejected if it cannot run it. Without
+   *  this the pane had no id to speak with, so an approved command it
+   *  dropped left the assistant waiting for its full timeout and then
+   *  blaming the user for a decision the pane made. */
+  toolCallId?: string;
+}
+
+/** Detail for `shax:emit-command-accepted` — fired by the pane the
+ *  instant it commits an approved command to the PTY.
+ *
+ *  Its only job is to prove *someone* took the command. An approved
+ *  emit addressed to a pane that no longer exists reaches no handler
+ *  at all, so no component is in a position to report the failure;
+ *  the gate waits for this ack instead and reports the silence. */
+export interface ApprovedCommandAckDetail {
+  toolCallId: string;
 }
 
 interface Pending {
@@ -432,11 +449,60 @@ export function SafetyGate(): React.ReactElement | null {
   );
 }
 
+/** How long to wait for a pane to acknowledge an approved command
+ *  before declaring it undeliverable. Generous next to a keystroke
+ *  write, tiny next to the assistant's five-minute wait — the point is
+ *  to turn a long silence into a prompt, honest error. */
+const ACK_TIMEOUT_MS = 2000;
+
 function dispatchApproved(detail: EmitCommandDetail, source: EmitSource): void {
   const approved: ApprovedCommandDetail = {
     paneId: detail.paneId,
     command: detail.command,
     source,
   };
+  const toolCallId = detail.toolCallId;
+  if (toolCallId !== undefined && toolCallId.length > 0) {
+    approved.toolCallId = toolCallId;
+    watchForAck(toolCallId, detail.paneId);
+  }
   window.dispatchEvent(new CustomEvent("shax:emit-command-approved", { detail: approved }));
+}
+
+/** Report an approved command that no pane picked up.
+ *
+ *  The pane handler ignores emits addressed to a different pane, so a
+ *  stale or closed `paneId` is dropped by every listener and nobody is
+ *  left to complain. Waiting briefly for an ack is the only way to
+ *  notice from here. Panes that *did* receive it and refused (an
+ *  alt-screen program owns the terminal, no shell attached) report
+ *  themselves and ack nothing, so their reason wins the race. */
+function watchForAck(toolCallId: string, paneId: string): void {
+  let acked = false;
+  const onAck = (e: Event): void => {
+    const detail = (e as CustomEvent<ApprovedCommandAckDetail>).detail;
+    if (detail?.toolCallId !== toolCallId) return;
+    acked = true;
+    window.removeEventListener("shax:emit-command-accepted", onAck);
+    window.removeEventListener("shax:approval-rejected", onAlreadyReported);
+  };
+  const onAlreadyReported = (e: Event): void => {
+    const detail = (e as CustomEvent<ApprovalRejectedDetail>).detail;
+    if (detail?.id !== toolCallId) return;
+    acked = true;
+    window.removeEventListener("shax:emit-command-accepted", onAck);
+    window.removeEventListener("shax:approval-rejected", onAlreadyReported);
+  };
+  window.addEventListener("shax:emit-command-accepted", onAck);
+  window.addEventListener("shax:approval-rejected", onAlreadyReported);
+  setTimeout(() => {
+    window.removeEventListener("shax:emit-command-accepted", onAck);
+    window.removeEventListener("shax:approval-rejected", onAlreadyReported);
+    if (acked) return;
+    const rejected: ApprovalRejectedDetail = {
+      id: toolCallId,
+      reason: `no pane accepted the command — pane ${paneId} is gone or has no shell`,
+    };
+    window.dispatchEvent(new CustomEvent("shax:approval-rejected", { detail: rejected }));
+  }, ACK_TIMEOUT_MS);
 }
