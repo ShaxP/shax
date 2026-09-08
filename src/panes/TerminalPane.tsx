@@ -1436,11 +1436,32 @@ function TerminalPaneInner({
   useEffect(() => {
     const handler = (e: Event): void => {
       const detail = (
-        e as CustomEvent<{ paneId: string; command: string; source: "widget" | "ai" | "palette" }>
+        e as CustomEvent<{
+          paneId: string;
+          command: string;
+          source: "widget" | "ai" | "palette";
+          toolCallId?: string;
+        }>
       ).detail;
       if (detail?.paneId !== ptyIdRef.current) return;
+      // Report an approved command this pane cannot run, instead of
+      // returning silently. A silent drop left the assistant waiting
+      // out its full five-minute timeout and then telling the user
+      // they had declined — for a command the user had approved and
+      // the *pane* refused. `shax:approval-rejected` is the existing
+      // channel for exactly this; it just was not being used here.
+      const refuse = (reason: string): void => {
+        const toolCallId = detail.toolCallId;
+        if (toolCallId === undefined || toolCallId.length === 0) return;
+        window.dispatchEvent(
+          new CustomEvent("shax:approval-rejected", { detail: { id: toolCallId, reason } }),
+        );
+      };
       const id = ptyIdRef.current;
-      if (id === null) return;
+      if (id === null) {
+        refuse("the pane has no shell attached");
+        return;
+      }
       // CLAUDE.md non-negotiable #4 — never hijack a program that
       // owns its own input loop or the alternate screen (vim, less,
       // top, ssh, REPLs). This chokepoint is shared by every widget,
@@ -1455,6 +1476,7 @@ function TerminalPaneInner({
         console.warn(
           `shax:emit-command-approved dropped — pane ${id} is showing an alt-screen program`,
         );
+        refuse("a full-screen program owns this pane; close it and try again");
         return;
       }
       // Track the source in a FIFO queue so `block_completed`
@@ -1463,6 +1485,18 @@ function TerminalPaneInner({
       // palette). Missing source defaults to widget for
       // backward-compat with existing widget emits.
       pendingEmitSourcesRef.current.push(detail.source ?? "widget");
+      // Ack before the write: proves to the gate that a pane took
+      // this command, so its undeliverable-emit watchdog stands down.
+      // An emit addressed to a pane that no longer exists reaches no
+      // handler at all, which is why the gate needs positive proof
+      // rather than the absence of a complaint.
+      if (detail.toolCallId !== undefined && detail.toolCallId.length > 0) {
+        window.dispatchEvent(
+          new CustomEvent("shax:emit-command-accepted", {
+            detail: { toolCallId: detail.toolCallId },
+          }),
+        );
+      }
       void writePty(id, new TextEncoder().encode(`${detail.command}\n`));
     };
     window.addEventListener("shax:emit-command-approved", handler);

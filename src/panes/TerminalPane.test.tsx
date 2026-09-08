@@ -431,3 +431,78 @@ describe("TerminalPane / emit-command alt-screen guard (M13.4, CLAUDE.md #4)", (
     expect(mockWritePty).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TerminalPane / an approved command the pane cannot run reports back", () => {
+  async function mountWithPty(): Promise<void> {
+    render(<TerminalPane />);
+    await vi.waitFor(() => {
+      expect(mockSpawnPty).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  function emitApproved(command: string, toolCallId?: string): void {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("shax:emit-command-approved", {
+          detail: { paneId: "non-tauri", command, source: "ai", toolCallId },
+        }),
+      );
+    });
+  }
+
+  function collect(name: string): { events: unknown[]; stop: () => void } {
+    const events: unknown[] = [];
+    const handler = (e: Event): void => {
+      events.push((e as CustomEvent<unknown>).detail);
+    };
+    window.addEventListener(name, handler);
+    return { events, stop: () => window.removeEventListener(name, handler) };
+  }
+
+  it("acks a command it commits, so the gate's watchdog stands down", async () => {
+    await mountWithPty();
+    const acks = collect("shax:emit-command-accepted");
+    try {
+      emitApproved("ls -lh", "call-1");
+      expect(mockWritePty).toHaveBeenCalledTimes(1);
+      expect(acks.events).toEqual([{ toolCallId: "call-1" }]);
+    } finally {
+      acks.stop();
+    }
+  });
+
+  it("reports a refusal instead of dropping silently under an alt-screen program", async () => {
+    // The bug this guards: the pane refused an already-approved
+    // command and told nobody, so the assistant waited out its full
+    // timeout and then reported that the *user* had declined — for a
+    // command the user had approved.
+    await mountWithPty();
+    act(() => {
+      lastOnEvent?.({ kind: "alt_screen_changed", active: true });
+    });
+    const rejects = collect("shax:approval-rejected");
+    try {
+      emitApproved("ls -lh", "call-2");
+      expect(mockWritePty).not.toHaveBeenCalled();
+      expect(rejects.events).toHaveLength(1);
+      expect(rejects.events[0]).toMatchObject({ id: "call-2" });
+      expect(String((rejects.events[0] as { reason: string }).reason)).toContain("full-screen");
+    } finally {
+      rejects.stop();
+    }
+  });
+
+  it("stays silent for emits with no correlation id — widget emits have nobody to tell", async () => {
+    await mountWithPty();
+    act(() => {
+      lastOnEvent?.({ kind: "alt_screen_changed", active: true });
+    });
+    const rejects = collect("shax:approval-rejected");
+    try {
+      emitApproved("git status");
+      expect(rejects.events).toHaveLength(0);
+    } finally {
+      rejects.stop();
+    }
+  });
+});
